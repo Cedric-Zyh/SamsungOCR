@@ -27,7 +27,27 @@
 `218/301`（72.43%；有日期样本检出 `220/300`，73.33%），其中可靠自动日期
 `190/301`（63.12%）且 `190/190` 正确；印章严格结论和可靠自动印章均为
 `219/301`（72.76%）和 `218/301`（72.43%），且可靠自动结论 `218/218`
-正确。完整测试为 `353 passed`。
+正确。完整测试为 `355 passed`。
+
+第四十三梯队复核月份组件共识的跨平台边界，并审计唯一剩余的无冲突完整年份
+日期候选。月份组件路线现硬性要求日期主引擎为 macOS Vision、辅助引擎为 Paddle；
+纯 Paddle、Windows Hybrid 回退和缺少任一来源的结果即使保存了相同槽位文本，也
+不能触发自动结论。真实 macOS Hybrid 再跑 `7266220440.jpg` 仍以 84% 可靠识别
+`2025-01-05`，字段 10/10、商品 9/9、日期 1/1、印章 1/1，整体通过；中间图
+文件、HTTP 和契约错误均为 0。
+
+`7302125543.jpg` 的远下方笔迹经七种完整行预处理和独立日数字裁剪复核：Mobile
+在原图/去章色图读到 `2025.8.5`，并在两张日数字图读到 `5`；Server 完整行最强
+结果却为 `2025.8.3`，日数字图只输出箭头，Vision 对合成窄图也无可靠输出。因此
+安全矩阵接受 0，该样本继续待人工复核，没有用要求日期或 Mobile 单模型补日。
+Windows 模拟报告确认默认 `paddle`、Hybrid 三阶段均回退 Mobile、Vision 不暴露、
+失败项 0；自检新增 `--output` 可将结果保存为 JSON。报告见
+`storage/date-preprocessing-tier43-7302125543.json`、
+`storage/far-lower-date-component-tier43-7302125543.json`、
+`storage/windows-smoke-tier43.json`、
+`storage/e2e-date-component-platform-gate-tier43.json`、
+`storage/accuracy-report-301-hybrid-tier43.json` 和
+`storage/date-gap-analysis-tier43-final.json`。
 
 第四十二梯队处理固定日期模板中“月份数字 1 与印章/表格粘连”的缺口。
 `7266220440.jpg` 的日期栏实际为 `2025年1月5日`，原有 Mobile/Server 能分别
@@ -836,7 +856,7 @@ Windows 首次运行建议先执行专项自检；它会核对当前解释器、
 版本、默认后端、阶段路由和模型目录写权限：
 
 ```powershell
-python -m tools.windows_smoke
+python -m tools.windows_smoke --output storage\windows-smoke.json
 python -m pytest tests/test_ocr_backends.py tests/test_platform_runtime.py -q
 ```
 

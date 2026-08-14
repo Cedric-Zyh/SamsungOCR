@@ -5479,6 +5479,14 @@ def _date_component_consensus_from_artifacts(
     )
     if tight is None:
         return None
+    # This is a macOS Hybrid corroboration route. A pure Paddle/Windows run
+    # may save the same diagnostic slots, but must preserve the documented
+    # single-backend safety policy and remain pending review.
+    if (
+        "vision" not in str(tight.get("ocr_backend", "")).lower()
+        or "paddle" not in str(tight.get("secondary_ocr_backend", "")).lower()
+    ):
+        return None
 
     years = {"mobile": set(), "server": set()}
     months = {"mobile": set(), "server": set()}

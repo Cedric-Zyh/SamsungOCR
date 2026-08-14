@@ -95,6 +95,10 @@ def main() -> int:
         "--no-write-check", action="store_true",
         help="不测试模型缓存目录是否可写",
     )
+    parser.add_argument(
+        "--output", type=Path, default=None,
+        help="可选：将完整自检结果保存为 JSON，便于跨平台验收留档",
+    )
     args = parser.parse_args()
 
     if args.simulate_windows:
@@ -127,7 +131,11 @@ def main() -> int:
             return 2
         report, failures = _collect(write_check=not args.no_write_check)
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    serialized = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized + "\n", encoding="utf-8")
+    print(serialized)
     return 1 if failures else 0
 
 

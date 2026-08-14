@@ -2548,6 +2548,8 @@ def test_cross_year_consensus_requires_two_paddle_models_in_both_geometries():
 def _component_consensus_artifact() -> dict:
     return {
         "variant": "紧凑区域",
+        "ocr_backend": "macOS Vision",
+        "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
         "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
         "date_slot_ocr_variants": [
             {
@@ -2591,6 +2593,14 @@ def test_date_component_consensus_is_fully_ocr_owned_and_reliable():
     assert evidence["support"]["models"] == ["mobile", "server"]
     assert _parse_date_slot_digit("01", maximum=12) == 1
     assert _parse_date_slot_digit("1月", maximum=12) is None
+
+
+def test_date_component_consensus_never_promotes_pure_paddle_windows_route():
+    artifact = _component_consensus_artifact()
+    artifact["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    artifact["secondary_ocr_backend"] = ""
+
+    assert _date_component_consensus_from_artifacts([artifact]) is None
 
 
 @pytest.mark.parametrize(
