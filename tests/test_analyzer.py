@@ -21,6 +21,7 @@ from receipt_ocr.analyzer import (
     _company_conflict_allows_clipped_prefix_server_recheck,
     _conflicting_receipt_dates,
     _cross_model_far_lower_strict_date,
+    _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _has_shared_specific_stamp_type,
     _strong_unread_colored_stamp_route,
@@ -2733,6 +2734,87 @@ def test_max_channel_date_rejects_same_geometry_or_conflicting_date(
         "存在其他可解析日期" in item.get("acceptance_note", "")
         for item in max_variants
     )
+
+
+def test_max_channel_three_cell_consensus_tolerates_only_one_digit_day_truncation(
+    tmp_path, monkeypatch,
+):
+    from PIL import Image
+
+    from receipt_ocr.parser import estimate_date_confidence, find_receipt_date
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (1000, 1600), "white").save(source)
+    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+
+    def line_ocr(path, *, model_variant="mobile", **_kwargs):
+        path = str(path)
+        if "max-channel-upscaled" not in path:
+            return []
+        if model_variant == "mobile":
+            return [TextObservation("2025年11月11日", .94, 0, 0, 1, 1)]
+        if "wide-line" in path:
+            return [TextObservation("2025年11月11日", .93, 0, 0, 1, 1)]
+        return [TextObservation("2025年11月1日", .92, 0, 0, 1, 1)]
+
+    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
+    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
+        source, .47, "2025-11-11", tmp_path / "artifacts", "/x",
+        "vision", secondary_ocr_backend="paddle",
+    )
+
+    actual, _ = find_receipt_date(rows, "2025-11-11")
+    assert actual == date(2025, 11, 11)
+    assert estimate_date_confidence(rows, "2025-11-11", actual) >= .72
+    assert sum(
+        artifact.get("date_max_channel_consensus_candidate") == "2025-11-11"
+        for artifact in artifacts
+    ) == 2
+    accepted = [
+        variant
+        for artifact in artifacts
+        for variant in artifact["date_line_ocr_variants"]
+        if variant.get("accepted_texts") == ["2025年11月11日"]
+    ]
+    assert len(accepted) == 3
+    assert all("3 个模型×几何单元格" in item["acceptance_note"] for item in accepted)
+
+
+def test_three_cell_truncation_helper_rejects_weak_or_real_conflicts():
+    required = date(2025, 1, 14)
+
+    def item(model, tight, text="2025年1月14日", *, compact=False):
+        return {
+            "model": model,
+            "tight": tight,
+            "compact": compact,
+            "rows": [TextObservation(text, .95, 0, 0, 1, 1)],
+        }
+
+    strong = [
+        item("mobile", True),
+        item("mobile", False),
+        item("server", True),
+    ]
+    assert len(_cross_model_max_channel_required_with_truncated_conflict(
+        strong, {date(2025, 1, 4)}, required
+    )) == 3
+    assert _cross_model_max_channel_required_with_truncated_conflict(
+        strong[:2], {date(2025, 1, 4)}, required
+    ) is None
+    assert _cross_model_max_channel_required_with_truncated_conflict(
+        strong, {date(2025, 1, 13)}, required
+    ) is None
+    assert _cross_model_max_channel_required_with_truncated_conflict(
+        strong, {date(2025, 2, 4)}, required
+    ) is None
+    assert _cross_model_max_channel_required_with_truncated_conflict(
+        strong, {date(2025, 1, 4), date(2025, 1, 3)}, required
+    ) is None
+    assert _cross_model_max_channel_required_with_truncated_conflict(
+        [strong[0], strong[1], item("server", True, compact=True)],
+        {date(2025, 1, 4)}, required,
+    ) is None
 
 
 def test_max_channel_cross_model_cross_geometry_confirms_strict_mismatch(

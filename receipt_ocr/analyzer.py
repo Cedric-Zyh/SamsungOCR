@@ -3331,27 +3331,41 @@ class ReceiptAnalyzer:
                     conflicts = _conflicting_receipt_dates(
                         established_rows + enhanced_all_rows, required
                     )
-                    confirming_pair = None
+                    confirming_evidence = None
                     if not conflicts:
                         for mobile_item in enhanced_evidence:
                             if mobile_item["model"] != "mobile":
                                 continue
-                            confirming_pair = next((
+                            server_item = next((
                                 server_item
                                 for server_item in enhanced_evidence
                                 if server_item["model"] == "server"
                                 and server_item["tight"] != mobile_item["tight"]
                             ), None)
-                            if confirming_pair is not None:
-                                confirming_pair = (mobile_item, confirming_pair)
+                            if server_item is not None:
+                                confirming_evidence = [mobile_item, server_item]
                                 break
-                    if confirming_pair is not None:
-                        for item in confirming_pair:
+                    truncated_conflict_consensus = False
+                    if confirming_evidence is None and conflicts:
+                        confirming_evidence = (
+                            _cross_model_max_channel_required_with_truncated_conflict(
+                                enhanced_evidence, conflicts, required
+                            )
+                        )
+                        truncated_conflict_consensus = bool(confirming_evidence)
+                    if confirming_evidence is not None:
+                        for item in confirming_evidence:
                             crop_entry = item["entry"]
                             item["variant"]["accepted_texts"] = item[
                                 "raw_texts"
                             ]
                             item["variant"]["acceptance_note"] = (
+                                (
+                                    "3 个模型×几何单元格读到同一完整"
+                                    "日期；唯一其他值为两位日的单字截断"
+                                )
+                                if truncated_conflict_consensus
+                                else
                                 (
                                     "Mobile 自包含8位日期与 Server 严格日期"
                                     "在紧/宽不同裁剪上同日"
@@ -3373,6 +3387,21 @@ class ReceiptAnalyzer:
                                     width=row.width * lw * width,
                                     height=row.height * lh * height,
                                 ))
+                        if truncated_conflict_consensus:
+                            for artifact in artifacts:
+                                if artifact.get("variant") in {
+                                    "紧凑区域", "宽区域"
+                                }:
+                                    artifact.update({
+                                        "date_max_channel_consensus_candidate": (
+                                            required.isoformat()
+                                        ),
+                                        "date_max_channel_consensus_note": (
+                                            "Mobile/Server 与紧/宽几何中至少"
+                                            " 3 个单元格完整一致；唯一干扰"
+                                            "是两位日的单字截断"
+                                        ),
+                                    })
                     else:
                         note = (
                             "存在其他可解析日期，不参与自动判定"
@@ -4629,6 +4658,56 @@ def _cross_model_max_channel_mismatch_date(
     if observed - {candidate}:
         return None
     return candidate, pair
+
+
+def _cross_model_max_channel_required_with_truncated_conflict(
+    evidence: list[dict],
+    conflicts: set[date],
+    required: date,
+) -> list[dict] | None:
+    """Confirm a required date despite one single-digit day truncation.
+
+    The complete date must be independently present in at least three unique
+    model-by-geometry cells, spanning Mobile/Server and tight/wide crops.  The
+    only contradictory interpretation may keep the same year/month and reduce
+    a two-digit day to one of its actually printed digits.  Compact repaired
+    candidates, two-cell consensus, multiple conflicts and any month/year
+    disagreement remain review-only.
+    """
+    if len(conflicts) != 1 or required.day < 10:
+        return None
+    conflict = next(iter(conflicts))
+    if (
+        conflict.year != required.year
+        or conflict.month != required.month
+        or conflict.day not in {required.day // 10, required.day % 10}
+    ):
+        return None
+    by_cell: dict[tuple[str, bool], dict] = {}
+    for item in evidence:
+        model = str(item.get("model") or "")
+        tight = item.get("tight")
+        if (
+            model not in {"mobile", "server"}
+            or not isinstance(tight, bool)
+            or item.get("compact")
+            or not any(parse_date(row.text) == required for row in item.get("rows", []))
+        ):
+            continue
+        by_cell[(model, tight)] = item
+    cells = set(by_cell)
+    if (
+        len(cells) < 3
+        or {model for model, _tight in cells} != {"mobile", "server"}
+        or {tight for _model, tight in cells} != {False, True}
+        or not any(
+            left_model != right_model and left_tight != right_tight
+            for left_model, left_tight in cells
+            for right_model, right_tight in cells
+        )
+    ):
+        return None
+    return list(by_cell.values())
 
 
 def _parse_compact_full_date_audit_candidate(text: str) -> date | None:
