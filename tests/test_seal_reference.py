@@ -36,9 +36,14 @@ from receipt_ocr.seal_reference import (
     MIN_SURFACE_COVERAGE,
     SealReference,
     SealReferenceMatcher,
+    ULTRA_SUPPORT_MIN_GOOD_MATCHES,
+    ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
+    ULTRA_SUPPORT_MIN_INLIER_RATIO,
+    ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
     _best_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
+    _passes_ultra_support_gate,
     _passes_color_mask_gate,
     _passes_color_sift_gate,
 )
@@ -219,6 +224,61 @@ def test_high_support_minor_coverage_enforces_every_compensating_boundary():
             "good_matches", "homography_inliers"
         } else 0.001
         assert _passes_high_support_gate(reduced) is False
+
+
+def test_ultra_support_partial_coverage_enforces_every_boundary():
+    evidence = {
+        "good_matches": ULTRA_SUPPORT_MIN_GOOD_MATCHES,
+        "homography_inliers": ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": ULTRA_SUPPORT_MIN_INLIER_RATIO,
+        "candidate_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+        "reference_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+    }
+    assert _passes_ultra_support_gate(evidence) is True
+    for key in evidence:
+        reduced = dict(evidence)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert _passes_ultra_support_gate(reduced) is False
+
+
+def test_match_reports_ultra_support_partial_coverage_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg", requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png", path=reference,
+    )]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": ULTRA_SUPPORT_MIN_GOOD_MATCHES,
+        "homography_inliers": ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": ULTRA_SUPPORT_MIN_INLIER_RATIO,
+        "candidate_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+        "reference_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+    evidence = matcher.match(_result(
+        "/files/artifacts/candidate/seal.png"
+    ))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "ultra_support_partial_coverage"
+    assert evidence["confidence"] >= 0.92
 
 
 def test_color_mask_geometry_enforces_score_correlation_and_dice_boundaries():

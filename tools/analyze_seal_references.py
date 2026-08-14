@@ -36,6 +36,10 @@ from receipt_ocr.seal_reference import (
     MIN_INLIER_RATIO,
     MIN_SURFACE_COVERAGE,
     SealReferenceMatcher,
+    ULTRA_SUPPORT_MIN_GOOD_MATCHES,
+    ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
+    ULTRA_SUPPORT_MIN_INLIER_RATIO,
+    ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
 )
 
 
@@ -152,6 +156,12 @@ def build_report(
                 "homography_inliers": HIGH_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": HIGH_SUPPORT_MIN_INLIER_RATIO,
                 "surface_coverage": HIGH_SUPPORT_MIN_SURFACE_COVERAGE,
+            },
+            "ultra_support": {
+                "good_matches": ULTRA_SUPPORT_MIN_GOOD_MATCHES,
+                "homography_inliers": ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
+                "inlier_ratio": ULTRA_SUPPORT_MIN_INLIER_RATIO,
+                "surface_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
             },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,
