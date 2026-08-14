@@ -31,6 +31,7 @@ from receipt_ocr.analyzer import (
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _date_component_consensus_from_artifacts,
+    _required_month_slot_conflict_consensus_from_artifacts,
     _parse_date_slot_digit,
     _has_shared_specific_stamp_type,
     _strong_unread_colored_stamp_route,
@@ -2606,6 +2607,114 @@ def test_date_component_consensus_never_promotes_pure_paddle_windows_route():
     artifact["secondary_ocr_backend"] = ""
 
     assert _date_component_consensus_from_artifacts([artifact]) is None
+
+
+def _month_slot_conflict_artifacts():
+    month_slots = [
+        {
+            "slot": "月份数字窄槽",
+            "model": model,
+            "preprocessing": preprocessing,
+            "ocr_texts": ["7"],
+        }
+        for model in ("mobile", "server")
+        for preprocessing in (
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        )
+    ]
+    return [
+        {
+            "variant": "紧凑区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "ocr_variants": [],
+            "secondary_ocr_variants": [],
+            "date_line_ocr_variants": [{
+                "preprocessing": "日期行 Server 大模型复核不一致日期",
+                "ocr_texts": ["2025年7月1日"],
+            }],
+            "date_slot_ocr_variants": month_slots,
+        },
+        {
+            "variant": "宽区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "ocr_variants": [],
+            "secondary_ocr_variants": [],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年7月1日"],
+                },
+                {
+                    "preprocessing": "日期行去表格线三倍放大 Server 人工候选",
+                    "ocr_texts": ["2025年1月1日"],
+                },
+            ],
+        },
+    ]
+
+
+def test_required_month_slot_resolves_single_server_line_clean_conflict():
+    evidence = _required_month_slot_conflict_consensus_from_artifacts(
+        _month_slot_conflict_artifacts(), "2025-07-01"
+    )
+
+    assert evidence is not None
+    assert evidence["date"] == date(2025, 7, 1)
+    assert evidence["conflict"] == date(2025, 1, 1)
+    assert evidence["month"] == 7
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_month_cell",
+        "wrong_month_cell",
+        "windows_single_backend",
+        "same_geometry_support",
+        "mobile_strict_conflict",
+        "non_line_clean_conflict",
+        "third_date",
+    ],
+)
+def test_required_month_slot_keeps_conflicts_review_only(mutation):
+    artifacts = _month_slot_conflict_artifacts()
+    slots = artifacts[0]["date_slot_ocr_variants"]
+    if mutation == "missing_month_cell":
+        slots.pop()
+    elif mutation == "wrong_month_cell":
+        slots[-1]["ocr_texts"] = ["1"]
+    elif mutation == "windows_single_backend":
+        artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+        artifacts[0]["secondary_ocr_backend"] = ""
+    elif mutation == "same_geometry_support":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = []
+        artifacts[0]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行 Mobile 完整日期",
+            "ocr_texts": ["2025年7月1日"],
+        })
+    elif mutation == "mobile_strict_conflict":
+        artifacts[1]["date_line_ocr_variants"][1]["preprocessing"] = (
+            "日期行 Mobile 去表格线"
+        )
+    elif mutation == "non_line_clean_conflict":
+        artifacts[1]["date_line_ocr_variants"][1]["preprocessing"] = (
+            "日期行 Server 大模型原图"
+        )
+    else:
+        artifacts[0]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行 Server 大模型其他候选",
+            "ocr_texts": ["2025年7月2日"],
+        })
+
+    assert _required_month_slot_conflict_consensus_from_artifacts(
+        artifacts, "2025-07-01"
+    ) is None
 
 
 @pytest.mark.parametrize(

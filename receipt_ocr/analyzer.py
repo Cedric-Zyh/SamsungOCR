@@ -916,6 +916,33 @@ class ReceiptAnalyzer:
                 # A separately parsed full date is stronger than a value
                 # assembled from three crops. Preserve the conflict for review.
                 component_consensus = None
+        month_slot_conflict_consensus = (
+            _required_month_slot_conflict_consensus_from_artifacts(
+                date_artifacts, fields.get("要求到货", "")
+            )
+        )
+        month_slot_conflict_markers = {
+            str(item.get("date_month_slot_conflict_candidate") or "")
+            for item in date_artifacts
+            if item.get("date_month_slot_conflict_candidate")
+        }
+        if (
+            month_slot_conflict_consensus is not None
+            and month_slot_conflict_markers
+            != {month_slot_conflict_consensus["date"].isoformat()}
+        ):
+            # The pure selector is also useful for saved-evidence audits. The
+            # live pipeline may override generic candidate ordering only after
+            # it ran the four month-slot OCR cells and wrote this marker.
+            month_slot_conflict_consensus = None
+        if month_slot_conflict_consensus is not None:
+            actual_date = month_slot_conflict_consensus["date"]
+            matching_rows = [
+                row for row in date_rows
+                if parse_date(row.text) == actual_date
+            ]
+            if matching_rows:
+                date_row = max(matching_rows, key=lambda row: row.confidence)
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1157,6 +1184,28 @@ class ReceiptAnalyzer:
                             "Mobile/Server 独立一致识别；候选不使用要求日期补值"
                         ),
                     })
+        if (
+            actual_date is not None
+            and month_slot_conflict_consensus is not None
+            and month_slot_conflict_consensus["date"] == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.86, date_confidence)
+            date_check["month_slot_conflict_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "discarded_conflict": (
+                    month_slot_conflict_consensus["conflict"].isoformat()
+                ),
+                "month": actual_date.month,
+                "models": ["mobile", "server"],
+                "preprocessings": [
+                    "最大通道去彩色", "最大通道去彩色并去横线"
+                ],
+            }
+            date_check["message"] += (
+                "（Mobile/Server 跨几何完整要求日期一致；唯一去线冲突"
+                "仅改变月份，月份数字窄槽经双模型、双预处理确认）"
+            )
         otsu_manual_candidate = bool(
             actual_date
             and any(
@@ -4261,9 +4310,17 @@ class ReceiptAnalyzer:
                     slot_confidence = estimate_date_confidence(
                         output, required_text, current_slot_date
                     )
+                    month_conflict_prefilter = (
+                        _required_month_slot_conflict_prefilter_from_artifacts(
+                            artifacts, required_text
+                        )
+                    )
                     if (
                         required_for_slot is not None
-                        and current_slot_date in {None, required_for_slot}
+                        and (
+                            current_slot_date in {None, required_for_slot}
+                            or month_conflict_prefilter is not None
+                        )
                         and slot_confidence < 0.72
                     ):
                         tight_entry = next(
@@ -4290,14 +4347,22 @@ class ReceiptAnalyzer:
                             slot_variants = []
                             safe_year_variants: list[dict] = []
                             safe_month_day_variants: list[dict] = []
-                            if month_digit_path is not None:
+                            for preprocessing, safe_month_digit_path in (
+                                ("最大通道去彩色", month_digit_path),
+                                (
+                                    "最大通道去彩色并去横线",
+                                    month_digit_view.get("line_clean"),
+                                ),
+                            ):
+                                if safe_month_digit_path is None:
+                                    continue
                                 for model_variant, model_label in (
                                     ("mobile", "Mobile"),
                                     ("server", "Server"),
                                 ):
                                     try:
                                         digit_rows = recognize_line(
-                                            month_digit_path,
+                                            safe_month_digit_path,
                                             model_variant=model_variant,
                                         )
                                     except Exception:
@@ -4313,10 +4378,10 @@ class ReceiptAnalyzer:
                                     slot_variants.append({
                                         "slot": "月份数字窄槽",
                                         "method": (
-                                            f"{model_label} 最大通道去彩色整行识别"
+                                            f"{model_label} {preprocessing}整行识别"
                                         ),
                                         "model": model_variant,
-                                        "preprocessing": "最大通道去彩色",
+                                        "preprocessing": preprocessing,
                                         "ocr_texts": [
                                             row.text for row in digit_rows
                                         ],
@@ -4707,6 +4772,11 @@ class ReceiptAnalyzer:
                                         f"{month_digit_view['processed'].name}"
                                         if month_digit_view else ""
                                     ),
+                                    "date_slot_month_digit_line_clean_url": (
+                                        f"{prefix}/date/"
+                                        f"{month_digit_view['line_clean'].name}"
+                                        if month_digit_view else ""
+                                    ),
                                     "date_slot_ocr_variants": slot_variants,
                                     "date_slot_candidate": (
                                         slot_component_candidate.isoformat()
@@ -4738,6 +4808,35 @@ class ReceiptAnalyzer:
                                         if slot_component_candidate else ""
                                     ),
                                 })
+                                month_conflict_consensus = (
+                                    _required_month_slot_conflict_consensus_from_artifacts(
+                                        artifacts, required_text
+                                    )
+                                )
+                                if month_conflict_consensus is not None:
+                                    for artifact in artifacts:
+                                        if artifact.get("variant") in {
+                                            "紧凑区域", "宽区域"
+                                        }:
+                                            artifact.update({
+                                                "date_month_slot_conflict_candidate": (
+                                                    month_conflict_consensus[
+                                                        "date"
+                                                    ].isoformat()
+                                                ),
+                                                "date_month_slot_conflict_note": (
+                                                    "Mobile/Server 在相反紧宽裁剪"
+                                                    "读到同一完整要求日期；唯一"
+                                                    "完整冲突来自 Server 去线图且"
+                                                    "只改变月份，月份数字窄槽经"
+                                                    "双模型、双预处理逐格确认"
+                                                ),
+                                                "date_month_slot_discarded_conflict": (
+                                                    month_conflict_consensus[
+                                                        "conflict"
+                                                    ].isoformat()
+                                                ),
+                                            })
             # A missing printed ``年`` can leave a fully self-contained Mobile
             # reading such as ``20256月16日``.  Use it only when Server exposes
             # the same strict date and every other parsed date is the matching
@@ -6258,6 +6357,172 @@ def _parse_date_slot_digit(text: str, *, maximum: int) -> int | None:
         return None
     value = int(compact)
     return value if 1 <= value <= maximum else None
+
+
+def _required_month_slot_conflict_prefilter_from_artifacts(
+    artifacts: list[dict], required_text: str
+) -> dict | None:
+    """Find the unique strict table-line month-conflict shape.
+
+    The required date must already be a literal complete OCR result from both
+    Paddle model sizes on opposite tight/wide geometries.  Exactly one other
+    literal complete date may exist, and it must come only from a Server
+    table-line-removal view while preserving the required year and day. This
+    first stage deliberately ignores component slots so the live pipeline
+    knows when it is worth generating them.  It never changes a verdict.
+    """
+    required = parse_date(required_text)
+    if required is None:
+        return None
+    primary_variants = {"紧凑区域", "宽区域"}
+    tight = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if tight is None or (
+        "vision" not in str(tight.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            tight.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        # A Windows/Paddle-only run must keep the documented human-review
+        # policy even if it happens to execute both Paddle model sizes.
+        return None
+
+    observations: list[dict] = []
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant", ""))
+        if geometry not in primary_variants:
+            continue
+        groups = (
+            ("ocr_variants", str(artifact.get("ocr_backend", ""))),
+            (
+                "secondary_ocr_variants",
+                str(artifact.get("secondary_ocr_backend", "")),
+            ),
+            (
+                "date_line_ocr_variants",
+                str(artifact.get("date_line_ocr_backend", "")),
+            ),
+        )
+        for key, default_backend in groups:
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                label = f"{default_backend} {preprocessing}".lower()
+                if "server" in label or "大模型" in label:
+                    engine = "server"
+                elif "mobile" in label or "paddleocr" in label:
+                    engine = "mobile"
+                elif "vision" in label:
+                    engine = "vision"
+                else:
+                    continue
+                for raw_text in evidence.get("ocr_texts") or []:
+                    text = str(raw_text).strip()
+                    strict = parse_date(text)
+                    parsed = strict or parse_receipt_date(text, required)
+                    if parsed is None:
+                        continue
+                    observations.append({
+                        "date": parsed,
+                        "strict": strict is not None,
+                        "engine": engine,
+                        "geometry": geometry,
+                        "preprocessing": preprocessing,
+                    })
+
+    required_cells = {
+        (item["engine"], item["geometry"])
+        for item in observations
+        if item["strict"]
+        and item["date"] == required
+        and item["engine"] in {"mobile", "server"}
+    }
+    if not any(
+        left_engine != right_engine and left_geometry != right_geometry
+        for left_engine, left_geometry in required_cells
+        for right_engine, right_geometry in required_cells
+    ):
+        return None
+
+    strict_conflicts = [
+        item for item in observations
+        if item["strict"] and item["date"] != required
+    ]
+    conflict_dates = {item["date"] for item in strict_conflicts}
+    if len(conflict_dates) != 1:
+        return None
+    conflict = next(iter(conflict_dates))
+    if (
+        conflict.year != required.year
+        or conflict.day != required.day
+        or conflict.month == required.month
+        or any(item["engine"] != "server" for item in strict_conflicts)
+        or any(
+            "去表格线" not in item["preprocessing"]
+            for item in strict_conflicts
+        )
+    ):
+        return None
+    if {item["date"] for item in observations} - {required, conflict}:
+        return None
+
+    return {
+        "date": required,
+        "conflict": conflict,
+        "required_cells": [
+            {"engine": engine, "geometry": geometry}
+            for engine, geometry in sorted(required_cells)
+        ],
+    }
+
+
+def _required_month_slot_conflict_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str
+) -> dict | None:
+    """Resolve a prefiltered month conflict with four slot OCR cells."""
+    prefilter = _required_month_slot_conflict_prefilter_from_artifacts(
+        artifacts, required_text
+    )
+    if prefilter is None:
+        return None
+    required = prefilter["date"]
+    tight = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if tight is None:
+        return None
+    month_cells: dict[tuple[str, str], set[int]] = {}
+    for variant in tight.get("date_slot_ocr_variants") or []:
+        if str(variant.get("slot", "")) != "月份数字窄槽":
+            continue
+        model = str(variant.get("model", ""))
+        preprocessing = str(variant.get("preprocessing", ""))
+        if model not in {"mobile", "server"}:
+            continue
+        values = {
+            parsed
+            for text in variant.get("ocr_texts") or []
+            if (
+                parsed := _parse_date_slot_digit(
+                    str(text), maximum=12
+                )
+            ) is not None
+        }
+        month_cells[(model, preprocessing)] = values
+    expected_cells = {
+        (model, preprocessing)
+        for model in ("mobile", "server")
+        for preprocessing in (
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        )
+    }
+    if set(month_cells) != expected_cells or any(
+        month_cells[cell] != {required.month} for cell in expected_cells
+    ):
+        return None
+    return {**prefilter, "month": required.month}
 
 
 def _date_component_consensus_from_artifacts(
