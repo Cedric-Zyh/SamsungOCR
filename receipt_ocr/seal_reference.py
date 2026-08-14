@@ -144,6 +144,28 @@ COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE = 0.50
 COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE = 0.82
 COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT = 6
 
+# A bare legal-company requirement can be clipped at the beginning by a table
+# line while retaining an exact long suffix (for example OCR reads
+# ``齐贵迪电子有限公司`` for ``乌鲁木齐贵迪电子有限公司``). This is distinct
+# from fuzzy company correction: the recognized company must be a literal
+# suffix after losing only 1–4 leading characters, and both regular and
+# chromatic SIFT representations must be exceptionally strong. The complete
+# matrix has one true candidate at 203/166 regular and 189/166 chromatic
+# matches/inliers; the strongest known wrong stamp is only 68/56 and 63/51.
+CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH = 8
+CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX = 4
+CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE = 0.60
+CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES = 195
+CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS = 160
+CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO = 0.80
+CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE = 0.38
+CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE = 0.55
+CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES = 180
+CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS = 160
+CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO = 0.85
+CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE = 0.50
+CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE = 0.60
+
 # Color-ink geometry is a fallback for faded scans where SIFT cannot retain
 # enough local keypoints.  The full 301-receipt matrix has a wide margin:
 # accepted positives start at 0.8158/0.8096/0.8319 for composite score,
@@ -386,6 +408,9 @@ class SealReferenceMatcher:
         company_conflict_reference_accepted = (
             _passes_company_conflict_reference_gate(best, seal_check)
         )
+        clipped_company_reference_accepted = (
+            _passes_clipped_company_reference_gate(best, seal_check)
+        )
         trimmed_chromatic_accepted = bool(
             best_trimmed_chromatic is not None
             and _passes_trimmed_chromatic_gate(best_trimmed_chromatic)
@@ -460,7 +485,10 @@ class SealReferenceMatcher:
         generic_routes_allowed = not bool(
             seal_check.get("company_conflict")
         )
-        accepted = company_conflict_reference_accepted or (
+        accepted = (
+            company_conflict_reference_accepted
+            or clipped_company_reference_accepted
+        ) or (
             generic_routes_allowed and (
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or ultra_support_accepted
@@ -474,6 +502,8 @@ class SealReferenceMatcher:
         route = (
             "company_conflict_ultra_reference"
             if company_conflict_reference_accepted
+            else "clipped_prefix_company_ultra_reference"
+            if clipped_company_reference_accepted
             else "rejected" if not generic_routes_allowed
             else "strict_single_reference" if strict_accepted
             else "high_ratio_single_reference" if high_ratio_accepted
@@ -597,6 +627,41 @@ class SealReferenceMatcher:
                 ),
                 "specific_stamp_type": "售后专用章",
             },
+            "clipped_prefix_company_ultra_reference": {
+                "recognized_length": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH
+                ),
+                "maximum_missing_prefix": (
+                    CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX
+                ),
+                "company_score": CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+                "good_matches": CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO,
+                "candidate_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE
+                ),
+                "reference_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_candidate_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE
+                ),
+                "chromatic_reference_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE
+                ),
+            },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,
                 "top_inliers": CONSENSUS_MIN_TOP_INLIERS,
@@ -670,6 +735,8 @@ class SealReferenceMatcher:
             (
                 "当前章保留售后专用章和公司片段，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
                 if company_conflict_reference_accepted else
+                "当前章公司全称仅缺前缀，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
+                if clipped_company_reference_accepted else
                 "与同签章要求的人工真值阳性章形成大面积几何一致"
                 if strict_accepted else
                 "与人工真值阳性章形成高内点率的大面积几何一致"
@@ -1354,6 +1421,51 @@ def _passes_company_conflict_reference_gate(
     )
 
 
+def _passes_clipped_company_reference_gate(
+    evidence: dict, seal_check: dict,
+) -> bool:
+    """Accept a bare company seal only when OCR lost a short exact prefix."""
+    if seal_check.get("company_conflict") is not True:
+        return False
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    recognized = normalize_text(str(seal_check.get("recognized") or ""))
+    legal_suffixes = ("有限公司", "有限责任公司")
+    if (
+        not requirement.endswith(legal_suffixes)
+        or not recognized.endswith(legal_suffixes)
+        or len(recognized) < CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH
+        or not requirement.endswith(recognized)
+    ):
+        return False
+    missing_prefix = len(requirement) - len(recognized)
+    if not 1 <= missing_prefix <= CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX:
+        return False
+    return bool(
+        float(seal_check.get("company_score", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE
+        and int(evidence.get("good_matches", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE
+        and int(evidence.get("chromatic_good_matches", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+        and int(evidence.get("chromatic_homography_inliers", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        and float(evidence.get("chromatic_inlier_ratio", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+        and float(evidence.get("chromatic_candidate_coverage", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE
+        and float(evidence.get("chromatic_reference_coverage", 0))
+        >= CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE
+    )
+
+
 def _passes_color_mask_gate(evidence: dict) -> bool:
     return bool(
         float(evidence.get("color_mask_score", 0)) >= COLOR_MASK_MIN_SCORE
@@ -1593,6 +1705,31 @@ def _reference_confidence(
                     float(evidence["inlier_ratio"])
                     - COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
                 ) / 0.15,
+            ),
+        )
+    elif route == "clipped_prefix_company_ultra_reference":
+        # Exact long-suffix text plus two exceptionally strong geometric
+        # representations can safely recover a short clipped company prefix.
+        # Retain a small margin below certainty because the reference comes
+        # from one independently confirmed file.
+        confidence = min(
+            0.97,
+            0.95
+            + 0.01 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence["homography_inliers"])
+                    - CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+                ) / 40,
+            )
+            + 0.01 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence.get("chromatic_homography_inliers", 0))
+                    - CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+                ) / 40,
             ),
         )
     elif route == "high_purity_multi_reference_consensus":

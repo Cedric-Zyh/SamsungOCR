@@ -10,6 +10,19 @@ from receipt_ocr.seal_reference import (
     BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
     BRANDED_STATION_MIN_INLIER_RATIO,
     BRANDED_STATION_MIN_SURFACE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX,
+    CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+    CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES,
+    CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+    CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO,
+    CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH,
+    CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE,
     COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
     COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
     COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
@@ -77,6 +90,7 @@ from receipt_ocr.seal_reference import (
     _passes_high_ratio_gate,
     _passes_high_support_gate,
     _passes_branded_station_gate,
+    _passes_clipped_company_reference_gate,
     _passes_company_conflict_reference_gate,
     _passes_trimmed_chromatic_gate,
     _passes_ultra_support_gate,
@@ -313,6 +327,119 @@ def test_match_reports_company_conflict_ultra_reference_route(
     assert accepted["reference_filename"] == "confirmed.jpg"
     assert "双表示" in accepted["reason"]
     assert accepted["confidence"] == 0.93
+
+
+def _clipped_company_reference_evidence() -> dict:
+    return {
+        "good_matches": CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES,
+        "homography_inliers": (
+            CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+        ),
+        "inlier_ratio": CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO,
+        "candidate_coverage": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE
+        ),
+        "reference_coverage": (
+            CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE
+        ),
+        "chromatic_good_matches": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+        ),
+        "chromatic_homography_inliers": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        ),
+        "chromatic_inlier_ratio": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+        ),
+        "chromatic_candidate_coverage": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE
+        ),
+        "chromatic_reference_coverage": (
+            CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE
+        ),
+    }
+
+
+def test_clipped_company_reference_gate_requires_every_boundary_and_exact_suffix():
+    seal_check = {
+        "requirement": "乌鲁木齐贵迪电子有限公司",
+        "recognized": "齐贵迪电子有限公司",
+        "company_conflict": True,
+        "company_score": CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+    }
+    evidence = _clipped_company_reference_evidence()
+    assert CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH == 8
+    assert CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX == 4
+    assert _passes_clipped_company_reference_gate(evidence, seal_check)
+    for key, value in evidence.items():
+        reduced = dict(evidence)
+        reduced[key] = value - (
+            1 if key.endswith(("good_matches", "homography_inliers"))
+            else 0.001
+        )
+        assert not _passes_clipped_company_reference_gate(
+            reduced, seal_check
+        )
+    assert not _passes_clipped_company_reference_gate(
+        evidence,
+        {
+            **seal_check,
+            "company_score": CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE
+            - 0.001,
+        },
+    )
+    for unsafe in (
+        {**seal_check, "company_conflict": False},
+        {**seal_check, "recognized": "鲁木齐贵迪电子有限责任公司"},
+        {**seal_check, "recognized": "贵迪有限公司"},
+        {**seal_check, "recognized": "齐贵迪电子有限公司业务专用章"},
+        {**seal_check, "requirement": "乌鲁木齐贵迪电子有限公司业务专用章"},
+        {**seal_check, "requirement": "北京市乌鲁木齐贵迪电子有限公司"},
+    ):
+        assert not _passes_clipped_company_reference_gate(evidence, unsafe)
+
+
+def test_match_reports_clipped_prefix_company_ultra_reference_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "乌鲁木齐贵迪电子有限公司"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    evidence = _clipped_company_reference_evidence()
+    monkeypatch.setattr(matcher, "_compare", lambda *_args: {
+        key: value for key, value in evidence.items()
+        if not key.startswith("chromatic_")
+    })
+    monkeypatch.setattr(matcher, "_compare_chromatic_crop", lambda *_args: {
+        key.removeprefix("chromatic_"): value
+        for key, value in evidence.items()
+        if key.startswith("chromatic_")
+    })
+    result = _result(
+        "/files/artifacts/candidate/seal.png", conflict=True
+    )
+    result["seal_check"].update({
+        "requirement": requirement,
+        "recognized": "齐贵迪电子有限公司",
+        "company_score": CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+    })
+    accepted = matcher.match(result)
+    assert accepted["accepted"] is True
+    assert accepted["route"] == "clipped_prefix_company_ultra_reference"
+    assert accepted["reference_filename"] == "confirmed.jpg"
+    assert "公司全称仅缺前缀" in accepted["reason"]
+    assert accepted["confidence"] == 0.95
 
 
 def _consensus_evidence(

@@ -24,6 +24,19 @@ from receipt_ocr.seal_reference import (
     COLOR_SIFT_MIN_INLIER_RATIO,
     COLOR_SIFT_MIN_SCORE,
     COLOR_SIFT_MIN_SURFACE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX,
+    CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO,
+    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE,
+    CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+    CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES,
+    CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+    CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO,
+    CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH,
+    CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE,
     COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
     COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
     COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
@@ -233,6 +246,41 @@ def build_report(
                     COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT
                 ),
                 "specific_stamp_type": "售后专用章",
+            },
+            "clipped_prefix_company_ultra_reference": {
+                "recognized_length": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH
+                ),
+                "maximum_missing_prefix": (
+                    CLIPPED_COMPANY_REFERENCE_MAX_MISSING_PREFIX
+                ),
+                "company_score": CLIPPED_COMPANY_REFERENCE_MIN_COMPANY_SCORE,
+                "good_matches": CLIPPED_COMPANY_REFERENCE_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": CLIPPED_COMPANY_REFERENCE_MIN_INLIER_RATIO,
+                "candidate_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CANDIDATE_COVERAGE
+                ),
+                "reference_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_REFERENCE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_candidate_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_CANDIDATE_COVERAGE
+                ),
+                "chromatic_reference_coverage": (
+                    CLIPPED_COMPANY_REFERENCE_MIN_CHROMATIC_REFERENCE_COVERAGE
+                ),
             },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,

@@ -287,7 +287,7 @@ function renderArtifacts() {
       const regularGeometryInfo = regularGeometry
         ? ` · 排除黑色噪声前 ${regularGeometry.homography_inliers || 0}/${regularGeometry.good_matches || 0}内点，覆盖 ${percent(Math.min(regularGeometry.candidate_coverage || 0, regularGeometry.reference_coverage || 0))}`
         : '';
-      const chromaticGeometryInfo = reference?.route === 'company_conflict_ultra_reference'
+      const chromaticGeometryInfo = ['company_conflict_ultra_reference', 'clipped_prefix_company_ultra_reference'].includes(reference?.route)
         ? ` · 章色裁剪内点 ${reference.chromatic_homography_inliers || 0}/${reference.chromatic_good_matches || 0} · 内点率 ${percent(reference.chromatic_inlier_ratio || 0)} · 覆盖 ${percent(Math.min(reference.chromatic_candidate_coverage || 0, reference.chromatic_reference_coverage || 0))}`
         : '';
       const acceptedRouteLabel = {
@@ -302,6 +302,7 @@ function renderArtifacts() {
         ultra_support_partial_coverage: '超高支持度局部覆盖路线通过',
         branded_station_single_reference: '三星服务中心站号章结构与几何联合通过',
         company_conflict_ultra_reference: '公司冲突下超强同章参考联合通过',
+        clipped_prefix_company_ultra_reference: '公司前缀截断双表示参考联合通过',
       }[reference?.route] || '达到单参考严格门槛';
       const referenceInfo = reference
         ? `<small class="${reference.accepted ? '' : 'low-note'}">参考章几何复核：${reference.accepted ? acceptedRouteLabel : '未达到门槛'} · 内点 ${reference.homography_inliers || 0}/${reference.good_matches || 0} · 内点率 ${percent(reference.inlier_ratio || 0)} · 章面覆盖 ${percent(Math.min(reference.candidate_coverage || 0, reference.reference_coverage || 0))}${regularGeometryInfo}${chromaticGeometryInfo}${reference.color_mask_score ? ` · 彩色墨迹 ${percent(reference.color_mask_score)}（相关 ${percent(reference.color_mask_correlation || 0)} / Dice ${percent(reference.color_mask_dice || 0)}）` : ''} · 参考 ${escapeHtml(reference.reference_filename || '')}${consensusInfo}</small>`
