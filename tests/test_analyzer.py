@@ -23,6 +23,8 @@ from receipt_ocr.analyzer import (
     _server_mobile_dominant_date_from_artifacts,
     _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
+    _day_slot_confirms_value,
+    _max_channel_truncated_mismatch_candidate,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _date_component_consensus_from_artifacts,
@@ -3058,6 +3060,79 @@ def test_three_cell_truncation_helper_rejects_weak_or_real_conflicts():
         [strong[0], strong[1], item("server", True, compact=True)],
         {date(2025, 1, 4)}, required,
     ) is None
+
+
+def test_four_cell_mismatch_candidate_accepts_only_one_literal_day_truncation():
+    required = date(2025, 3, 14)
+    candidate = date(2025, 3, 13)
+
+    def item(model, tight, value=candidate, *, compact=False):
+        return {
+            "model": model,
+            "tight": tight,
+            "date": value,
+            "compact": compact,
+            "rows": [TextObservation(
+                f"{value.year}年{value.month}月{value.day}日",
+                .95, 0, 0, 1, 1,
+            )],
+        }
+
+    strong = [
+        item("mobile", True), item("mobile", False),
+        item("server", True), item("server", False),
+    ]
+    rows = [
+        TextObservation("2025年3月13日", .95, 0, 0, 1, 1),
+        TextObservation("2025年3月3日", .90, 0, 0, 1, 1),
+        # A damaged year is not a literal full-date conflict.
+        TextObservation("202年2月12日", .90, 0, 0, 1, 1),
+    ]
+
+    accepted = _max_channel_truncated_mismatch_candidate(
+        strong, rows, required
+    )
+    assert accepted is not None
+    assert accepted[0] == candidate
+    assert len(accepted[1]) == 4
+    no_conflict = _max_channel_truncated_mismatch_candidate(
+        strong, [rows[0], rows[2]], required
+    )
+    assert no_conflict is not None and no_conflict[0] == candidate
+    assert _max_channel_truncated_mismatch_candidate(
+        strong[:3], rows, required
+    ) is None
+    assert _max_channel_truncated_mismatch_candidate(
+        strong,
+        rows + [TextObservation("2025年3月12日", .9, 0, 0, 1, 1)],
+        required,
+    ) is None
+    assert _max_channel_truncated_mismatch_candidate(
+        strong,
+        [rows[0], TextObservation("2025年2月3日", .9, 0, 0, 1, 1)],
+        required,
+    ) is None
+
+
+def test_day_slot_requires_mobile_server_and_both_preprocessings():
+    def variants(value="13"):
+        return [
+            {
+                "model": model,
+                "preprocessing": preprocessing,
+                "parsed_components": [value],
+            }
+            for model in ("mobile", "server")
+            for preprocessing in (
+                "最大通道去彩色", "最大通道去彩色并去横线"
+            )
+        ]
+
+    strong = variants()
+    assert _day_slot_confirms_value(strong, 13)
+    assert not _day_slot_confirms_value(strong[:3], 13)
+    strong[-1]["parsed_components"] = ["3"]
+    assert not _day_slot_confirms_value(strong, 13)
 
 
 def test_max_channel_cross_model_cross_geometry_confirms_strict_mismatch(

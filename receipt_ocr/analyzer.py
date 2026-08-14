@@ -992,6 +992,33 @@ class ReceiptAnalyzer:
                             "预处理上严格重复"
                         ),
                     })
+        day_slot_candidates = {
+            parsed
+            for artifact in date_artifacts
+            if (
+                parsed := parse_date(str(
+                    artifact.get("date_day_slot_consensus_candidate", "")
+                ))
+            ) is not None
+        }
+        if (
+            actual_date is not None
+            and day_slot_candidates == {actual_date}
+            and rejected_date is None
+        ):
+            date_confidence = max(0.86, date_confidence)
+            date_check["day_slot_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "day": actual_date.day,
+                "models": ["mobile", "server"],
+                "preprocessings": [
+                    "最大通道去彩色", "最大通道去彩色并去横线"
+                ],
+            }
+            date_check["message"] += (
+                "（Mobile/Server 紧裁与宽裁四单元完整一致；"
+                "日数字窄槽双模型、双预处理确认两位日）"
+            )
         if (
             actual_date is not None
             and cross_year_consensus is not None
@@ -3558,6 +3585,116 @@ class ReceiptAnalyzer:
                             required,
                         )
                     )
+                    truncated_mismatch_confirmation = None
+                    if (
+                        mismatch_confirmation is None
+                        and ocr_backend == "vision"
+                    ):
+                        truncated_candidate = (
+                            _max_channel_truncated_mismatch_candidate(
+                                enhanced_mismatch_evidence,
+                                established_rows + enhanced_all_rows,
+                                required,
+                            )
+                        )
+                        if truncated_candidate is not None:
+                            candidate_date, candidate_items = truncated_candidate
+                            tight_entry = next((
+                                item for item in date_crop_entries
+                                if item.get("crop_key") == "tight"
+                                and not item.get("audit_only")
+                            ), None)
+                            try:
+                                day_slot_views = (
+                                    _save_date_slot_views(
+                                        tight_entry["line_raw"], temp_dir
+                                    )
+                                    if tight_entry is not None else {}
+                                )
+                            except Exception:
+                                day_slot_views = {}
+                            day_view = day_slot_views.get("day_digits", {})
+                            day_variants = _recognize_day_slot_variants(
+                                day_view
+                            )
+                            if _day_slot_confirms_value(
+                                day_variants, candidate_date.day
+                            ):
+                                truncated_mismatch_confirmation = (
+                                    candidate_date, candidate_items, day_view,
+                                    day_variants,
+                                )
+                    if truncated_mismatch_confirmation is not None:
+                        (
+                            mismatch_date, mismatch_pair, day_view,
+                            day_variants,
+                        ) = truncated_mismatch_confirmation
+                        for item in mismatch_pair:
+                            crop_entry = item["entry"]
+                            item["variant"]["accepted_texts"] = item[
+                                "raw_texts"
+                            ]
+                            item["variant"]["acceptance_note"] = (
+                                "Mobile/Server 紧裁与宽裁四单元完整一致；"
+                                "日数字窄槽双模型、双预处理确认两位日"
+                            )
+                            lx, ly, lw, lh = crop_entry["line_box"]
+                            x, y, width, height = crop_entry["region_box"]
+                            for row in item["rows"]:
+                                output.append(type(row)(
+                                    text=row.text,
+                                    confidence=row.confidence,
+                                    x=x + (lx + row.x * lw) * width,
+                                    y=y + (ly + row.y * lh) * height,
+                                    width=row.width * lw * width,
+                                    height=row.height * lh * height,
+                                ))
+                        prefix = artifact_url_prefix.rstrip("/")
+                        for artifact in artifacts:
+                            if artifact.get("variant") not in {
+                                "紧凑区域", "宽区域"
+                            }:
+                                continue
+                            artifact.update({
+                                "date_day_slot_consensus_candidate": (
+                                    mismatch_date.isoformat()
+                                ),
+                                "date_day_slot_consensus_note": (
+                                    "Mobile/Server 在紧裁、宽裁四个最大通道单元"
+                                    "读到同一完整不匹配日期；若有其他完整候选，"
+                                    "只能是两位日漏掉一位，日数字窄槽双模型、"
+                                    "双预处理均保留两位数字"
+                                ),
+                            })
+                        tight_artifact = next((
+                            artifact for artifact in artifacts
+                            if artifact.get("variant") == "紧凑区域"
+                        ), None)
+                        if tight_artifact is not None and day_view:
+                            tight_artifact.update({
+                                "date_slot_day_digit_original_url": (
+                                    f"{prefix}/date/"
+                                    f"{day_view['original'].name}"
+                                ),
+                                "date_slot_day_digit_processed_url": (
+                                    f"{prefix}/date/"
+                                    f"{day_view['processed'].name}"
+                                ),
+                                "date_slot_day_digit_line_clean_url": (
+                                    f"{prefix}/date/"
+                                    f"{day_view['line_clean'].name}"
+                                ),
+                                "date_slot_day_ocr_variants": day_variants,
+                                "date_slot_day_candidate": str(
+                                    mismatch_date.day
+                                ),
+                                "date_slot_day_reliable": True,
+                                "date_slot_day_acceptance_note": (
+                                    "Mobile/Server 在最大通道去彩色及去横线"
+                                    "两种日数字窄槽上均只读到完整两位日；"
+                                    "候选不使用要求到货日期补值"
+                                ),
+                            })
                     if mismatch_confirmation is not None:
                         mismatch_date, mismatch_pair = mismatch_confirmation
                         for item in mismatch_pair:
@@ -5097,6 +5234,141 @@ def _cross_model_max_channel_mismatch_date(
     return candidate, pair
 
 
+def _max_channel_truncated_mismatch_candidate(
+    evidence: list[dict],
+    all_rows: list[TextObservation],
+    required: date,
+) -> tuple[date, list[dict]] | None:
+    """Find a non-required date whose only strict conflict lost one day digit.
+
+    This is only the first gate. The caller must independently recognize the
+    fixed-template day slot before accepting anything. The complete candidate
+    must occupy all four Mobile/Server × tight/wide maximum-channel cells, be
+    within three days of the requested date, and have at most one other literal
+    full-date interpretation. If present, that interpretation may
+    differ only by reducing the two-digit day to one of its printed digits.
+    Partial-year repairs are excluded because they are not literal full dates
+    and often come from stamp-contaminated derivatives.
+    """
+    by_date: dict[date, dict[tuple[str, bool], dict]] = {}
+    for item in evidence:
+        candidate = item.get("date")
+        model = str(item.get("model") or "")
+        tight = item.get("tight")
+        if (
+            not isinstance(candidate, date)
+            or candidate == required
+            or model not in {"mobile", "server"}
+            or not isinstance(tight, bool)
+            or item.get("compact")
+            or not any(
+                parse_date(row.text) == candidate
+                for row in item.get("rows", [])
+            )
+        ):
+            continue
+        by_date.setdefault(candidate, {})[(model, tight)] = item
+    required_cells = {
+        ("mobile", True), ("mobile", False),
+        ("server", True), ("server", False),
+    }
+    candidates = [
+        (candidate, cells)
+        for candidate, cells in by_date.items()
+        if set(cells) == required_cells
+        and candidate.day >= 10
+        and abs((candidate - required).days) <= 3
+    ]
+    if len(candidates) != 1:
+        return None
+    candidate, cells = candidates[0]
+    strict_dates = {
+        parsed
+        for row in all_rows
+        if (parsed := parse_date(row.text)) is not None
+    }
+    conflicts = strict_dates - {candidate}
+    if len(conflicts) > 1:
+        return None
+    if conflicts:
+        conflict = next(iter(conflicts))
+        if (
+            conflict.year != candidate.year
+            or conflict.month != candidate.month
+            or conflict.day not in {
+                candidate.day // 10, candidate.day % 10
+            }
+        ):
+            return None
+    return candidate, list(cells.values())
+
+
+def _recognize_day_slot_variants(day_view: dict[str, Path]) -> list[dict]:
+    """Recognize the fixed day-only crop with both Paddle model sizes."""
+    try:
+        from .paddle_ocr import recognize_line
+    except Exception:
+        return []
+    variants = []
+    for preprocessing, path in (
+        ("最大通道去彩色", day_view.get("processed")),
+        ("最大通道去彩色并去横线", day_view.get("line_clean")),
+    ):
+        if path is None:
+            continue
+        for model, label in (("mobile", "Mobile"), ("server", "Server")):
+            try:
+                rows = recognize_line(path, model_variant=model)
+            except Exception:
+                rows = []
+            values = {
+                parsed
+                for row in rows
+                if (
+                    parsed := _parse_date_slot_digit(
+                        row.text, maximum=31
+                    )
+                ) is not None
+            }
+            variants.append({
+                "slot": "日数字窄槽",
+                "method": f"{label} {preprocessing}整行识别",
+                "model": model,
+                "preprocessing": preprocessing,
+                "ocr_texts": [row.text for row in rows],
+                "parsed_components": [
+                    str(value) for value in sorted(values)
+                ],
+            })
+    return variants
+
+
+def _day_slot_confirms_value(variants: list[dict], expected: int) -> bool:
+    """Require exactly one identical day in all four model/transform cells."""
+    cells: dict[tuple[str, str], set[int]] = {}
+    for variant in variants:
+        model = str(variant.get("model") or "")
+        preprocessing = str(variant.get("preprocessing") or "")
+        if model not in {"mobile", "server"}:
+            continue
+        values = {
+            int(value)
+            for value in variant.get("parsed_components", []) or []
+            if str(value).isdigit()
+        }
+        cells[(model, preprocessing)] = values
+    required_cells = {
+        (model, preprocessing)
+        for model in ("mobile", "server")
+        for preprocessing in (
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        )
+    }
+    return set(cells) == required_cells and all(
+        cells[cell] == {expected} for cell in required_cells
+    )
+
+
 def _cross_model_max_channel_required_with_truncated_conflict(
     evidence: list[dict],
     conflicts: set[date],
@@ -5242,6 +5514,10 @@ def _save_date_slot_views(
         # the printed year/month units; the two OCR models must still agree.
         "month_digits": (0.405, 0.515),
         "month_day": (0.30, 0.985),
+        # The printed ``月`` and ``日`` delimit a stable day-only cell. Keep
+        # enough padding for a narrow leading ``1`` without admitting either
+        # printed unit, making a lost tens digit directly auditable.
+        "day_digits": (0.66, 0.86),
     }
     output: dict[str, dict[str, Path]] = {}
     with Image.open(source) as opened:
