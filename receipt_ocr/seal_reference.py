@@ -53,6 +53,17 @@ CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 65
 CONSENSUS_MIN_INLIER_RATIO = 0.65
 CONSENSUS_MIN_SURFACE_COVERAGE = 0.30
 
+# Color-ink geometry is a fallback for faded scans where SIFT cannot retain
+# enough local keypoints.  The full 301-receipt matrix has a wide margin:
+# accepted positives start at 0.8158/0.8096/0.8319 for composite score,
+# correlation and Dice, while the strongest wrong-stamp control reaches only
+# 0.4337/0.4535/0.3828.  Require all three 0.80 boundaries independently.
+COLOR_MASK_MIN_SCORE = 0.80
+COLOR_MASK_MIN_CORRELATION = 0.80
+COLOR_MASK_MIN_DICE = 0.80
+COLOR_MASK_CANVAS_SIZE = 320
+COLOR_MASK_ROTATIONS = tuple(range(-12, 13, 2))
+
 
 @dataclass(frozen=True)
 class SealReference:
@@ -78,6 +89,7 @@ class SealReferenceMatcher:
         self.references: dict[str, list[SealReference]] = {}
         self.truth_filenames: set[str] = set()
         self._descriptor_cache: dict[str, tuple[list, np.ndarray | None, tuple[int, int]]] = {}
+        self._color_mask_cache: dict[str, np.ndarray | None] = {}
         self._lock = threading.RLock()
         self._sift = cv2.SIFT_create(
             nfeatures=1200,
@@ -146,6 +158,11 @@ class SealReferenceMatcher:
                 for key, value in self._descriptor_cache.items()
                 if key in existing and Path(key).is_file()
             }
+            self._color_mask_cache = {
+                key: value
+                for key, value in self._color_mask_cache.items()
+                if key in existing and Path(key).is_file()
+            }
         return sum(len(values) for values in grouped.values())
 
     def match(self, result: dict) -> dict:
@@ -168,6 +185,7 @@ class SealReferenceMatcher:
             return {"accepted": False, "reason": "没有同签章要求的人工真值阳性参考章"}
 
         best: dict | None = None
+        best_color: dict | None = None
         all_evidence: list[dict] = []
         for artifact in result.get("processing_artifacts", {}).get("seals", []):
             candidate_url = str(artifact.get("color_isolated_url") or "")
@@ -176,8 +194,12 @@ class SealReferenceMatcher:
                 continue
             for reference in references:
                 metrics = self._compare(candidate_path, reference.path)
+                color_metrics = self._compare_color_mask(
+                    candidate_path, reference.path
+                )
                 evidence = {
                     **metrics,
+                    **color_metrics,
                     "candidate_index": int(artifact.get("index", -1)),
                     "candidate_url": candidate_url,
                     "reference_filename": reference.filename,
@@ -187,6 +209,12 @@ class SealReferenceMatcher:
                 all_evidence.append(evidence)
                 if best is None or _evidence_rank(evidence) > _evidence_rank(best):
                     best = evidence
+                if (
+                    best_color is None
+                    or _color_evidence_rank(evidence)
+                    > _color_evidence_rank(best_color)
+                ):
+                    best_color = evidence
         if best is None:
             return {"accepted": False, "reason": "没有可读取的章色分离图"}
         strict_accepted = _passes_strict_gate(best)
@@ -194,6 +222,9 @@ class SealReferenceMatcher:
         high_support_accepted = _passes_high_support_gate(best)
         consensus = _best_consensus(all_evidence)
         consensus_accepted = bool(consensus.get("accepted"))
+        color_mask_accepted = bool(
+            best_color is not None and _passes_color_mask_gate(best_color)
+        )
         if consensus_accepted and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
         ):
@@ -211,15 +242,25 @@ class SealReferenceMatcher:
                 ),
                 key=_evidence_rank,
             )
+        if (
+            color_mask_accepted
+            and not (
+                strict_accepted or high_ratio_accepted
+                or high_support_accepted or consensus_accepted
+            )
+        ):
+            best = best_color
         accepted = (
             strict_accepted or high_ratio_accepted
             or high_support_accepted or consensus_accepted
+            or color_mask_accepted
         )
         route = (
             "strict_single_reference" if strict_accepted
             else "high_ratio_single_reference" if high_ratio_accepted
             else "high_support_minor_coverage" if high_support_accepted
             else "multi_reference_consensus" if consensus_accepted
+            else "color_mask_geometry" if color_mask_accepted
             else "rejected"
         )
         best["accepted"] = accepted
@@ -258,6 +299,11 @@ class SealReferenceMatcher:
                 "inlier_ratio": CONSENSUS_MIN_INLIER_RATIO,
                 "surface_coverage": CONSENSUS_MIN_SURFACE_COVERAGE,
             },
+            "color_mask": {
+                "score": COLOR_MASK_MIN_SCORE,
+                "correlation": COLOR_MASK_MIN_CORRELATION,
+                "dice": COLOR_MASK_MIN_DICE,
+            },
         }
         best["confidence"] = (
             _reference_confidence(best, route, consensus)
@@ -272,6 +318,8 @@ class SealReferenceMatcher:
                 "与人工真值阳性章形成高支持度几何一致，覆盖差异仅为裁剪抖动"
                 if high_support_accepted else
                 "同一章区与至少两份独立人工真值阳性章形成几何一致"
+                if consensus_accepted else
+                "与人工真值阳性章的彩色墨迹形成整体几何一致"
             )
             if accepted else
             "视觉特征未达到人工真值参考章的严格几何门槛"
@@ -341,6 +389,17 @@ class SealReferenceMatcher:
             ),
         }
 
+    def _compare_color_mask(self, candidate: Path, reference: Path) -> dict:
+        return _color_mask_similarity(
+            self._color_mask(candidate), self._color_mask(reference)
+        )
+
+    def _color_mask(self, path: Path) -> np.ndarray | None:
+        key = str(path)
+        if key not in self._color_mask_cache:
+            self._color_mask_cache[key] = _normalized_color_ink(path)
+        return self._color_mask_cache[key]
+
     def _descriptors(
         self, path: Path
     ) -> tuple[list, np.ndarray | None, tuple[int, int]]:
@@ -392,6 +451,139 @@ def _empty_metrics() -> dict:
     }
 
 
+def _normalized_color_ink(path: Path) -> np.ndarray | None:
+    """Center chromatic stamp ink and discard black form/handwriting lines."""
+    image = cv2.imdecode(
+        np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR
+    )
+    if image is None:
+        return None
+    blue, green, red = cv2.split(image)
+    high = np.maximum(np.maximum(red, green), blue).astype(np.int16)
+    low = np.minimum(np.minimum(red, green), blue).astype(np.int16)
+    mask = (((high - low) >= 22) & (low <= 235)).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8)
+    )
+    ys, xs = np.where(mask > 0)
+    if len(xs) < 180:
+        return None
+    pad = 4
+    x1 = max(0, int(xs.min()) - pad)
+    x2 = min(mask.shape[1], int(xs.max()) + pad + 1)
+    y1 = max(0, int(ys.min()) - pad)
+    y2 = min(mask.shape[0], int(ys.max()) + pad + 1)
+    crop = mask[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    target = COLOR_MASK_CANVAS_SIZE - 32
+    scale = target / max(crop.shape)
+    resized = cv2.resize(
+        crop,
+        (
+            max(1, round(crop.shape[1] * scale)),
+            max(1, round(crop.shape[0] * scale)),
+        ),
+        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC,
+    )
+    canvas = np.zeros(
+        (COLOR_MASK_CANVAS_SIZE, COLOR_MASK_CANVAS_SIZE), np.uint8
+    )
+    top = (COLOR_MASK_CANVAS_SIZE - resized.shape[0]) // 2
+    left = (COLOR_MASK_CANVAS_SIZE - resized.shape[1]) // 2
+    canvas[
+        top:top + resized.shape[0], left:left + resized.shape[1]
+    ] = resized
+    return canvas
+
+
+def _shift_mask(image: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    return cv2.warpAffine(
+        image,
+        np.float32([[1, 0, dx], [0, 1, dy]]),
+        (image.shape[1], image.shape[0]),
+        flags=cv2.INTER_NEAREST,
+        borderValue=0,
+    )
+
+
+def _color_mask_similarity(
+    candidate_mask: np.ndarray | None,
+    reference_mask: np.ndarray | None,
+) -> dict:
+    if candidate_mask is None or reference_mask is None:
+        return {
+            "color_mask_score": 0.0,
+            "color_mask_correlation": 0.0,
+            "color_mask_dice": 0.0,
+            "color_mask_angle": 0,
+            "color_mask_dx": 0,
+            "color_mask_dy": 0,
+        }
+    size = COLOR_MASK_CANVAS_SIZE
+    yy, xx = np.ogrid[:size, :size]
+    center = (size - 1) / 2
+    radius = np.sqrt((xx - center) ** 2 + (yy - center) ** 2)
+    # The outer circle is common to unrelated stamps. Retain identifying ring
+    # text, center star/logo and internal type line, but suppress the border.
+    focus = (radius <= size * 0.43).astype(np.uint8)
+    reference_focus = cv2.GaussianBlur(
+        (reference_mask * focus).astype(np.float32) / 255.0,
+        (5, 5),
+        0,
+    )
+    padded = cv2.copyMakeBorder(
+        reference_focus, 8, 8, 8, 8, cv2.BORDER_CONSTANT
+    )
+    best = {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    }
+    for angle in COLOR_MASK_ROTATIONS:
+        rotation = cv2.getRotationMatrix2D((center, center), angle, 1.0)
+        rotated = cv2.warpAffine(
+            candidate_mask,
+            rotation,
+            (size, size),
+            flags=cv2.INTER_NEAREST,
+            borderValue=0,
+        )
+        rotated_focus = cv2.GaussianBlur(
+            (rotated * focus).astype(np.float32) / 255.0,
+            (5, 5),
+            0,
+        )
+        response = cv2.matchTemplate(
+            padded, rotated_focus, cv2.TM_CCOEFF_NORMED
+        )
+        _minimum, correlation, _minimum_location, location = cv2.minMaxLoc(
+            response
+        )
+        dx, dy = int(location[0] - 8), int(location[1] - 8)
+        aligned = _shift_mask(rotated, dx, dy)
+        left = (aligned > 64) & (focus > 0)
+        right = (reference_mask > 64) & (focus > 0)
+        intersection = int(np.logical_and(left, right).sum())
+        dice = 2 * intersection / max(
+            1, int(left.sum()) + int(right.sum())
+        )
+        score = max(0.0, 0.72 * float(correlation) + 0.28 * dice)
+        if score > best["color_mask_score"]:
+            best = {
+                "color_mask_score": round(score, 4),
+                "color_mask_correlation": round(float(correlation), 4),
+                "color_mask_dice": round(float(dice), 4),
+                "color_mask_angle": angle,
+                "color_mask_dx": dx,
+                "color_mask_dy": dy,
+            }
+    return best
+
+
 def _point_coverage(points: np.ndarray, shape: tuple[int, int]) -> float:
     if len(points) < 2:
         return 0.0
@@ -407,6 +599,14 @@ def _evidence_rank(evidence: dict) -> tuple:
             float(evidence.get("reference_coverage", 0)),
         ),
         int(evidence.get("good_matches", 0)),
+    )
+
+
+def _color_evidence_rank(evidence: dict) -> tuple:
+    return (
+        float(evidence.get("color_mask_score", 0)),
+        float(evidence.get("color_mask_correlation", 0)),
+        float(evidence.get("color_mask_dice", 0)),
     )
 
 
@@ -443,6 +643,15 @@ def _passes_high_support_gate(evidence: dict) -> bool:
         >= HIGH_SUPPORT_MIN_SURFACE_COVERAGE
         and evidence["reference_coverage"]
         >= HIGH_SUPPORT_MIN_SURFACE_COVERAGE
+    )
+
+
+def _passes_color_mask_gate(evidence: dict) -> bool:
+    return bool(
+        float(evidence.get("color_mask_score", 0)) >= COLOR_MASK_MIN_SCORE
+        and float(evidence.get("color_mask_correlation", 0))
+        >= COLOR_MASK_MIN_CORRELATION
+        and float(evidence.get("color_mask_dice", 0)) >= COLOR_MASK_MIN_DICE
     )
 
 
@@ -580,4 +789,15 @@ def _reference_confidence(
                 ) / 0.20,
             ),
         )
+    elif route == "color_mask_geometry":
+        # Whole-ink agreement is deliberately independent of sparse SIFT
+        # keypoints. It starts at 91% and gains only a small margin above the
+        # three strict 0.80 boundaries.
+        margin = min(
+            float(evidence.get("color_mask_score", 0)) - COLOR_MASK_MIN_SCORE,
+            float(evidence.get("color_mask_correlation", 0))
+            - COLOR_MASK_MIN_CORRELATION,
+            float(evidence.get("color_mask_dice", 0)) - COLOR_MASK_MIN_DICE,
+        )
+        confidence = min(0.96, 0.91 + 0.5 * max(0.0, margin))
     return round(confidence, 3)

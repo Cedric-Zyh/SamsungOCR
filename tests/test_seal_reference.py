@@ -6,6 +6,9 @@ import cv2
 import numpy as np
 
 from receipt_ocr.seal_reference import (
+    COLOR_MASK_MIN_CORRELATION,
+    COLOR_MASK_MIN_DICE,
+    COLOR_MASK_MIN_SCORE,
     CONSENSUS_MIN_DISTINCT_REFERENCES,
     CONSENSUS_MIN_GOOD_MATCHES,
     CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -29,6 +32,7 @@ from receipt_ocr.seal_reference import (
     _best_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
+    _passes_color_mask_gate,
 )
 
 
@@ -207,6 +211,58 @@ def test_high_support_minor_coverage_enforces_every_compensating_boundary():
             "good_matches", "homography_inliers"
         } else 0.001
         assert _passes_high_support_gate(reduced) is False
+
+
+def test_color_mask_geometry_enforces_score_correlation_and_dice_boundaries():
+    evidence = {
+        "color_mask_score": COLOR_MASK_MIN_SCORE,
+        "color_mask_correlation": COLOR_MASK_MIN_CORRELATION,
+        "color_mask_dice": COLOR_MASK_MIN_DICE,
+    }
+    assert _passes_color_mask_gate(evidence) is True
+    for key in evidence:
+        reduced = dict(evidence)
+        reduced[key] -= 0.001
+        assert _passes_color_mask_gate(reduced) is False
+
+
+def test_match_reports_color_mask_geometry_when_sparse_sift_is_weak(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": 20,
+        "homography_inliers": 10,
+        "inlier_ratio": 0.5,
+        "candidate_coverage": 0.2,
+        "reference_coverage": 0.2,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": COLOR_MASK_MIN_SCORE,
+        "color_mask_correlation": COLOR_MASK_MIN_CORRELATION,
+        "color_mask_dice": COLOR_MASK_MIN_DICE,
+        "color_mask_angle": 2,
+        "color_mask_dx": 1,
+        "color_mask_dy": -1,
+    })
+    evidence = matcher.match(_result("/files/artifacts/candidate/seal.png"))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "color_mask_geometry"
+    assert evidence["reference_filename"] == "confirmed.jpg"
+    assert evidence["confidence"] >= 0.91
 
 
 def test_match_reports_multi_reference_route_and_leading_reference(

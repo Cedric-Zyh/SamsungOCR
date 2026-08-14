@@ -7,6 +7,9 @@ from pathlib import Path
 from receipt_ocr.database import Database
 from receipt_ocr.evaluation import load_ground_truth
 from receipt_ocr.seal_reference import (
+    COLOR_MASK_MIN_CORRELATION,
+    COLOR_MASK_MIN_DICE,
+    COLOR_MASK_MIN_SCORE,
     CONSENSUS_MIN_DISTINCT_REFERENCES,
     CONSENSUS_MIN_GOOD_MATCHES,
     CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -102,6 +105,15 @@ def build_report(
             "reference_coverage": float(
                 evidence.get("reference_coverage", 0)
             ),
+            "color_mask_score": float(
+                evidence.get("color_mask_score", 0)
+            ),
+            "color_mask_correlation": float(
+                evidence.get("color_mask_correlation", 0)
+            ),
+            "color_mask_dice": float(
+                evidence.get("color_mask_dice", 0)
+            ),
             "reason": str(evidence.get("reason") or ""),
             "consensus_reference_count": int(
                 evidence.get("consensus_reference_count", 0)
@@ -141,6 +153,11 @@ def build_report(
                 "homography_inliers": CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": CONSENSUS_MIN_INLIER_RATIO,
                 "surface_coverage": CONSENSUS_MIN_SURFACE_COVERAGE,
+            },
+            "color_mask": {
+                "score": COLOR_MASK_MIN_SCORE,
+                "correlation": COLOR_MASK_MIN_CORRELATION,
+                "dice": COLOR_MASK_MIN_DICE,
             },
         },
         "summary": {

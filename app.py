@@ -117,6 +117,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
             + (
                 "在两份独立样单中形成一致几何证据"
                 if evidence.get("route") == "multi_reference_consensus"
+                else "的彩色墨迹形成整体几何一致"
+                if evidence.get("route") == "color_mask_geometry"
                 else "形成大面积几何一致"
             )
         ),
@@ -126,6 +128,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
         "match_basis": (
             "人工真值参考章 + SIFT/RANSAC 多参考一致"
             if evidence.get("route") == "multi_reference_consensus"
+            else "人工真值参考章 + 彩色墨迹整体几何一致"
+            if evidence.get("route") == "color_mask_geometry"
             else "人工真值参考章 + SIFT/RANSAC 高支持度微覆盖抖动"
             if evidence.get("route") == "high_support_minor_coverage"
             else "人工真值参考章 + SIFT/RANSAC 高内点率几何一致"
