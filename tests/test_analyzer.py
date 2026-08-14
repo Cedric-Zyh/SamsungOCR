@@ -27,6 +27,7 @@ from receipt_ocr.analyzer import (
     _max_channel_truncated_mismatch_candidate,
     _missing_year_separator_consensus_from_artifacts,
     _parse_missing_year_separator_full_date,
+    _cross_year_nondestructive_consensus_from_artifacts,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _date_component_consensus_from_artifacts,
@@ -3207,6 +3208,92 @@ def test_missing_year_separator_consensus_keeps_platform_and_conflict_guards():
     }
     assert _missing_year_separator_consensus_from_artifacts(
         [conflicting], "2025-06-16"
+    ) is None
+
+
+def _cross_year_nondestructive_artifacts() -> list[dict]:
+    artifacts = []
+    for variant, server_date in (
+        ("紧凑区域", "2025年5月24日"),
+        ("宽区域", "2026年5月24日"),
+    ):
+        artifacts.append({
+            "variant": variant,
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [
+                {"preprocessing": "原始裁剪", "ocr_texts": ["2026年5月24日"]},
+                {"preprocessing": "去印章色", "ocr_texts": ["2026年5月24日"]},
+            ],
+            "date_line_ocr_variants": [
+                {"preprocessing": "日期行原图", "ocr_texts": ["2026年5月24日"]},
+                {"preprocessing": "日期行去印章色", "ocr_texts": ["2026年5月24日"]},
+                {
+                    "preprocessing": "日期行 Server 大模型复核不一致日期",
+                    "ocr_texts": [server_date],
+                },
+                {
+                    "preprocessing": "日期行 Server 大模型低置信度候选",
+                    "ocr_texts": [server_date],
+                },
+            ],
+        })
+    return artifacts
+
+
+def test_cross_year_nondestructive_consensus_requires_all_literal_cells():
+    accepted = _cross_year_nondestructive_consensus_from_artifacts(
+        _cross_year_nondestructive_artifacts(), "2025-05-24"
+    )
+    assert accepted is not None
+    assert accepted["date"] == date(2026, 5, 24)
+    assert accepted["support"]["other_dates"] == ["2025-05-24"]
+
+    missing = _cross_year_nondestructive_artifacts()
+    missing[1]["secondary_ocr_variants"][0]["ocr_texts"] = []
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        missing, "2025-05-24"
+    ) is None
+
+    one_server_cell_per_geometry = _cross_year_nondestructive_artifacts()
+    for artifact in one_server_cell_per_geometry:
+        artifact["date_line_ocr_variants"] = [
+            item for item in artifact["date_line_ocr_variants"]
+            if item["preprocessing"]
+            != "日期行 Server 大模型低置信度候选"
+        ]
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        one_server_cell_per_geometry, "2025-05-24"
+    )["date"] == date(2026, 5, 24)
+
+    no_wide_server = _cross_year_nondestructive_artifacts()
+    no_wide_server[1]["date_line_ocr_variants"] = [
+        item for item in no_wide_server[1]["date_line_ocr_variants"]
+        if "Server" not in item["preprocessing"]
+    ]
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        no_wide_server, "2025-05-24"
+    ) is None
+
+
+def test_cross_year_nondestructive_consensus_keeps_platform_and_date_guards():
+    artifacts = _cross_year_nondestructive_artifacts()
+    artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        artifacts, "2025-05-24"
+    ) is None
+
+    conflict = _cross_year_nondestructive_artifacts()
+    conflict[1]["date_line_ocr_variants"].append({
+        "preprocessing": "日期行去表格线",
+        "ocr_texts": ["2026年4月24日"],
+    })
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        conflict, "2025-05-24"
+    ) is None
+
+    assert _cross_year_nondestructive_consensus_from_artifacts(
+        _cross_year_nondestructive_artifacts(), "2025-05-23"
     ) is None
 
 

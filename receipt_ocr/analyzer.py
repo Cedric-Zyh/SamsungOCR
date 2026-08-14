@@ -877,6 +877,34 @@ class ReceiptAnalyzer:
             ]
             if matching_rows:
                 date_row = max(matching_rows, key=lambda row: row.confidence)
+        nondestructive_cross_year_consensus = (
+            _cross_year_nondestructive_consensus_from_artifacts(
+                date_artifacts, fields.get("要求到货", "")
+            )
+        )
+        nondestructive_cross_year_markers = {
+            str(item.get("date_cross_year_nondestructive_candidate") or "")
+            for item in date_artifacts
+            if item.get("date_cross_year_nondestructive_candidate")
+        }
+        if (
+            nondestructive_cross_year_consensus is not None
+            and nondestructive_cross_year_markers
+            != {nondestructive_cross_year_consensus["date"].isoformat()}
+        ):
+            # The pure helper also audits saved evidence. Only the production
+            # path may override final candidate ordering, and that path writes
+            # an explicit marker after confirming the current result is still
+            # below the reliable threshold.
+            nondestructive_cross_year_consensus = None
+        if nondestructive_cross_year_consensus is not None:
+            actual_date = nondestructive_cross_year_consensus["date"]
+            matching_rows = [
+                row for row in date_rows
+                if parse_date(row.text) == actual_date
+            ]
+            if matching_rows:
+                date_row = max(matching_rows, key=lambda row: row.confidence)
         component_consensus = _date_component_consensus_from_artifacts(
             date_artifacts
         )
@@ -1047,6 +1075,33 @@ class ReceiptAnalyzer:
             date_check["message"] += (
                 "（Mobile 自包含日期仅漏印刷“年”，Server 完整日期一致；"
                 "去单位日数字窄槽双模型、双预处理确认两位日）"
+            )
+        nondestructive_cross_year_candidates = {
+            parsed
+            for artifact in date_artifacts
+            if (
+                parsed := parse_date(str(
+                    artifact.get(
+                        "date_cross_year_nondestructive_candidate", ""
+                    )
+                ))
+            ) is not None
+        }
+        if (
+            actual_date is not None
+            and nondestructive_cross_year_candidates == {actual_date}
+            and rejected_date is None
+        ):
+            date_confidence = max(0.88, date_confidence)
+            date_check["cross_year_nondestructive_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "models": ["mobile", "server"],
+                "geometries": ["紧凑区域", "宽区域"],
+                "policy": "Mobile 非破坏性八单元 + Server 宽裁独立单元",
+            }
+            date_check["message"] += (
+                "（Mobile 紧裁/宽裁非破坏性原图与去章色图均为同一"
+                "完整跨年日期；Server 宽裁独立确认）"
             )
         if (
             actual_date is not None
@@ -4800,6 +4855,66 @@ class ReceiptAnalyzer:
                                 }
                             ),
                         })
+            # Resolve one tightly bounded cross-year disagreement without
+            # majority-voting destructive variants. Mobile must read the
+            # same literal date from the original and color-cleaned line in
+            # both geometries; Server must independently agree in every wide
+            # audit cell that ran. Tight Server cells must expose the printed required
+            # year, making the discarded conflict explicit and auditable.
+            current_nondestructive_date, _ = find_receipt_date(
+                output, required_text
+            )
+            current_nondestructive_confidence = estimate_date_confidence(
+                output, required_text, current_nondestructive_date
+            )
+            nondestructive_cross_year = (
+                _cross_year_nondestructive_consensus_from_artifacts(
+                    artifacts, required_text
+                )
+                if current_nondestructive_confidence < 0.72
+                else None
+            )
+            if nondestructive_cross_year is not None:
+                candidate_date = nondestructive_cross_year["date"]
+                tight_entry = next((
+                    item for item in date_crop_entries
+                    if item.get("crop_key") == "tight"
+                    and not item.get("audit_only")
+                ), None)
+                if tight_entry is not None:
+                    x, y, width, height = tight_entry["region_box"]
+                    lx, ly, lw, lh = tight_entry["line_box"]
+                    for index in range(2):
+                        output.append(TextObservation(
+                            text=(
+                                f"{candidate_date.year}年"
+                                f"{candidate_date.month}月"
+                                f"{candidate_date.day}日"
+                            ),
+                            confidence=0.88,
+                            x=x + (lx + index * 0.01 * lw) * width,
+                            y=y + ly * height,
+                            width=lw * width,
+                            height=lh * height,
+                        ))
+                for artifact in artifacts:
+                    if artifact.get("variant") in {
+                        "紧凑区域", "宽区域"
+                    }:
+                        artifact.update({
+                            "date_cross_year_nondestructive_candidate": (
+                                candidate_date.isoformat()
+                            ),
+                            "date_cross_year_nondestructive_note": (
+                                "Mobile 在紧裁/宽裁的原始与去章色八单元"
+                                "只读到该完整日期；Server 宽裁已运行的"
+                                "独立复核路径一致。紧裁 Server 的要求年份冲突和"
+                                "破坏性预处理干扰均保留供人工审计"
+                            ),
+                            "date_cross_year_nondestructive_support": (
+                                nondestructive_cross_year["support"]
+                            ),
+                        })
             # A business-impossible candidate (for example a date earlier
             # than document creation) must not prevent one final audit of the
             # untouched color handwriting.  Run this only when every existing
@@ -5686,6 +5801,159 @@ def _missing_year_separator_consensus_from_artifacts(
         "other_dates": sorted(
             value.isoformat() for value in all_dates - {required}
         ),
+    }
+
+
+def _cross_year_nondestructive_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str,
+) -> dict | None:
+    """Resolve one next-year date from literal, non-destructive OCR cells.
+
+    The candidate is assembled before consulting the printed requirement.
+    Mobile must return one strict date in four cells (crop/original line and
+    their color-cleaned counterparts) in *both* tight and wide geometries.
+    Server must return that same date in every available wide audit cell while
+    every available tight cell returns the requirement. At least one Server
+    cell is mandatory on each geometry. This intentionally handles a crop
+    boundary disagreement and never treats destructive preprocessing votes as
+    independent evidence.
+    """
+    required = parse_date(required_text)
+    if required is None:
+        return None
+    by_variant = {
+        str(item.get("variant", "")): item
+        for item in artifacts
+        if item.get("variant") in {"紧凑区域", "宽区域"}
+    }
+    tight = by_variant.get("紧凑区域")
+    wide = by_variant.get("宽区域")
+    if tight is None or wide is None or (
+        "vision" not in str(tight.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            tight.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+
+    def strict_values(variant: dict, key: str, preprocessing: str) -> set[date]:
+        values: set[date] = set()
+        for evidence in variant.get(key) or []:
+            if str(evidence.get("preprocessing", "")) != preprocessing:
+                continue
+            for text in evidence.get("ocr_texts") or []:
+                parsed = parse_date(str(text))
+                if parsed is not None:
+                    values.add(parsed)
+        return values
+
+    mobile_cells: dict[str, set[date]] = {}
+    for geometry, artifact in (("tight", tight), ("wide", wide)):
+        for key, preprocessing, label in (
+            ("secondary_ocr_variants", "原始裁剪", "crop_original"),
+            ("secondary_ocr_variants", "去印章色", "crop_color_clean"),
+            ("date_line_ocr_variants", "日期行原图", "line_original"),
+            (
+                "date_line_ocr_variants", "日期行去印章色",
+                "line_color_clean",
+            ),
+        ):
+            mobile_cells[f"{geometry}_{label}"] = strict_values(
+                artifact, key, preprocessing
+            )
+    if any(len(values) != 1 for values in mobile_cells.values()):
+        return None
+    mobile_common = set.intersection(*mobile_cells.values())
+    if len(mobile_common) != 1:
+        return None
+    candidate = next(iter(mobile_common))
+
+    server_preprocessings = (
+        "日期行 Server 大模型复核不一致日期",
+        "日期行 Server 大模型低置信度候选",
+    )
+    wide_server_cells = {
+        name: strict_values(wide, "date_line_ocr_variants", name)
+        for name in server_preprocessings
+    }
+    tight_server_cells = {
+        name: strict_values(tight, "date_line_ocr_variants", name)
+        for name in server_preprocessings
+    }
+    available_wide_server = {
+        key: values for key, values in wide_server_cells.items() if values
+    }
+    available_tight_server = {
+        key: values for key, values in tight_server_cells.items() if values
+    }
+    if not available_wide_server or any(
+        values != {candidate} for values in available_wide_server.values()
+    ):
+        return None
+    if not available_tight_server or any(
+        values != {required} for values in available_tight_server.values()
+    ):
+        return None
+
+    # The business date is a final boundary check, never a component source.
+    if not (
+        candidate.year == required.year + 1
+        and candidate.month == required.month
+        and candidate.day == required.day
+    ):
+        return None
+
+    all_dates: list[dict] = []
+    for geometry, artifact in (("紧凑区域", tight), ("宽区域", wide)):
+        for key in (
+            "secondary_ocr_variants", "date_line_ocr_variants",
+        ):
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                engine = "server" if "Server" in preprocessing else "mobile"
+                for text in evidence.get("ocr_texts") or []:
+                    parsed = parse_date(str(text))
+                    if parsed is None:
+                        continue
+                    all_dates.append({
+                        "value": parsed,
+                        "geometry": geometry,
+                        "engine": engine,
+                        "preprocessing": preprocessing,
+                        "text": str(text),
+                    })
+    other_dates = {item["value"] for item in all_dates} - {candidate}
+    truncated_day = (
+        date(candidate.year, candidate.month, candidate.day % 10)
+        if candidate.day >= 10 and candidate.day % 10
+        else None
+    )
+    for other in other_dates:
+        same_month_day_in_decade = (
+            other.month == candidate.month
+            and other.day == candidate.day
+            and 2020 <= other.year <= 2029
+        )
+        if other not in {required, truncated_day} and not same_month_day_in_decade:
+            return None
+    return {
+        "date": candidate,
+        "support": {
+            "candidate": candidate.isoformat(),
+            "mobile_cells": {
+                key: sorted(value.isoformat() for value in values)
+                for key, values in mobile_cells.items()
+            },
+            "wide_server_cells": {
+                key: sorted(value.isoformat() for value in values)
+                for key, values in available_wide_server.items()
+            },
+            "tight_server_conflict_cells": {
+                key: sorted(value.isoformat() for value in values)
+                for key, values in available_tight_server.items()
+            },
+            "other_dates": sorted(value.isoformat() for value in other_dates),
+        },
     }
 
 
