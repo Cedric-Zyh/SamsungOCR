@@ -64,6 +64,17 @@ COLOR_MASK_MIN_DICE = 0.80
 COLOR_MASK_CANVAS_SIZE = 320
 COLOR_MASK_ROTATIONS = tuple(range(-12, 13, 2))
 
+# A moderately faded whole-ink match may still be promoted when the *same*
+# candidate/reference pair also has broad, high-purity SIFT geometry. This is
+# a separate AND gate, not a relaxation of the strict color-only route.
+COLOR_SIFT_MIN_SCORE = 0.70
+COLOR_SIFT_MIN_CORRELATION = 0.70
+COLOR_SIFT_MIN_DICE = 0.65
+COLOR_SIFT_MIN_GOOD_MATCHES = 60
+COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS = 40
+COLOR_SIFT_MIN_INLIER_RATIO = 0.65
+COLOR_SIFT_MIN_SURFACE_COVERAGE = 0.30
+
 
 @dataclass(frozen=True)
 class SealReference:
@@ -225,6 +236,9 @@ class SealReferenceMatcher:
         color_mask_accepted = bool(
             best_color is not None and _passes_color_mask_gate(best_color)
         )
+        color_sift_accepted = bool(
+            best_color is not None and _passes_color_sift_gate(best_color)
+        )
         if consensus_accepted and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
         ):
@@ -243,7 +257,7 @@ class SealReferenceMatcher:
                 key=_evidence_rank,
             )
         if (
-            color_mask_accepted
+            (color_mask_accepted or color_sift_accepted)
             and not (
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or consensus_accepted
@@ -253,7 +267,7 @@ class SealReferenceMatcher:
         accepted = (
             strict_accepted or high_ratio_accepted
             or high_support_accepted or consensus_accepted
-            or color_mask_accepted
+            or color_mask_accepted or color_sift_accepted
         )
         route = (
             "strict_single_reference" if strict_accepted
@@ -261,6 +275,7 @@ class SealReferenceMatcher:
             else "high_support_minor_coverage" if high_support_accepted
             else "multi_reference_consensus" if consensus_accepted
             else "color_mask_geometry" if color_mask_accepted
+            else "color_mask_sift_geometry" if color_sift_accepted
             else "rejected"
         )
         best["accepted"] = accepted
@@ -304,6 +319,15 @@ class SealReferenceMatcher:
                 "correlation": COLOR_MASK_MIN_CORRELATION,
                 "dice": COLOR_MASK_MIN_DICE,
             },
+            "color_sift": {
+                "score": COLOR_SIFT_MIN_SCORE,
+                "correlation": COLOR_SIFT_MIN_CORRELATION,
+                "dice": COLOR_SIFT_MIN_DICE,
+                "good_matches": COLOR_SIFT_MIN_GOOD_MATCHES,
+                "homography_inliers": COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS,
+                "inlier_ratio": COLOR_SIFT_MIN_INLIER_RATIO,
+                "surface_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+            },
         }
         best["confidence"] = (
             _reference_confidence(best, route, consensus)
@@ -320,6 +344,8 @@ class SealReferenceMatcher:
                 "同一章区与至少两份独立人工真值阳性章形成几何一致"
                 if consensus_accepted else
                 "与人工真值阳性章的彩色墨迹形成整体几何一致"
+                if color_mask_accepted else
+                "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
             )
             if accepted else
             "视觉特征未达到人工真值参考章的严格几何门槛"
@@ -655,6 +681,26 @@ def _passes_color_mask_gate(evidence: dict) -> bool:
     )
 
 
+def _passes_color_sift_gate(evidence: dict) -> bool:
+    """Require whole-ink and local geometry on the exact same reference."""
+    return bool(
+        float(evidence.get("color_mask_score", 0)) >= COLOR_SIFT_MIN_SCORE
+        and float(evidence.get("color_mask_correlation", 0))
+        >= COLOR_SIFT_MIN_CORRELATION
+        and float(evidence.get("color_mask_dice", 0)) >= COLOR_SIFT_MIN_DICE
+        and int(evidence.get("good_matches", 0))
+        >= COLOR_SIFT_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= COLOR_SIFT_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= COLOR_SIFT_MIN_SURFACE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= COLOR_SIFT_MIN_SURFACE_COVERAGE
+    )
+
+
 def _passes_consensus_vote(evidence: dict) -> bool:
     return bool(
         evidence["good_matches"] >= CONSENSUS_MIN_GOOD_MATCHES
@@ -800,4 +846,28 @@ def _reference_confidence(
             float(evidence.get("color_mask_dice", 0)) - COLOR_MASK_MIN_DICE,
         )
         confidence = min(0.96, 0.91 + 0.5 * max(0.0, margin))
+    elif route == "color_mask_sift_geometry":
+        # Both representations agree on the same pair. Keep this conservative
+        # route below the strongest strict SIFT/color-only matches.
+        color_margin = min(
+            float(evidence.get("color_mask_score", 0)) - COLOR_SIFT_MIN_SCORE,
+            float(evidence.get("color_mask_correlation", 0))
+            - COLOR_SIFT_MIN_CORRELATION,
+            float(evidence.get("color_mask_dice", 0)) - COLOR_SIFT_MIN_DICE,
+        )
+        sift_margin = min(
+            (int(evidence.get("homography_inliers", 0))
+             - COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS) / 80,
+            (float(evidence.get("inlier_ratio", 0))
+             - COLOR_SIFT_MIN_INLIER_RATIO) / 0.25,
+            (min(
+                float(evidence.get("candidate_coverage", 0)),
+                float(evidence.get("reference_coverage", 0)),
+            ) - COLOR_SIFT_MIN_SURFACE_COVERAGE) / 0.30,
+        )
+        confidence = min(
+            0.95,
+            0.91 + 0.20 * max(0.0, color_margin)
+            + 0.02 * max(0.0, sift_margin),
+        )
     return round(confidence, 3)

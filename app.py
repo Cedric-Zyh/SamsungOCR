@@ -67,6 +67,31 @@ def export_subprocess_environment() -> dict[str, str]:
     return environment
 
 
+def _export_machine_scope(
+    all_machine_results: list[dict],
+    exported_results: list[dict],
+    requested_backend: str,
+) -> list[dict]:
+    """Match export-summary accuracy to the exact rows in the workbook."""
+    result_ids = {
+        int(item.get("id") or 0) for item in exported_results
+        if int(item.get("id") or 0) > 0
+    }
+    filenames = {
+        str(item.get("filename") or "") for item in exported_results
+        if str(item.get("filename") or "")
+    }
+    scoped = [
+        item for item in all_machine_results
+        if (not requested_backend or item.get("ocr_backend") == requested_backend)
+        and (
+            int(item.get("id") or 0) in result_ids
+            if result_ids else str(item.get("filename") or "") in filenames
+        )
+    ]
+    return scoped
+
+
 NODE_EXECUTABLE = resolve_node_executable()
 
 app = Flask(__name__)
@@ -119,6 +144,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
                 if evidence.get("route") == "multi_reference_consensus"
                 else "的彩色墨迹形成整体几何一致"
                 if evidence.get("route") == "color_mask_geometry"
+                else "同时形成整体彩色墨迹与大面积局部几何一致"
+                if evidence.get("route") == "color_mask_sift_geometry"
                 else "形成大面积几何一致"
             )
         ),
@@ -130,6 +157,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
             if evidence.get("route") == "multi_reference_consensus"
             else "人工真值参考章 + 彩色墨迹整体几何一致"
             if evidence.get("route") == "color_mask_geometry"
+            else "人工真值参考章 + 彩色墨迹/SIFT 联合几何一致"
+            if evidence.get("route") == "color_mask_sift_geometry"
             else "人工真值参考章 + SIFT/RANSAC 高支持度微覆盖抖动"
             if evidence.get("route") == "high_support_minor_coverage"
             else "人工真值参考章 + SIFT/RANSAC 高内点率几何一致"
@@ -615,13 +644,9 @@ def export_excel():
         limit=5000, completed_tasks_only=True
     )
     requested_backend = str(request.args.get("ocr_backend", "")).strip()
-    machine_results = [
-        item for item in all_machine_results
-        if not requested_backend or item.get("ocr_backend") == requested_backend
-    ]
-    if requested_backend and not machine_results:
-        machine_results = all_machine_results
-        requested_backend = ""
+    machine_results = _export_machine_scope(
+        all_machine_results, results, requested_backend
+    )
     accuracy = evaluate_results(
         machine_results, load_ground_truth(GROUND_TRUTH_PATH)
     )
@@ -629,6 +654,7 @@ def export_excel():
     accuracy["scope_backend_label"] = (
         backend_label(requested_backend) if requested_backend else "全部后端最新结果"
     )
+    accuracy["scope_export_rows"] = len(results)
     report_data = operational_report(
         results,
         database.all_history(),

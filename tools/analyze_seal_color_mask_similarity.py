@@ -14,6 +14,7 @@ from receipt_ocr.seal_reference import (
     SealReferenceMatcher,
     _color_mask_similarity,
     _normalized_color_ink,
+    _passes_color_sift_gate,
 )
 
 
@@ -60,8 +61,20 @@ def build_report(database: Database, truth_path: Path, backend: str) -> dict:
                 continue
             for reference in references:
                 metrics = color_mask_similarity(candidate_path, reference.path)
+                sift = matcher._compare(candidate_path, reference.path)
                 row = {
-                    **metrics,
+                    **metrics, **sift,
+                    "sift_good_matches": int(sift.get("good_matches", 0)),
+                    "sift_homography_inliers": int(
+                        sift.get("homography_inliers", 0)
+                    ),
+                    "sift_inlier_ratio": float(sift.get("inlier_ratio", 0)),
+                    "sift_candidate_coverage": float(
+                        sift.get("candidate_coverage", 0)
+                    ),
+                    "sift_reference_coverage": float(
+                        sift.get("reference_coverage", 0)
+                    ),
                     "candidate_index": int(artifact.get("index", -1)),
                     "candidate_url": candidate_url,
                     "reference_filename": reference.filename,
@@ -78,9 +91,16 @@ def build_report(database: Database, truth_path: Path, backend: str) -> dict:
             "recognized": str(seal_check.get("recognized") or ""),
             "company_score": float(seal_check.get("company_score", 0)),
             **best,
+            "color_sift_accepted": _passes_color_sift_gate({
+                **best,
+                "color_mask_score": best["score"],
+                "color_mask_correlation": best["correlation"],
+                "color_mask_dice": best["dice"],
+            }),
         })
     positives = [row for row in samples if row["truth_should_match"]]
     negatives = [row for row in samples if not row["truth_should_match"]]
+    accepted = [row for row in samples if row["color_sift_accepted"]]
     return {
         "backend": backend,
         "truth_samples": len(truth),
@@ -91,6 +111,13 @@ def build_report(database: Database, truth_path: Path, backend: str) -> dict:
             "negative_scored": len(negatives),
             "positive_max": max((row["score"] for row in positives), default=0),
             "negative_max": max((row["score"] for row in negatives), default=0),
+            "color_sift_accepted": len(accepted),
+            "color_sift_correct": sum(
+                bool(row["truth_should_match"]) for row in accepted
+            ),
+            "color_sift_false_accepts": sum(
+                not bool(row["truth_should_match"]) for row in accepted
+            ),
         },
         "samples": sorted(samples, key=lambda row: row["score"], reverse=True),
     }

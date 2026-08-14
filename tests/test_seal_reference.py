@@ -9,6 +9,13 @@ from receipt_ocr.seal_reference import (
     COLOR_MASK_MIN_CORRELATION,
     COLOR_MASK_MIN_DICE,
     COLOR_MASK_MIN_SCORE,
+    COLOR_SIFT_MIN_CORRELATION,
+    COLOR_SIFT_MIN_DICE,
+    COLOR_SIFT_MIN_GOOD_MATCHES,
+    COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS,
+    COLOR_SIFT_MIN_INLIER_RATIO,
+    COLOR_SIFT_MIN_SCORE,
+    COLOR_SIFT_MIN_SURFACE_COVERAGE,
     CONSENSUS_MIN_DISTINCT_REFERENCES,
     CONSENSUS_MIN_GOOD_MATCHES,
     CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -33,6 +40,7 @@ from receipt_ocr.seal_reference import (
     _passes_high_ratio_gate,
     _passes_high_support_gate,
     _passes_color_mask_gate,
+    _passes_color_sift_gate,
 )
 
 
@@ -224,6 +232,61 @@ def test_color_mask_geometry_enforces_score_correlation_and_dice_boundaries():
         reduced = dict(evidence)
         reduced[key] -= 0.001
         assert _passes_color_mask_gate(reduced) is False
+
+
+def test_color_sift_geometry_requires_all_whole_and_local_boundaries():
+    evidence = {
+        "color_mask_score": COLOR_SIFT_MIN_SCORE,
+        "color_mask_correlation": COLOR_SIFT_MIN_CORRELATION,
+        "color_mask_dice": COLOR_SIFT_MIN_DICE,
+        "good_matches": COLOR_SIFT_MIN_GOOD_MATCHES,
+        "homography_inliers": COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": COLOR_SIFT_MIN_INLIER_RATIO,
+        "candidate_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+        "reference_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+    }
+    assert _passes_color_sift_gate(evidence) is True
+    for key in evidence:
+        reduced = dict(evidence)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert _passes_color_sift_gate(reduced) is False
+
+
+def test_match_reports_color_sift_route_for_same_pair_joint_evidence(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg", requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png", path=reference,
+    )]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": COLOR_SIFT_MIN_GOOD_MATCHES,
+        "homography_inliers": COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": COLOR_SIFT_MIN_INLIER_RATIO,
+        "candidate_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+        "reference_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": COLOR_SIFT_MIN_SCORE,
+        "color_mask_correlation": COLOR_SIFT_MIN_CORRELATION,
+        "color_mask_dice": COLOR_SIFT_MIN_DICE,
+        "color_mask_angle": 0, "color_mask_dx": 0, "color_mask_dy": 0,
+    })
+    evidence = matcher.match(_result("/files/artifacts/candidate/seal.png"))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "color_mask_sift_geometry"
+    assert evidence["reference_filename"] == "confirmed.jpg"
+    assert evidence["confidence"] >= 0.91
 
 
 def test_match_reports_color_mask_geometry_when_sparse_sift_is_weak(
