@@ -30,7 +30,10 @@ from receipt_ocr.analyzer import (
     _cross_year_nondestructive_consensus_from_artifacts,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
+    _cross_model_server_strict_component_date,
     _date_component_consensus_from_artifacts,
+    _server_cross_geometry_strict_date_from_artifacts,
+    _server_strict_component_consensus_from_artifacts,
     _required_month_slot_conflict_consensus_from_artifacts,
     _parse_date_slot_digit,
     _has_shared_specific_stamp_type,
@@ -2607,6 +2610,137 @@ def test_date_component_consensus_never_promotes_pure_paddle_windows_route():
     artifact["secondary_ocr_backend"] = ""
 
     assert _date_component_consensus_from_artifacts([artifact]) is None
+
+
+def _server_strict_component_artifacts() -> list[dict]:
+    strict_label = (
+        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+    )
+    slots = [
+        {
+            "slot": "Server双几何完整年份上下文槽位",
+            "model": model,
+            "preprocessing": "最大通道去彩色",
+            "ocr_texts": [
+                "2025年3" if model == "mobile" else "2025年9"
+            ],
+        }
+        for model in ("mobile", "server")
+    ] + [
+        {
+            "slot": "Server双几何月日上下文槽位",
+            "model": model,
+            "preprocessing": "最大通道去彩色",
+            "ocr_texts": ["9月1" if model == "mobile" else "9月1日"],
+        }
+        for model in ("mobile", "server")
+    ]
+    return [
+        {
+            "variant": geometry,
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "ocr_variants": [],
+            "secondary_ocr_variants": [],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": strict_label,
+                    "ocr_texts": ["2025年9月1日"],
+                },
+                {
+                    "preprocessing": "日期行原图",
+                    "ocr_texts": ["20年3月1日", "20年8月1日"],
+                },
+            ],
+            "date_slot_ocr_variants": slots if geometry == "紧凑区域" else [],
+        }
+        for geometry in ("紧凑区域", "宽区域")
+    ]
+
+
+def test_server_strict_component_consensus_is_ocr_owned_and_cross_geometry():
+    artifacts = _server_strict_component_artifacts()
+    candidate = _server_cross_geometry_strict_date_from_artifacts(artifacts)
+    evidence = _server_strict_component_consensus_from_artifacts(artifacts)
+
+    assert candidate == date(2025, 9, 1)
+    assert evidence is not None
+    assert evidence["date"] == candidate
+    assert evidence["support"]["server_geometries"] == [
+        "紧凑区域", "宽区域"
+    ]
+
+
+def test_server_strict_component_consensus_ignores_saved_audit_candidate():
+    artifacts = _server_strict_component_artifacts()
+    artifacts[0]["date_line_ocr_variants"].append({
+        "preprocessing": "日期行 Server 大模型低置信度候选",
+        "ocr_texts": ["2025年3月1日"],
+    })
+
+    evidence = _server_strict_component_consensus_from_artifacts(artifacts)
+
+    assert evidence is not None
+    assert evidence["date"] == date(2025, 9, 1)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing_wide",
+        "strict_conflict",
+        "mobile_year_conflict",
+        "mobile_month_day_conflict",
+        "partial_day_conflict",
+        "windows_single_backend",
+    ),
+)
+def test_server_strict_component_consensus_rejects_incomplete_evidence(
+    mutation,
+):
+    artifacts = _server_strict_component_artifacts()
+    tight = artifacts[0]
+    if mutation == "missing_wide":
+        artifacts.pop()
+    elif mutation == "strict_conflict":
+        artifacts[1]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行原图",
+            "ocr_texts": ["2025年8月1日"],
+        })
+    elif mutation == "mobile_year_conflict":
+        tight["date_slot_ocr_variants"][0]["ocr_texts"] = ["2024年3"]
+    elif mutation == "mobile_month_day_conflict":
+        tight["date_slot_ocr_variants"][2]["ocr_texts"] = ["3月1日"]
+    elif mutation == "partial_day_conflict":
+        tight["date_line_ocr_variants"][1]["ocr_texts"].append(
+            "20年8月2日"
+        )
+    else:
+        tight["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+        tight["secondary_ocr_backend"] = ""
+
+    assert _server_strict_component_consensus_from_artifacts(
+        artifacts
+    ) is None
+
+
+def test_server_strict_component_helper_requires_each_model_component():
+    candidate = date(2025, 9, 1)
+    variants = _server_strict_component_artifacts()[0][
+        "date_slot_ocr_variants"
+    ]
+    texts = ["2025年9月1日", "20年3月1日", "20年8月1日"]
+    assert _cross_model_server_strict_component_date(
+        candidate, variants, texts
+    ) == candidate
+
+    for index in range(len(variants)):
+        reduced = [dict(item) for item in variants]
+        reduced[index] = {**reduced[index], "ocr_texts": []}
+        assert _cross_model_server_strict_component_date(
+            candidate, reduced, texts
+        ) is None
 
 
 def _month_slot_conflict_artifacts():
