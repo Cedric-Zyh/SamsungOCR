@@ -32,6 +32,8 @@ from receipt_ocr.analyzer import (
     _cross_model_slot_required_date,
     _cross_model_server_strict_component_date,
     _parse_full_year_month_day_audit,
+    _parse_partial_year_month_day_audit,
+    _partial_year_day_before_audit_from_artifacts,
     _white_day_conflict_prefilter_from_artifacts,
     _white_day_conflict_audit_candidate,
     _date_component_consensus_from_artifacts,
@@ -3458,6 +3460,90 @@ def test_white_day_conflict_candidate_stays_component_strict():
     ) == date(2025, 8, 22)
     variants[-1]["ocr_texts"] = ["月23日"]
     assert _white_day_conflict_audit_candidate(prefilter, variants) is None
+
+
+def _partial_year_day_before_artifacts():
+    values = {
+        ("mobile", "紧凑区域"): "200年8月19日",
+        ("server", "紧凑区域"): "202年8月19日",
+        ("mobile", "宽区域"): "20年8月19日",
+        ("server", "宽区域"): "200年8月19日",
+    }
+    return [
+        {
+            "variant": geometry,
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 "
+                        f"{model.title()} 跨几何复核"
+                    ),
+                    "ocr_texts": [values[(model, geometry)]],
+                }
+                for model in ("mobile", "server")
+            ],
+        }
+        for geometry in ("紧凑区域", "宽区域")
+    ]
+
+
+def test_partial_year_day_before_audit_requires_four_hybrid_cells():
+    required = date(2025, 8, 20)
+    assert _parse_partial_year_month_day_audit(
+        "200年8月19日", required
+    ) == date(2025, 8, 19)
+    assert _parse_partial_year_month_day_audit(
+        "2025年8月19日", required
+    ) is None
+
+    artifacts = _partial_year_day_before_artifacts()
+    selected = _partial_year_day_before_audit_from_artifacts(
+        artifacts, "2025-08-20", "2025-08-16"
+    )
+    assert selected is not None
+    assert selected["date"] == date(2025, 8, 19)
+    assert set(selected["support"]) == {"mobile", "server"}
+
+    assert _partial_year_day_before_audit_from_artifacts(
+        artifacts[:1], "2025-08-20", "2025-08-16"
+    ) is None
+    artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    assert _partial_year_day_before_audit_from_artifacts(
+        artifacts, "2025-08-20", "2025-08-16"
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "required", "creation"),
+    [
+        ("wrong_day", "2025-08-20", "2025-08-16"),
+        ("complete_year", "2025-08-20", "2025-08-16"),
+        ("required_not_next_day", "2025-08-21", "2025-08-16"),
+        ("before_creation", "2025-08-20", "2025-08-20"),
+        ("single_digit_day", "2025-08-10", "2025-08-01"),
+    ],
+)
+def test_partial_year_day_before_audit_rejects_unsafe_variants(
+    mutation, required, creation,
+):
+    artifacts = _partial_year_day_before_artifacts()
+    if mutation == "wrong_day":
+        artifacts[1]["date_line_ocr_variants"][1]["ocr_texts"] = [
+            "200年8月18日"
+        ]
+    elif mutation == "complete_year":
+        artifacts[1]["date_line_ocr_variants"][1]["ocr_texts"] = [
+            "2025年8月19日"
+        ]
+    elif mutation == "single_digit_day":
+        for artifact in artifacts:
+            for variant in artifact["date_line_ocr_variants"]:
+                variant["ocr_texts"] = ["20年8月9日"]
+    assert _partial_year_day_before_audit_from_artifacts(
+        artifacts, required, creation
+    ) is None
 
 
 def test_missing_year_separator_parser_requires_all_literal_components():

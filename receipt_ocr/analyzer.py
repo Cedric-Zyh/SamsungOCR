@@ -987,6 +987,38 @@ class ReceiptAnalyzer:
             actual_date, rejected_date, creation_date = _reject_date_before_creation(
                 actual_date, fields.get("制单日期", ""), fields.get("运单号", "")
             )
+        partial_year_day_before_audit = (
+            _partial_year_day_before_audit_from_artifacts(
+                date_artifacts,
+                fields.get("要求到货", ""),
+                fields.get("制单日期", ""),
+            )
+        )
+        partial_year_day_before_selected = False
+        superseded_rejected_date = None
+        if (
+            partial_year_day_before_audit is not None
+            and (actual_date is None or rejected_date is not None)
+        ):
+            superseded_rejected_date = rejected_date
+            actual_date = partial_year_day_before_audit["date"]
+            date_row = None
+            rejected_date = None
+            audit_date_candidate = False
+            audit_date_note = ""
+            partial_year_day_before_selected = True
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_partial_year_day_before_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_partial_year_day_before_note": (
+                            "Mobile/Server 在紧裁、宽裁四个最大通道单元"
+                            "均读到同一显式月日；年份仅保留 20/20x，"
+                            "故固定为低置信度人工建议，不参与自动放行"
+                        ),
+                    })
         if not has_receipt_footer:
             actual_date, date_row, rejected_date = None, None, None
         if rejected_date:
@@ -1026,6 +1058,22 @@ class ReceiptAnalyzer:
                     f"OCR 候选早于制单日期 {creation_date.isoformat()}，已转人工复核"
                 ),
                 message="日期 OCR 候选违反业务时间顺序，未用于自动判定",
+            )
+        if partial_year_day_before_selected:
+            date_check["partial_year_day_before_audit"] = {
+                "candidate": actual_date.isoformat(),
+                "models": ["mobile", "server"],
+                "geometries": ["紧凑区域", "宽区域"],
+                "policy": "残缺年份四单元一致，仅作人工建议",
+                "support": partial_year_day_before_audit["support"],
+            }
+            if superseded_rejected_date is not None:
+                date_check["superseded_rejected_candidate"] = (
+                    superseded_rejected_date.isoformat()
+                )
+            date_check["message"] += (
+                "（Mobile/Server 紧裁与宽裁四单元均支持该月日，"
+                "但年份残缺；仅供人工复核）"
             )
         # Confidence must come from the dedicated, user-visible date crops.
         # The supplementary full-page Vision pass observes the same pixels and
@@ -1292,6 +1340,12 @@ class ReceiptAnalyzer:
         if audit_date_candidate:
             date_confidence = min(0.35, date_confidence)
             date_check["message"] += f"（{audit_date_note}）"
+        if partial_year_day_before_selected:
+            # This route intentionally reconstructs only the missing year
+            # suffix from the printed document context. It must remain below
+            # the automatic-decision threshold even if generic scoring or a
+            # future auxiliary rule sees the same month/day.
+            date_confidence = 0.46
         date_check["confidence"] = date_confidence
         date_check["reliable"] = bool(actual_date and date_confidence >= 0.72)
 
@@ -6676,6 +6730,113 @@ def _parse_full_year_month_day_audit(text: str) -> date | None:
         return date(*(int(value) for value in match.groups()))
     except ValueError:
         return None
+
+
+def _parse_partial_year_month_day_audit(
+    text: str, required: date,
+) -> date | None:
+    """Parse an explicit month/day whose handwritten year lost 1–2 digits.
+
+    This parser is deliberately audit-only. It requires the literal ``年/月/日``
+    structure, a two- or three-digit year token beginning with ``20``, and an
+    explicit month and day. Only the missing year suffix is inherited from the
+    printed required date; complete four-digit years use the stricter parsers.
+    """
+    compact = re.sub(
+        r"\s+", "", str(text).replace("O", "0").replace("o", "0")
+    )
+    match = re.search(
+        r"(?<!\d)(20\d?)年(\d{1,2})月(\d{1,2})日(?!\d)", compact
+    )
+    if not match or len(match.group(1)) not in {2, 3}:
+        return None
+    try:
+        return date(required.year, int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
+
+
+def _partial_year_day_before_audit_from_artifacts(
+    artifacts: list[dict], required_text: str, creation_text: str,
+) -> dict | None:
+    """Return a manual-only previous-day suggestion from four OCR cells.
+
+    Mobile and Server must independently repeat the same explicit month/day in
+    both tight and wide maximum-channel crops. Every cell must contain only a
+    damaged two/three-digit ``20…年`` token—no complete date—and the resulting
+    two-digit day must be exactly one day before the printed requirement and
+    not before the outbound creation date. This never creates a reliable
+    automatic decision and is disabled outside macOS Vision + Paddle Hybrid.
+    """
+    required = parse_date(required_text)
+    creation = parse_date(creation_text)
+    if required is None or creation is None or required.year != creation.year:
+        return None
+    primary = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if primary is None or (
+        "vision" not in str(primary.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            primary.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+    preprocessings = {
+        "mobile": "日期行最大通道去彩色三倍放大 Mobile 跨几何复核",
+        "server": "日期行最大通道去彩色三倍放大 Server 跨几何复核",
+    }
+    cells: dict[tuple[str, str], set[date]] = {}
+    support: dict[str, dict[str, list[str]]] = {
+        "mobile": {}, "server": {},
+    }
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant", ""))
+        if geometry not in {"紧凑区域", "宽区域"}:
+            continue
+        for model, preprocessing in preprocessings.items():
+            texts = [
+                str(text)
+                for variant in artifact.get("date_line_ocr_variants") or []
+                if str(variant.get("preprocessing", "")) == preprocessing
+                for text in variant.get("ocr_texts") or []
+            ]
+            if any(parse_date(text) is not None for text in texts):
+                return None
+            values = {
+                parsed for text in texts
+                if (
+                    parsed := _parse_partial_year_month_day_audit(
+                        text, required
+                    )
+                ) is not None
+            }
+            cells[(model, geometry)] = values
+            support[model][geometry] = texts
+    required_cells = {
+        (model, geometry)
+        for model in ("mobile", "server")
+        for geometry in ("紧凑区域", "宽区域")
+    }
+    if set(cells) != required_cells or any(
+        len(cells[cell]) != 1 for cell in required_cells
+    ):
+        return None
+    candidates = {next(iter(cells[cell])) for cell in required_cells}
+    if len(candidates) != 1:
+        return None
+    candidate = next(iter(candidates))
+    if not (
+        candidate.year == required.year
+        and candidate.month == required.month
+        and candidate.day >= 10
+        and required.day >= 10
+        and (required - candidate).days == 1
+        and candidate >= creation
+    ):
+        return None
+    return {"date": candidate, "support": support}
 
 
 def _white_day_conflict_prefilter_from_artifacts(
