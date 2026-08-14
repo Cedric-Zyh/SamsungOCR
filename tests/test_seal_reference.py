@@ -49,6 +49,10 @@ from receipt_ocr.seal_reference import (
     MIN_SURFACE_COVERAGE,
     SealReference,
     SealReferenceMatcher,
+    TRIMMED_CHROMATIC_MIN_GOOD_MATCHES,
+    TRIMMED_CHROMATIC_MIN_HOMOGRAPHY_INLIERS,
+    TRIMMED_CHROMATIC_MIN_INLIER_RATIO,
+    TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE,
     ULTRA_SUPPORT_MIN_GOOD_MATCHES,
     ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
     ULTRA_SUPPORT_MIN_INLIER_RATIO,
@@ -58,6 +62,7 @@ from receipt_ocr.seal_reference import (
     _best_high_purity_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
+    _passes_trimmed_chromatic_gate,
     _passes_ultra_support_gate,
     _passes_color_mask_gate,
     _passes_color_sift_gate,
@@ -459,6 +464,125 @@ def test_chromatic_crop_artifact_excludes_distant_black_residue(tmp_path):
     assert cropped is not None
     assert cropped.shape[0] < image.shape[0]
     assert cropped.shape[1] < image.shape[1]
+
+
+def test_trimmed_chromatic_gate_requires_every_independent_boundary():
+    evidence = {
+        "trimmed_chromatic_good_matches": (
+            TRIMMED_CHROMATIC_MIN_GOOD_MATCHES
+        ),
+        "trimmed_chromatic_homography_inliers": (
+            TRIMMED_CHROMATIC_MIN_HOMOGRAPHY_INLIERS
+        ),
+        "trimmed_chromatic_inlier_ratio": (
+            TRIMMED_CHROMATIC_MIN_INLIER_RATIO
+        ),
+        "trimmed_chromatic_candidate_coverage": (
+            TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE
+        ),
+        "trimmed_chromatic_reference_coverage": (
+            TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE
+        ),
+    }
+    assert _passes_trimmed_chromatic_gate(evidence) is True
+    for key, value in evidence.items():
+        reduced = dict(evidence)
+        reduced[key] = value - (
+            1 if key.endswith(("good_matches", "homography_inliers"))
+            else 0.001
+        )
+        assert _passes_trimmed_chromatic_gate(reduced) is False
+
+
+def test_match_reports_trimmed_chromatic_single_reference(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    empty = {
+        "good_matches": 0,
+        "homography_inliers": 0,
+        "inlier_ratio": 0.0,
+        "candidate_coverage": 0.0,
+        "reference_coverage": 0.0,
+    }
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: dict(empty))
+    monkeypatch.setattr(
+        matcher, "_compare_chromatic_crop", lambda *_a: dict(empty)
+    )
+    monkeypatch.setattr(
+        matcher,
+        "_compare_trimmed_chromatic_crop",
+        lambda *_a: {
+            "good_matches": TRIMMED_CHROMATIC_MIN_GOOD_MATCHES,
+            "homography_inliers": (
+                TRIMMED_CHROMATIC_MIN_HOMOGRAPHY_INLIERS
+            ),
+            "inlier_ratio": TRIMMED_CHROMATIC_MIN_INLIER_RATIO,
+            "candidate_coverage": TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE,
+            "reference_coverage": TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE,
+        },
+    )
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+
+    evidence = matcher.match(_result(
+        "/files/artifacts/candidate/seal.png"
+    ))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "trimmed_chromatic_single_reference"
+    assert evidence["good_matches"] == TRIMMED_CHROMATIC_MIN_GOOD_MATCHES
+    assert evidence["regular_geometry"]["good_matches"] == 0
+
+
+def test_trimmed_chromatic_artifact_discards_sparse_colored_outliers(
+    tmp_path,
+):
+    artifact_root = tmp_path / "artifacts"
+    source = artifact_root / "sample" / "seal-0-color-isolated.png"
+    source.parent.mkdir(parents=True)
+    image = np.full((600, 800, 3), 255, dtype=np.uint8)
+    cv2.ellipse(
+        image, (400, 390), (170, 140), 0, 0, 360, (20, 20, 220), 10
+    )
+    cv2.putText(
+        image, "STAMP", (315, 405), cv2.FONT_HERSHEY_SIMPLEX,
+        1.2, (20, 20, 220), 4,
+    )
+    for x in range(40, 760, 30):
+        image[25:27, x:x + 2] = (40, 80, 220)
+    cv2.imwrite(str(source), image)
+
+    matcher = SealReferenceMatcher(artifact_root)
+    url = matcher._write_trimmed_chromatic_crop_artifact(
+        source, "/files/artifacts/sample/seal-0-color-isolated.png"
+    )
+    output = (
+        artifact_root / "sample" / "seal-0-chromatic-trimmed-crop.png"
+    )
+    cropped = cv2.imread(str(output))
+    assert url.endswith("/seal-0-chromatic-trimmed-crop.png")
+    assert cropped is not None
+    assert cropped.shape[0] < 400
+    assert cropped.shape[1] < 500
 
 
 def test_high_ratio_single_reference_enforces_compensating_boundaries():

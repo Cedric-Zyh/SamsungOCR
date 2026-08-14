@@ -152,6 +152,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
                 if route == "color_mask_geometry"
                 else "同时形成整体彩色墨迹与大面积局部几何一致"
                 if route == "color_mask_sift_geometry"
+                else "去除稀疏彩色扫描噪点后形成高纯度大面积几何一致"
+                if route == "trimmed_chromatic_single_reference"
                 else "形成大面积几何一致"
             )
         ),
@@ -169,6 +171,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
             if route == "color_mask_geometry"
             else "人工真值参考章 + 彩色墨迹/SIFT 联合几何一致"
             if route == "color_mask_sift_geometry"
+            else "人工真值参考章 + 稀疏章色噪点裁剪/SIFT 高纯度一致"
+            if route == "trimmed_chromatic_single_reference"
             else "人工真值参考章 + SIFT/RANSAC 高支持度微覆盖抖动"
             if route == "high_support_minor_coverage"
             else "人工真值参考章 + SIFT/RANSAC 超高支持度局部覆盖"
