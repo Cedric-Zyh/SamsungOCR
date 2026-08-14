@@ -21,6 +21,7 @@ from receipt_ocr.analyzer import (
     _company_conflict_allows_clipped_prefix_server_recheck,
     _conflicting_receipt_dates,
     _server_mobile_dominant_date_from_artifacts,
+    _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
@@ -114,6 +115,60 @@ def test_server_mobile_dominant_date_rejects_repeated_or_strict_conflict():
     })
     assert _server_mobile_dominant_date_from_artifacts(
         artifacts, "2025-05-11"
+    ) is None
+
+
+def _repeated_server_artifacts(
+    *, candidate: str = "2025年8月7日", extra: str = ""
+) -> list[dict]:
+    texts = [candidate]
+    artifact = {
+        "variant": "宽区域",
+        "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+        "date_line_ocr_variants": [
+            {
+                "preprocessing": "日期行 Server 大模型低置信度候选",
+                "ocr_texts": texts,
+            },
+            {
+                "preprocessing": "日期行最大通道去彩色三倍放大 Server 跨几何复核",
+                "ocr_texts": [candidate],
+            },
+            {
+                "preprocessing": "日期行灰度自动对比三倍放大 Server 人工候选",
+                "ocr_texts": [candidate],
+            },
+        ],
+    }
+    if extra:
+        artifact["date_line_ocr_variants"].append({
+            "preprocessing": "日期行原图 Mobile",
+            "ocr_texts": [extra],
+        })
+    return [artifact]
+
+
+def test_repeated_server_required_date_accepts_three_strict_transforms():
+    assert _repeated_server_required_date_from_artifacts(
+        _repeated_server_artifacts(), "2025-08-07"
+    ) == date(2025, 8, 7)
+
+
+def test_repeated_server_required_date_rejects_two_views_or_other_date():
+    two_views = _repeated_server_artifacts()
+    two_views[0]["date_line_ocr_variants"].pop()
+    assert _repeated_server_required_date_from_artifacts(
+        two_views, "2025-08-07"
+    ) is None
+    assert _repeated_server_required_date_from_artifacts(
+        _repeated_server_artifacts(extra="2025年8月27日"), "2025-08-07"
+    ) is None
+
+
+def test_repeated_server_required_date_rejects_complete_wrong_candidate():
+    assert _repeated_server_required_date_from_artifacts(
+        _repeated_server_artifacts(candidate="2025年8月2日"),
+        "2025-08-07",
     ) is None
 
 

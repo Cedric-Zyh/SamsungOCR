@@ -861,6 +861,11 @@ class ReceiptAnalyzer:
             actual_date, date_row = _find_confirmed_far_lower_date(
                 date_rows, date_artifacts
             )
+        repeated_server_date = _repeated_server_required_date_from_artifacts(
+            date_artifacts, fields.get("要求到货", "")
+        )
+        if actual_date is None and repeated_server_date is not None:
+            actual_date = repeated_server_date
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -924,6 +929,21 @@ class ReceiptAnalyzer:
                             "唯一 Server 完整日期在要求到货日前后 3 天内，"
                             "Mobile 在紧凑/宽区域至少四路重复支持；"
                             "其余最多一个非完整 Mobile 孤立读数"
+                        ),
+                    })
+        if actual_date is not None and repeated_server_date == actual_date:
+            date_confidence = max(0.74, date_confidence)
+            date_check["message"] += (
+                "（Server 在同一日期区域三种预处理均读到完整要求日期）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_repeated_server_candidate": actual_date.isoformat(),
+                        "date_repeated_server_note": (
+                            "唯一可解析日期等于要求到货日期；Server 在同一"
+                            "几何区域的原始、最大通道或自动对比等至少三种"
+                            "预处理上严格重复"
                         ),
                     })
         otsu_manual_candidate = bool(
@@ -4631,6 +4651,64 @@ def _server_mobile_dominant_date_from_artifacts(
     ):
         return None
     return candidate
+
+
+def _repeated_server_required_date_from_artifacts(
+    artifacts: list[dict], required_text: str
+) -> date | None:
+    """Confirm the required date from three strict Server transformations.
+
+    This narrow fallback is used only when every parseable primary-crop date
+    equals the printed requirement and Server reads that literal complete date
+    in at least three differently preprocessed views of one geometry.  One or
+    two views, repaired/partial dates, any conflict, and lower audit crops are
+    rejected.
+    """
+    required = parse_date(required_text)
+    if required is None:
+        return None
+    parsed_dates: set[date] = set()
+    server_support: dict[str, set[str]] = {}
+    for artifact in artifacts:
+        variant = str(artifact.get("variant", ""))
+        if variant not in {"紧凑区域", "宽区域"}:
+            continue
+        for key, default_backend in (
+            ("ocr_variants", str(artifact.get("ocr_backend", ""))),
+            (
+                "secondary_ocr_variants",
+                str(artifact.get("secondary_ocr_backend", "")),
+            ),
+            (
+                "date_line_ocr_variants",
+                str(artifact.get("date_line_ocr_backend", "")),
+            ),
+        ):
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                backend = default_backend
+                is_server = (
+                    "Server" in preprocessing
+                    or "大模型" in preprocessing
+                    or "server" in backend.lower()
+                    or "大模型" in backend
+                )
+                for raw_text in evidence.get("ocr_texts") or []:
+                    text = str(raw_text).strip()
+                    strict = parse_date(text)
+                    parsed = strict or parse_receipt_date(text, required)
+                    if parsed is None:
+                        continue
+                    parsed_dates.add(parsed)
+                    if is_server and strict == required:
+                        server_support.setdefault(variant, set()).add(
+                            preprocessing
+                        )
+    if parsed_dates != {required}:
+        return None
+    if not any(len(labels) >= 3 for labels in server_support.values()):
+        return None
+    return required
 
 
 def _parse_server_audit_candidate(text: str, required):
