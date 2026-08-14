@@ -866,6 +866,17 @@ class ReceiptAnalyzer:
         )
         if actual_date is None and repeated_server_date is not None:
             actual_date = repeated_server_date
+        cross_year_consensus = _cross_year_strict_consensus_from_artifacts(
+            date_artifacts, fields.get("要求到货", "")
+        )
+        if cross_year_consensus is not None:
+            actual_date = cross_year_consensus["date"]
+            matching_rows = [
+                row for row in date_rows
+                if parse_date(row.text) == actual_date
+            ]
+            if matching_rows:
+                date_row = max(matching_rows, key=lambda row: row.confidence)
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -877,9 +888,16 @@ class ReceiptAnalyzer:
                     if 0.50 <= date_row.y <= 0.69
                     else "远下方手写候选，待人工确认"
                 )
-        actual_date, rejected_date, creation_date = _reject_date_before_creation(
-            actual_date, fields.get("制单日期", ""), fields.get("运单号", "")
-        )
+        if cross_year_consensus is not None:
+            # Four mandatory Paddle engine/geometry cells with a literal
+            # four-digit year outweigh the business-order plausibility
+            # heuristic. Keep the anomalous year as a reliable mismatch.
+            rejected_date = None
+            creation_date = parse_date(fields.get("制单日期", ""))
+        else:
+            actual_date, rejected_date, creation_date = _reject_date_before_creation(
+                actual_date, fields.get("制单日期", ""), fields.get("运单号", "")
+            )
         if not has_receipt_footer:
             actual_date, date_row, rejected_date = None, None, None
         if rejected_date:
@@ -890,6 +908,23 @@ class ReceiptAnalyzer:
         date_check = compare_dates(fields.get("要求到货", ""), actual_date)
         if rejected_date_evidence:
             date_check["rejected_candidates"] = rejected_date_evidence
+        if cross_year_consensus is not None and rejected_date_evidence:
+            accepted_business_anomalies = [
+                item for item in rejected_date_evidence
+                if str(item.get("value") or "") == actual_date.isoformat()
+            ]
+            remaining_rejections = [
+                item for item in rejected_date_evidence
+                if str(item.get("value") or "") != actual_date.isoformat()
+            ]
+            if accepted_business_anomalies:
+                date_check["business_time_overridden_candidates"] = (
+                    accepted_business_anomalies
+                )
+            if remaining_rejections:
+                date_check["rejected_candidates"] = remaining_rejections
+            else:
+                date_check.pop("rejected_candidates", None)
         if not has_receipt_footer:
             date_check.update(
                 status="未识别",
@@ -946,6 +981,34 @@ class ReceiptAnalyzer:
                             "预处理上严格重复"
                         ),
                     })
+        if (
+            actual_date is not None
+            and cross_year_consensus is not None
+            and cross_year_consensus["date"] == actual_date
+        ):
+            date_confidence = max(0.86, date_confidence)
+            date_check["message"] += (
+                "（Paddle Mobile、Paddle Server 在紧裁和宽裁均读到同一"
+                "完整跨年日期；缺年份读数未用于覆盖字面年份）"
+            )
+            date_check["cross_year_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "support": cross_year_consensus["support"],
+                "strict_observation_count": cross_year_consensus[
+                    "strict_observation_count"
+                ],
+            }
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_cross_year_consensus_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_cross_year_consensus_note": (
+                            "唯一完整四位年份日期获 Mobile/Server 紧裁与宽裁"
+                            "四个必要单元共同支持；其他残缺读数月日一致"
+                        ),
+                    })
         otsu_manual_candidate = bool(
             actual_date
             and any(
@@ -959,7 +1022,7 @@ class ReceiptAnalyzer:
                 for variant in artifact.get("date_line_ocr_variants", [])
             )
         )
-        if otsu_manual_candidate:
+        if otsu_manual_candidate and cross_year_consensus is None:
             date_confidence = min(0.45, date_confidence)
             date_check["message"] += "（Otsu 跨模型同日候选，待人工确认）"
         if audit_date_candidate:
@@ -4709,6 +4772,104 @@ def _repeated_server_required_date_from_artifacts(
     if not any(len(labels) >= 3 for labels in server_support.values()):
         return None
     return required
+
+
+def _cross_year_strict_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str
+) -> dict | None:
+    """Return one adjacent-year date backed by both Paddle models/crops.
+
+    A missing/partial year is routinely repaired with the printed required
+    year, so it must never veto a literal four-digit year by itself. Promotion
+    is nevertheless exceptional: Paddle Mobile and Paddle Server must each
+    read the same sole strict date in both tight and wide crops, and every
+    other parseable fragment must retain that same month/day. Vision is kept as
+    optional corroboration because it can be unavailable in a macOS sandbox;
+    a Windows single-Mobile route cannot satisfy this gate. No truth value is
+    used by this selector.
+    """
+    required = parse_date(required_text)
+    if required is None:
+        return None
+    primary_variants = {"紧凑区域", "宽区域"}
+    required_engines = {"mobile", "server"}
+    observations: list[dict] = []
+    for artifact in artifacts:
+        variant = str(artifact.get("variant", ""))
+        if variant not in primary_variants:
+            continue
+        groups = (
+            ("ocr_variants", str(artifact.get("ocr_backend", ""))),
+            (
+                "secondary_ocr_variants",
+                str(artifact.get("secondary_ocr_backend", "")),
+            ),
+            (
+                "date_line_ocr_variants",
+                str(artifact.get("date_line_ocr_backend", "")),
+            ),
+        )
+        for key, backend in groups:
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                label = f"{backend} {preprocessing}".lower()
+                if "vision" in label:
+                    engine = "vision"
+                elif "server" in label or "大模型" in label:
+                    engine = "server"
+                elif "paddle" in label or "mobile" in label:
+                    engine = "mobile"
+                else:
+                    continue
+                for raw_text in evidence.get("ocr_texts") or []:
+                    text = str(raw_text).strip()
+                    strict = parse_date(text)
+                    parsed = strict or parse_receipt_date(text, required)
+                    if parsed is None:
+                        continue
+                    observations.append({
+                        "date": parsed,
+                        "strict": strict is not None,
+                        "engine": engine,
+                        "variant": variant,
+                    })
+    strict_dates = {
+        item["date"] for item in observations if item["strict"]
+    }
+    if len(strict_dates) != 1:
+        return None
+    candidate = next(iter(strict_dates))
+    if candidate.year == required.year or abs(candidate.year - required.year) != 1:
+        return None
+    support = {
+        (item["engine"], item["variant"])
+        for item in observations
+        if item["strict"] and item["date"] == candidate
+    }
+    required_support = {
+        (engine, variant)
+        for engine in required_engines
+        for variant in primary_variants
+    }
+    if not required_support.issubset(support):
+        return None
+    if any(
+        (item["date"].month, item["date"].day)
+        != (candidate.month, candidate.day)
+        for item in observations
+    ):
+        return None
+    return {
+        "date": candidate,
+        "support": [
+            {"engine": engine, "variant": variant}
+            for engine, variant in sorted(support)
+        ],
+        "strict_observation_count": sum(
+            bool(item["strict"] and item["date"] == candidate)
+            for item in observations
+        ),
+    }
 
 
 def _parse_server_audit_candidate(text: str, required):

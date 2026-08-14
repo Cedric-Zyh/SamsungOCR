@@ -2496,6 +2496,53 @@ def test_server_cross_year_consensus_is_audit_only(tmp_path, monkeypatch):
     assert "2024年4月26日" in accepted
 
 
+def test_cross_year_consensus_requires_two_paddle_models_in_both_geometries():
+    from datetime import date
+
+    from receipt_ocr.analyzer import (
+        _cross_year_strict_consensus_from_artifacts,
+    )
+
+    def artifact(variant):
+        return {
+            "variant": variant,
+            "ocr_backend": "vision",
+            "ocr_variants": [],
+            "secondary_ocr_backend": "paddle",
+            "secondary_ocr_variants": [{
+                "preprocessing": "原始裁剪",
+                "ocr_texts": ["2024年4月26日"],
+            }],
+            "date_line_ocr_backend": "paddle",
+            "date_line_ocr_variants": [{
+                "preprocessing": "日期行 Server 大模型复核",
+                "ocr_texts": ["2024年4月26日"],
+            }],
+        }
+
+    artifacts = [artifact("紧凑区域"), artifact("宽区域")]
+    evidence = _cross_year_strict_consensus_from_artifacts(
+        artifacts, "2025-04-26"
+    )
+    assert evidence is not None
+    assert evidence["date"] == date(2024, 4, 26)
+    assert len(evidence["support"]) == 4
+
+    missing_server = [artifact("紧凑区域"), artifact("宽区域")]
+    missing_server[1]["date_line_ocr_variants"] = []
+    assert _cross_year_strict_consensus_from_artifacts(
+        missing_server, "2025-04-26"
+    ) is None
+
+    strict_conflict = [artifact("紧凑区域"), artifact("宽区域")]
+    strict_conflict[1]["secondary_ocr_variants"][0]["ocr_texts"].append(
+        "2024年4月25日"
+    )
+    assert _cross_year_strict_consensus_from_artifacts(
+        strict_conflict, "2025-04-26"
+    ) is None
+
+
 def test_upscaled_table_clean_server_candidate_is_visible_but_unreliable(
     tmp_path, monkeypatch,
 ):

@@ -157,6 +157,14 @@ async function openReview(id) {
       `<small class="low-note">已拒绝候选：${escapeHtml(summary)}</small>`,
     );
   }
+  const overriddenDates = item.date_check?.business_time_overridden_candidates || [];
+  if (overriddenDates.length) {
+    const summary = overriddenDates.map(row => `${row.value}（原业务检查：${row.reason}；OCR：${(row.ocr_texts || []).join(' | ') || '无文本'}）`).join('；');
+    actualDateInput.closest('label').insertAdjacentHTML(
+      'beforeend',
+      `<small>强跨模型共识已覆盖业务时间异常：${escapeHtml(summary)}</small>`,
+    );
+  }
   $('[name=seal_text]', content).value = item.seal_check?.recognized || '';
   $('[name=human_note]', content).value = item.human_note || '';
   $('[name=error_type]', content).value = item.error_type || '';
@@ -218,6 +226,9 @@ function renderArtifacts() {
       const repeatedServerDateInfo = item.date_repeated_server_candidate
         ? `<small>Server 三预处理完整日期：${escapeHtml(item.date_repeated_server_candidate)} · ${escapeHtml(item.date_repeated_server_note || '')}</small>`
         : '';
+      const crossYearConsensusInfo = item.date_cross_year_consensus_candidate
+        ? `<small>跨年完整日期双模型/双几何共识：${escapeHtml(item.date_cross_year_consensus_candidate)} · ${escapeHtml(item.date_cross_year_consensus_note || '')}</small>`
+        : '';
       const upperDateCards = item.upper_date_line_original_url
         ? `${artifactCard('盖章行手写日期', item.upper_date_line_original_url)}${artifactCard('盖章行日期去印章色后', item.upper_date_line_color_clean_url)}`
         : '';
@@ -228,7 +239,7 @@ function renderArtifacts() {
       const slotInfo = item.date_slot_year_original_url
         ? `<small>槽位 OCR：${escapeHtml(slotTexts)}${item.date_slot_candidate ? ` · ${item.date_slot_reliable ? '可靠候选' : '候选'} ${escapeHtml(item.date_slot_candidate)}` : ''}${item.date_slot_candidate_source ? ` · ${escapeHtml(item.date_slot_candidate_source)}` : ''}</small><small class="${item.date_slot_reliable ? '' : 'low-note'}">${escapeHtml(item.date_slot_acceptance_note || '')}</small>`
         : '';
-      return `<article class="artifact-group"><h4>${escapeHtml(item.variant)} <small>OCR：${escapeHtml((item.ocr_texts || []).join(' | ') || '未识别')}${lineInfo}</small>${lineWhiteInfo}${farLowerInfo}${maxChannelMismatchInfo}${maxChannelConsensusInfo}${dominantDateInfo}${repeatedServerDateInfo}${slotInfo}</h4><div class="artifact-grid">${artifactCard('原始手写日期区域', item.original_url)}${artifactCard('去除彩色印章后', item.color_clean_url)}${artifactCard('去表格线增强后', item.line_clean_url)}${artifactCard('仅手写日期行', item.date_line_original_url)}${artifactCard('日期行去印章色后', item.date_line_color_clean_url)}${item.date_line_table_clean_url ? artifactCard('日期行去表格线后', item.date_line_table_clean_url) : ''}${item.date_line_table_clean_upscaled_url ? artifactCard('日期行去表格线三倍放大', item.date_line_table_clean_upscaled_url) : ''}${item.date_line_autocontrast_upscaled_url ? artifactCard('日期行灰度自动对比三倍放大', item.date_line_autocontrast_upscaled_url) : ''}${item.date_line_max_channel_upscaled_url ? artifactCard('日期行最大通道去彩色三倍放大', item.date_line_max_channel_upscaled_url) : ''}${item.date_line_otsu_upscaled_url ? artifactCard('日期行 Otsu 二值三倍放大', item.date_line_otsu_upscaled_url) : ''}${item.date_line_white_standardized_url ? artifactCard('原日期行白底标准化（Vision 多配置）', item.date_line_white_standardized_url) : ''}${slotCards}${upperDateCards}</div></article>`;
+      return `<article class="artifact-group"><h4>${escapeHtml(item.variant)} <small>OCR：${escapeHtml((item.ocr_texts || []).join(' | ') || '未识别')}${lineInfo}</small>${lineWhiteInfo}${farLowerInfo}${maxChannelMismatchInfo}${maxChannelConsensusInfo}${dominantDateInfo}${repeatedServerDateInfo}${crossYearConsensusInfo}${slotInfo}</h4><div class="artifact-grid">${artifactCard('原始手写日期区域', item.original_url)}${artifactCard('去除彩色印章后', item.color_clean_url)}${artifactCard('去表格线增强后', item.line_clean_url)}${artifactCard('仅手写日期行', item.date_line_original_url)}${artifactCard('日期行去印章色后', item.date_line_color_clean_url)}${item.date_line_table_clean_url ? artifactCard('日期行去表格线后', item.date_line_table_clean_url) : ''}${item.date_line_table_clean_upscaled_url ? artifactCard('日期行去表格线三倍放大', item.date_line_table_clean_upscaled_url) : ''}${item.date_line_autocontrast_upscaled_url ? artifactCard('日期行灰度自动对比三倍放大', item.date_line_autocontrast_upscaled_url) : ''}${item.date_line_max_channel_upscaled_url ? artifactCard('日期行最大通道去彩色三倍放大', item.date_line_max_channel_upscaled_url) : ''}${item.date_line_otsu_upscaled_url ? artifactCard('日期行 Otsu 二值三倍放大', item.date_line_otsu_upscaled_url) : ''}${item.date_line_white_standardized_url ? artifactCard('原日期行白底标准化（Vision 多配置）', item.date_line_white_standardized_url) : ''}${slotCards}${upperDateCards}</div></article>`;
     }).join('');
   } else {
     target.innerHTML = artifacts.map(item => {
