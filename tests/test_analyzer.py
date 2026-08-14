@@ -20,6 +20,7 @@ from receipt_ocr.analyzer import (
     _apply_code_stamp_business_id,
     _company_conflict_allows_clipped_prefix_server_recheck,
     _conflicting_receipt_dates,
+    _server_mobile_dominant_date_from_artifacts,
     _cross_model_far_lower_strict_date,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
@@ -59,6 +60,61 @@ def test_server_model_config_is_exposed_in_result_payload(monkeypatch):
         "server_max_page_side": 1800,
         "server_page_scaling": "最长边超过上限时等比缩放推理，归一化坐标映射不变",
     }
+
+
+def _dominant_date_artifacts(
+    candidate: str = "2025年5月10日",
+    conflict: str = "20年3月10日",
+) -> list[dict]:
+    artifacts = []
+    for variant in ("紧凑区域", "宽区域"):
+        artifacts.append({
+            "variant": variant,
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [
+                {"preprocessing": "原始裁剪", "ocr_texts": ["20年5月10日"]},
+                {"preprocessing": "去印章色", "ocr_texts": ["0年5月10日"]},
+            ],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": "日期行 Server 大模型复核不一致日期",
+                    "ocr_texts": [candidate],
+                },
+            ],
+        })
+    if conflict:
+        artifacts[1]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行去表格线 Mobile 人工候选",
+            "ocr_texts": [conflict],
+        })
+    return artifacts
+
+
+def test_server_mobile_dominant_date_accepts_near_date_with_one_isolated_noise():
+    assert _server_mobile_dominant_date_from_artifacts(
+        _dominant_date_artifacts(), "2025-05-11"
+    ) == date(2025, 5, 10)
+
+
+def test_server_mobile_dominant_date_rejects_truncated_day_far_from_requirement():
+    assert _server_mobile_dominant_date_from_artifacts(
+        _dominant_date_artifacts(
+            candidate="2025年7月2日", conflict=""
+        ),
+        "2025-07-25",
+    ) is None
+
+
+def test_server_mobile_dominant_date_rejects_repeated_or_strict_conflict():
+    artifacts = _dominant_date_artifacts()
+    artifacts[0]["date_line_ocr_variants"].append({
+        "preprocessing": "日期行原图 Mobile",
+        "ocr_texts": ["2025年5月9日"],
+    })
+    assert _server_mobile_dominant_date_from_artifacts(
+        artifacts, "2025-05-11"
+    ) is None
 
 
 def test_receipt_date_before_creation_is_rejected_but_preserved_for_review():

@@ -81,6 +81,8 @@ def run_probe(
     samples: list[str],
     artifact_root: Path,
     generated_root: Path,
+    *,
+    all_geometries: bool = False,
 ) -> dict:
     by_name = {row["filename"]: row for row in report.get("samples", [])}
     records = []
@@ -89,7 +91,9 @@ def run_probe(
         row = by_name[filename]
         required = parse_date(row.get("required", ""))
         truth = parse_date(row.get("truth", ""))
-        for artifact in (row.get("date_artifact_urls") or [])[:2]:
+        artifacts = row.get("date_artifact_urls") or []
+        selected_artifacts = artifacts if all_geometries else artifacts[:2]
+        for artifact in selected_artifacts:
             variant_label = str(artifact.get("variant", ""))
             sources = (
                 ("日期行原图", artifact.get("original_url", "")),
@@ -161,11 +165,17 @@ def main() -> int:
     parser.add_argument("--artifact-root", type=Path, default=Path("storage/artifacts"))
     parser.add_argument("--generated-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--all-geometries",
+        action="store_true",
+        help="同时审计下方、远下方和页面底部日期行",
+    )
     args = parser.parse_args()
     report = json.loads(args.input.read_text(encoding="utf-8"))
     result = run_probe(
         report, list(dict.fromkeys(args.sample)),
         args.artifact_root, args.generated_root,
+        all_geometries=args.all_geometries,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

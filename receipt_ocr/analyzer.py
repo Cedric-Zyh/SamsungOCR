@@ -905,6 +905,27 @@ class ReceiptAnalyzer:
         date_confidence = estimate_date_confidence(
             date_rows, fields.get("要求到货", ""), actual_date
         )
+        dominant_artifact_date = _server_mobile_dominant_date_from_artifacts(
+            date_artifacts, fields.get("要求到货", "")
+        )
+        if actual_date is not None and dominant_artifact_date == actual_date:
+            date_confidence = max(0.78, date_confidence)
+            date_check["message"] += (
+                "（Server 完整日期获 Mobile 紧凑/宽区域重复支持；"
+                "孤立干扰已保留供复核）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_server_mobile_dominance_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_server_mobile_dominance_note": (
+                            "唯一 Server 完整日期在要求到货日前后 3 天内，"
+                            "Mobile 在紧凑/宽区域至少四路重复支持；"
+                            "其余最多一个非完整 Mobile 孤立读数"
+                        ),
+                    })
         otsu_manual_candidate = bool(
             actual_date
             and any(
@@ -4517,6 +4538,99 @@ def _conflicting_receipt_dates(rows: list[TextObservation], required) -> set[dat
         if (parsed := parse_receipt_date(row.text, required)) is not None
         and parsed != required
     }
+
+
+def _server_mobile_dominant_date_from_artifacts(
+    artifacts: list[dict], required_text: str
+) -> date | None:
+    """Confirm one near-required date despite one isolated OCR interference.
+
+    A complete Server reading alone is unsafe because both Paddle models can
+    drop one digit from a two-digit handwritten day.  Promotion therefore
+    requires Mobile to repeat the same date in both tight and wide crops, at
+    least four geometry/preprocessing cells, and the candidate to be within
+    three days of the requested delivery date.  At most one non-strict,
+    Mobile-only conflicting cell is tolerated.  No ground-truth value is used.
+    """
+    required = parse_date(required_text)
+    if required is None:
+        return None
+    observations: list[dict] = []
+    for artifact in artifacts:
+        variant = str(artifact.get("variant", ""))
+        if variant not in {"紧凑区域", "宽区域"}:
+            continue
+        for key, default_backend in (
+            ("ocr_variants", str(artifact.get("ocr_backend", ""))),
+            (
+                "secondary_ocr_variants",
+                str(artifact.get("secondary_ocr_backend", "")),
+            ),
+            (
+                "date_line_ocr_variants",
+                str(artifact.get("date_line_ocr_backend", "")),
+            ),
+        ):
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                backend = default_backend
+                if "Server" in preprocessing or "大模型" in preprocessing:
+                    engine = "server"
+                elif "Mobile" in preprocessing:
+                    engine = "mobile"
+                elif "server" in backend.lower() or "大模型" in backend:
+                    engine = "server"
+                elif "paddle" in backend.lower():
+                    engine = "mobile"
+                else:
+                    continue
+                for raw_text in evidence.get("ocr_texts") or []:
+                    text = str(raw_text).strip()
+                    strict = parse_date(text)
+                    parsed = strict or parse_receipt_date(text, required)
+                    if parsed is None or parsed.year != required.year:
+                        continue
+                    observations.append({
+                        "date": parsed,
+                        "strict": strict is not None,
+                        "engine": engine,
+                        "variant": variant,
+                        "preprocessing": preprocessing,
+                    })
+    strict_server_dates = {
+        item["date"] for item in observations
+        if item["engine"] == "server" and item["strict"]
+    }
+    if len(strict_server_dates) != 1:
+        return None
+    candidate = next(iter(strict_server_dates))
+    if abs((candidate - required).days) > 3:
+        return None
+    mobile_support = {
+        (item["variant"], item["preprocessing"])
+        for item in observations
+        if item["engine"] == "mobile" and item["date"] == candidate
+    }
+    if (
+        {variant for variant, _ in mobile_support}
+        != {"紧凑区域", "宽区域"}
+        or len(mobile_support) < 4
+    ):
+        return None
+    conflicts = [item for item in observations if item["date"] != candidate]
+    conflict_dates = {item["date"] for item in conflicts}
+    conflict_cells = {
+        (item["engine"], item["variant"], item["preprocessing"])
+        for item in conflicts
+    }
+    if (
+        len(conflict_dates) > 1
+        or len(conflict_cells) > 1
+        or any(item["engine"] != "mobile" for item in conflicts)
+        or any(item["strict"] for item in conflicts)
+    ):
+        return None
+    return candidate
 
 
 def _parse_server_audit_candidate(text: str, required):
