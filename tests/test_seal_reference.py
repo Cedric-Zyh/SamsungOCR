@@ -26,6 +26,12 @@ from receipt_ocr.seal_reference import (
     HIGH_RATIO_MIN_HOMOGRAPHY_INLIERS,
     HIGH_RATIO_MIN_INLIER_RATIO,
     HIGH_RATIO_MIN_SURFACE_COVERAGE,
+    HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+    HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+    HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+    HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
     HIGH_SUPPORT_MIN_GOOD_MATCHES,
     HIGH_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
     HIGH_SUPPORT_MIN_INLIER_RATIO,
@@ -41,6 +47,7 @@ from receipt_ocr.seal_reference import (
     ULTRA_SUPPORT_MIN_INLIER_RATIO,
     ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
     _best_consensus,
+    _best_high_purity_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
     _passes_ultra_support_gate,
@@ -190,6 +197,99 @@ def test_multi_reference_consensus_enforces_every_vote_boundary():
         second,
     ]
     assert _best_consensus(weak_top)["accepted"] is False
+
+
+def _high_purity_consensus_evidence(
+    reference: str,
+    *,
+    candidate_index: int = 0,
+    inliers: int = HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+) -> dict:
+    return {
+        "candidate_index": candidate_index,
+        "candidate_url": f"/files/artifacts/candidate/{candidate_index}.png",
+        "reference_filename": reference,
+        "reference_url": f"/files/artifacts/reference/{reference}.png",
+        "good_matches": HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+        "homography_inliers": inliers,
+        "inlier_ratio": HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+        "candidate_coverage": HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+        "reference_coverage": HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+    }
+
+
+def test_high_purity_consensus_requires_two_distinct_files_and_all_boundaries():
+    first = _high_purity_consensus_evidence(
+        "confirmed-a.jpg", inliers=HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS
+    )
+    second = _high_purity_consensus_evidence("confirmed-b.jpg")
+    accepted = _best_high_purity_consensus([first, second])
+    assert HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES == 2
+    assert accepted["accepted"] is True
+    assert accepted["reference_count"] == 2
+
+    for key in (
+        "good_matches", "homography_inliers", "inlier_ratio",
+        "candidate_coverage", "reference_coverage",
+    ):
+        reduced = dict(second)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert _best_high_purity_consensus([first, reduced])["accepted"] is False
+
+    duplicate = [
+        first, {**second, "reference_filename": "confirmed-a.jpg"}
+    ]
+    assert _best_high_purity_consensus(duplicate)["accepted"] is False
+    split = [first, {**second, "candidate_index": 1}]
+    assert _best_high_purity_consensus(split)["accepted"] is False
+
+
+def test_match_reports_high_purity_multi_reference_consensus(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    references = [
+        artifact_root / "reference-a" / "seal.png",
+        artifact_root / "reference-b" / "seal.png",
+    ]
+    for path in (candidate, *references):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [
+        SealReference(
+            filename=f"confirmed-{index}.jpg",
+            requirement=requirement,
+            artifact_url=f"/files/artifacts/reference-{index}/seal.png",
+            path=path,
+        )
+        for index, path in enumerate(references)
+    ]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+        "homography_inliers": HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
+        "inlier_ratio": HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+        "candidate_coverage": HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+        "reference_coverage": HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+    evidence = matcher.match(_result(
+        "/files/artifacts/candidate/seal.png"
+    ))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "high_purity_multi_reference_consensus"
+    assert evidence["consensus_reference_count"] == 2
 
 
 def test_high_ratio_single_reference_enforces_compensating_boundaries():
@@ -476,12 +576,15 @@ def test_sift_homography_covers_a_complete_repeated_stamp(tmp_path):
     assert metrics["reference_coverage"] >= MIN_SURFACE_COVERAGE
 
 
-def test_app_visual_reference_promotion_preserves_raw_ocr(monkeypatch):
+def test_app_high_purity_consensus_promotion_preserves_raw_ocr(monkeypatch):
     import app as app_module
 
     evidence = {
         "accepted": True,
-        "candidate_index": 0,
+        "candidate_index": 1,
+        "consensus_candidate_index": 0,
+        "consensus_reference_count": 2,
+        "route": "high_purity_multi_reference_consensus",
         "candidate_url": "/files/artifacts/new/seal.png",
         "reference_filename": "confirmed.jpg",
         "reference_url": "/files/artifacts/ref/seal.png",
@@ -522,6 +625,7 @@ def test_app_visual_reference_promotion_preserves_raw_ocr(monkeypatch):
     assert promoted["seal_check"]["ocr_only_status"] == "无法判断"
     assert promoted["seal_check"]["status"] == "匹配"
     assert promoted["seal_check"]["reliable"] is True
+    assert "多参考高纯度一致" in promoted["seal_check"]["match_basis"]
     assert promoted["overall"] == "通过"
     assert promoted["review_status"] == "无需复核"
     assert promoted["processing_artifacts"]["seals"][0][

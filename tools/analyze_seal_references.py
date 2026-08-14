@@ -31,6 +31,12 @@ from receipt_ocr.seal_reference import (
     HIGH_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
     HIGH_SUPPORT_MIN_INLIER_RATIO,
     HIGH_SUPPORT_MIN_SURFACE_COVERAGE,
+    HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+    HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+    HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE,
+    HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
     MIN_GOOD_MATCHES,
     MIN_HOMOGRAPHY_INLIERS,
     MIN_INLIER_RATIO,
@@ -170,6 +176,20 @@ def build_report(
                 "homography_inliers": CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": CONSENSUS_MIN_INLIER_RATIO,
                 "surface_coverage": CONSENSUS_MIN_SURFACE_COVERAGE,
+            },
+            "high_purity_consensus": {
+                "distinct_references": (
+                    HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "top_inliers": HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
+                "good_matches": HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
+                ),
             },
             "color_mask": {
                 "score": COLOR_MASK_MIN_SCORE,

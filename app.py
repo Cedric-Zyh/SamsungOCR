@@ -119,9 +119,14 @@ def _apply_visual_seal_reference(result: dict) -> dict:
         return result
     seal_check = result.get("seal_check") or {}
     seal_check["visual_reference_match"] = evidence
+    route = str(evidence.get("route") or "")
+    consensus_routes = {
+        "multi_reference_consensus",
+        "high_purity_multi_reference_consensus",
+    }
     candidate_index = int(
         evidence.get("consensus_candidate_index", -1)
-        if evidence.get("route") == "multi_reference_consensus"
+        if route in consensus_routes
         else evidence.get("candidate_index", -1)
     )
     for artifact in result.get("processing_artifacts", {}).get("seals", []):
@@ -141,11 +146,11 @@ def _apply_visual_seal_reference(result: dict) -> dict:
             "OCR 文字不完整，但章面与同签章要求的人工真值阳性参考章"
             + (
                 "在两份独立样单中形成一致几何证据"
-                if evidence.get("route") == "multi_reference_consensus"
+                if route in consensus_routes
                 else "的彩色墨迹形成整体几何一致"
-                if evidence.get("route") == "color_mask_geometry"
+                if route == "color_mask_geometry"
                 else "同时形成整体彩色墨迹与大面积局部几何一致"
-                if evidence.get("route") == "color_mask_sift_geometry"
+                if route == "color_mask_sift_geometry"
                 else "形成大面积几何一致"
             )
         ),
@@ -154,15 +159,19 @@ def _apply_visual_seal_reference(result: dict) -> dict:
         "reliable": True,
         "match_basis": (
             "人工真值参考章 + SIFT/RANSAC 多参考一致"
-            if evidence.get("route") == "multi_reference_consensus"
+            if route == "multi_reference_consensus"
+            else "人工真值参考章 + SIFT/RANSAC 多参考高纯度一致"
+            if route == "high_purity_multi_reference_consensus"
             else "人工真值参考章 + 彩色墨迹整体几何一致"
-            if evidence.get("route") == "color_mask_geometry"
+            if route == "color_mask_geometry"
             else "人工真值参考章 + 彩色墨迹/SIFT 联合几何一致"
-            if evidence.get("route") == "color_mask_sift_geometry"
+            if route == "color_mask_sift_geometry"
             else "人工真值参考章 + SIFT/RANSAC 高支持度微覆盖抖动"
-            if evidence.get("route") == "high_support_minor_coverage"
+            if route == "high_support_minor_coverage"
+            else "人工真值参考章 + SIFT/RANSAC 超高支持度局部覆盖"
+            if route == "ultra_support_partial_coverage"
             else "人工真值参考章 + SIFT/RANSAC 高内点率几何一致"
-            if evidence.get("route") == "high_ratio_single_reference"
+            if route == "high_ratio_single_reference"
             else "人工真值参考章 + SIFT/RANSAC 大面积几何一致"
         ),
         "backend": (

@@ -248,11 +248,12 @@ function renderArtifacts() {
     target.innerHTML = artifacts.map(item => {
       const reference = item.visual_reference_match;
       const consensus = reference?.consensus_matches || [];
-      const consensusInfo = reference?.route === 'multi_reference_consensus'
+      const consensusInfo = ['multi_reference_consensus', 'high_purity_multi_reference_consensus'].includes(reference?.route)
         ? ` · 多参考一致 ${reference.consensus_reference_count || consensus.length} 份（${consensus.map(row => `${escapeHtml(row.reference_filename || '')} ${row.homography_inliers || 0}内点`).join('、')}）`
         : '';
       const acceptedRouteLabel = {
         multi_reference_consensus: '多参考一致通过',
+        high_purity_multi_reference_consensus: '多参考高纯度一致通过',
         color_mask_geometry: '彩色墨迹整体一致通过',
         color_mask_sift_geometry: '彩色墨迹与 SIFT 联合一致通过',
         high_ratio_single_reference: '高内点率路线通过',

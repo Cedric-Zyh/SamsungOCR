@@ -65,6 +65,19 @@ CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 65
 CONSENSUS_MIN_INLIER_RATIO = 0.65
 CONSENSUS_MIN_SURFACE_COVERAGE = 0.30
 
+# Two independent human-confirmed files may safely compensate for a modestly
+# lower correspondence count when *each* vote is geometrically purer than the
+# standard consensus route.  The 301-image matrix has one pending positive
+# with 90/72 and 89/66 matches/inliers, 80.0%/74.16% purity and at least 33%
+# bidirectional coverage.  Requiring two distinct files prevents repeated
+# crops from one scan from masquerading as independent corroboration.
+HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES = 2
+HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS = 70
+HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES = 85
+HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 65
+HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO = 0.70
+HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE = 0.30
+
 # Color-ink geometry is a fallback for faded scans where SIFT cannot retain
 # enough local keypoints.  The full 301-receipt matrix has a wide margin:
 # accepted positives start at 0.8158/0.8096/0.8319 for composite score,
@@ -246,19 +259,31 @@ class SealReferenceMatcher:
         ultra_support_accepted = _passes_ultra_support_gate(best)
         consensus = _best_consensus(all_evidence)
         consensus_accepted = bool(consensus.get("accepted"))
+        high_purity_consensus = _best_high_purity_consensus(all_evidence)
+        high_purity_consensus_accepted = bool(
+            high_purity_consensus.get("accepted")
+        )
         color_mask_accepted = bool(
             best_color is not None and _passes_color_mask_gate(best_color)
         )
         color_sift_accepted = bool(
             best_color is not None and _passes_color_sift_gate(best_color)
         )
-        if consensus_accepted and not (
+        active_consensus = (
+            consensus if consensus_accepted
+            else high_purity_consensus
+            if high_purity_consensus_accepted
+            else consensus
+        )
+        if (
+            consensus_accepted or high_purity_consensus_accepted
+        ) and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
             or ultra_support_accepted
         ):
-            consensus_candidate = int(consensus["candidate_index"])
+            consensus_candidate = int(active_consensus["candidate_index"])
             leading_reference = str(
-                consensus["matches"][0]["reference_filename"]
+                active_consensus["matches"][0]["reference_filename"]
             )
             best = max(
                 (
@@ -275,14 +300,14 @@ class SealReferenceMatcher:
             and not (
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or ultra_support_accepted
-                or consensus_accepted
+                or consensus_accepted or high_purity_consensus_accepted
             )
         ):
             best = best_color
         accepted = (
             strict_accepted or high_ratio_accepted
             or high_support_accepted or ultra_support_accepted
-            or consensus_accepted
+            or consensus_accepted or high_purity_consensus_accepted
             or color_mask_accepted or color_sift_accepted
         )
         route = (
@@ -291,19 +316,21 @@ class SealReferenceMatcher:
             else "high_support_minor_coverage" if high_support_accepted
             else "ultra_support_partial_coverage" if ultra_support_accepted
             else "multi_reference_consensus" if consensus_accepted
+            else "high_purity_multi_reference_consensus"
+            if high_purity_consensus_accepted
             else "color_mask_geometry" if color_mask_accepted
             else "color_mask_sift_geometry" if color_sift_accepted
             else "rejected"
         )
         best["accepted"] = accepted
         best["route"] = route
-        best["consensus_candidate_index"] = consensus.get(
+        best["consensus_candidate_index"] = active_consensus.get(
             "candidate_index", -1
         )
         best["consensus_reference_count"] = int(
-            consensus.get("reference_count", 0)
+            active_consensus.get("reference_count", 0)
         )
-        best["consensus_matches"] = consensus.get("matches", [])
+        best["consensus_matches"] = active_consensus.get("matches", [])
         best["thresholds"] = {
             "strict": {
                 "good_matches": MIN_GOOD_MATCHES,
@@ -337,6 +364,20 @@ class SealReferenceMatcher:
                 "inlier_ratio": CONSENSUS_MIN_INLIER_RATIO,
                 "surface_coverage": CONSENSUS_MIN_SURFACE_COVERAGE,
             },
+            "high_purity_consensus": {
+                "distinct_references": (
+                    HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "top_inliers": HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
+                "good_matches": HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
+                ),
+            },
             "color_mask": {
                 "score": COLOR_MASK_MIN_SCORE,
                 "correlation": COLOR_MASK_MIN_CORRELATION,
@@ -353,7 +394,7 @@ class SealReferenceMatcher:
             },
         }
         best["confidence"] = (
-            _reference_confidence(best, route, consensus)
+            _reference_confidence(best, route, active_consensus)
             if accepted else 0.0
         )
         best["reason"] = (
@@ -368,6 +409,8 @@ class SealReferenceMatcher:
                 if ultra_support_accepted else
                 "同一章区与至少两份独立人工真值阳性章形成几何一致"
                 if consensus_accepted else
+                "同一章区与两份独立人工真值阳性章形成高纯度几何一致"
+                if high_purity_consensus_accepted else
                 "与人工真值阳性章的彩色墨迹形成整体几何一致"
                 if color_mask_accepted else
                 "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
@@ -749,11 +792,50 @@ def _passes_consensus_vote(evidence: dict) -> bool:
     )
 
 
+def _passes_high_purity_consensus_vote(evidence: dict) -> bool:
+    return bool(
+        evidence["good_matches"]
+        >= HIGH_PURITY_CONSENSUS_MIN_GOOD_MATCHES
+        and evidence["homography_inliers"]
+        >= HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+        and evidence["inlier_ratio"]
+        >= HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO
+        and evidence["candidate_coverage"]
+        >= HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
+        and evidence["reference_coverage"]
+        >= HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
+    )
+
+
 def _best_consensus(all_evidence: list[dict]) -> dict:
+    return _best_consensus_group(
+        all_evidence,
+        vote_gate=_passes_consensus_vote,
+        minimum_references=CONSENSUS_MIN_DISTINCT_REFERENCES,
+        minimum_top_inliers=CONSENSUS_MIN_TOP_INLIERS,
+    )
+
+
+def _best_high_purity_consensus(all_evidence: list[dict]) -> dict:
+    return _best_consensus_group(
+        all_evidence,
+        vote_gate=_passes_high_purity_consensus_vote,
+        minimum_references=HIGH_PURITY_CONSENSUS_MIN_DISTINCT_REFERENCES,
+        minimum_top_inliers=HIGH_PURITY_CONSENSUS_MIN_TOP_INLIERS,
+    )
+
+
+def _best_consensus_group(
+    all_evidence: list[dict],
+    *,
+    vote_gate: Any,
+    minimum_references: int,
+    minimum_top_inliers: int,
+) -> dict:
     """Return the strongest same-region, distinct-file consensus group."""
     by_candidate: dict[int, dict[str, dict]] = defaultdict(dict)
     for evidence in all_evidence:
-        if not _passes_consensus_vote(evidence):
+        if not vote_gate(evidence):
             continue
         candidate_index = int(evidence.get("candidate_index", -1))
         reference_filename = str(evidence.get("reference_filename") or "")
@@ -774,8 +856,8 @@ def _best_consensus(all_evidence: list[dict]) -> dict:
             "reference_count": len(matches),
             "top_inliers": top_inliers,
             "accepted": bool(
-                len(matches) >= CONSENSUS_MIN_DISTINCT_REFERENCES
-                and top_inliers >= CONSENSUS_MIN_TOP_INLIERS
+                len(matches) >= minimum_references
+                and top_inliers >= minimum_top_inliers
             ),
             "matches": [
                 {
@@ -850,6 +932,24 @@ def _reference_confidence(
             0.91 + 0.01 * min(
                 3.0,
                 max(0, second_inliers - CONSENSUS_MIN_HOMOGRAPHY_INLIERS) / 5,
+            ),
+        )
+    elif route == "high_purity_multi_reference_consensus":
+        second_inliers = int(
+            ((consensus or {}).get("matches") or [{}, {}])[1].get(
+                "homography_inliers",
+                HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+            )
+        ) if len((consensus or {}).get("matches") or []) >= 2 else 0
+        confidence = min(
+            0.94,
+            0.91 + 0.01 * min(
+                3.0,
+                max(
+                    0,
+                    second_inliers
+                    - HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+                ) / 5,
             ),
         )
     elif route == "high_support_minor_coverage":
