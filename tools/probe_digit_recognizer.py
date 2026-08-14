@@ -50,7 +50,7 @@ def main() -> int:
         if truth is None:
             continue
         stem = Path(filename).stem
-        for slot in ("day_digits", "month_day"):
+        for slot in ("month_digits", "day_digits", "month_day"):
             variant_dir = args.image_root / stem / slot / "variants"
             for index, preprocessing in (
                 ("02", "最大通道自动对比三倍放大"),
@@ -62,8 +62,9 @@ def main() -> int:
                 path = matches[0]
                 text, score, error = _predict_text(model, path)
                 digits = "".join(re.findall(r"\d", text))
-                if slot == "day_digits":
-                    truth_hit = digits in {str(truth.day), f"{truth.day:02d}"}
+                if slot in {"month_digits", "day_digits"}:
+                    expected = truth.month if slot == "month_digits" else truth.day
+                    truth_hit = digits in {str(expected), f"{expected:02d}"}
                 else:
                     expected = {f"{truth.month}{truth.day}", f"{truth.month:02d}{truth.day:02d}"}
                     truth_hit = digits in expected

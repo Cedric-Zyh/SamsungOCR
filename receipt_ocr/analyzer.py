@@ -877,6 +877,17 @@ class ReceiptAnalyzer:
             ]
             if matching_rows:
                 date_row = max(matching_rows, key=lambda row: row.confidence)
+        component_consensus = _date_component_consensus_from_artifacts(
+            date_artifacts
+        )
+        if component_consensus is not None:
+            component_date = component_consensus["date"]
+            if actual_date in {None, component_date}:
+                actual_date = component_date
+            else:
+                # A separately parsed full date is stronger than a value
+                # assembled from three crops. Preserve the conflict for review.
+                component_consensus = None
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1007,6 +1018,32 @@ class ReceiptAnalyzer:
                         "date_cross_year_consensus_note": (
                             "唯一完整四位年份日期获 Mobile/Server 紧裁与宽裁"
                             "四个必要单元共同支持；其他残缺读数月日一致"
+                        ),
+                    })
+        if (
+            actual_date is not None
+            and component_consensus is not None
+            and component_consensus["date"] == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.84, date_confidence)
+            date_check["component_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "support": component_consensus["support"],
+            }
+            date_check["message"] += (
+                "（Paddle Mobile/Server 对完整年份、月份数字窄槽和显式日"
+                "分别达成一致；无其他完整日期冲突）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") == "紧凑区域":
+                    artifact.update({
+                        "date_component_consensus_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_component_consensus_note": (
+                            "完整年份、年/月之间的月份数字窄槽、显式日均由"
+                            "Mobile/Server 独立一致识别；候选不使用要求日期补值"
                         ),
                     })
         otsu_manual_candidate = bool(
@@ -4025,11 +4062,48 @@ class ReceiptAnalyzer:
                                 slot_views = {}
                             year_view = slot_views.get("year_full", {})
                             month_day_view = slot_views.get("month_day", {})
+                            month_digit_view = slot_views.get("month_digits", {})
                             year_path = year_view.get("processed")
                             month_day_path = month_day_view.get("processed")
+                            month_digit_path = month_digit_view.get("processed")
                             slot_variants = []
                             safe_year_variants: list[dict] = []
                             safe_month_day_variants: list[dict] = []
+                            if month_digit_path is not None:
+                                for model_variant, model_label in (
+                                    ("mobile", "Mobile"),
+                                    ("server", "Server"),
+                                ):
+                                    try:
+                                        digit_rows = recognize_line(
+                                            month_digit_path,
+                                            model_variant=model_variant,
+                                        )
+                                    except Exception:
+                                        digit_rows = []
+                                    digit_values = {
+                                        parsed for row in digit_rows
+                                        if (
+                                            parsed := _parse_date_slot_digit(
+                                                row.text, maximum=12
+                                            )
+                                        ) is not None
+                                    }
+                                    slot_variants.append({
+                                        "slot": "月份数字窄槽",
+                                        "method": (
+                                            f"{model_label} 最大通道去彩色整行识别"
+                                        ),
+                                        "model": model_variant,
+                                        "preprocessing": "最大通道去彩色",
+                                        "ocr_texts": [
+                                            row.text for row in digit_rows
+                                        ],
+                                        "parsed_components": [
+                                            str(value)
+                                            for value in sorted(digit_values)
+                                        ],
+                                    })
                             month_day_by_model: dict[str, set[tuple[int, int]]] = {}
                             for preprocessing, safe_month_day_path in (
                                 ("最大通道去彩色", month_day_path),
@@ -4401,6 +4475,16 @@ class ReceiptAnalyzer:
                                     "date_slot_month_day_vision_url": (
                                         f"{prefix}/date/"
                                         f"{month_day_view['crop_first_white_processed'].name}"
+                                    ),
+                                    "date_slot_month_digit_original_url": (
+                                        f"{prefix}/date/"
+                                        f"{month_digit_view['original'].name}"
+                                        if month_digit_view else ""
+                                    ),
+                                    "date_slot_month_digit_processed_url": (
+                                        f"{prefix}/date/"
+                                        f"{month_digit_view['processed'].name}"
+                                        if month_digit_view else ""
                                     ),
                                     "date_slot_ocr_variants": slot_variants,
                                     "date_slot_candidate": (
@@ -5153,6 +5237,10 @@ def _save_date_slot_views(
     destination.mkdir(parents=True, exist_ok=True)
     slots = {
         "year_full": (0.0, 0.52),
+        # A thin handwritten month ``1`` is easily merged with the printed
+        # ``月`` and following day. Preserve a digit-only audit view between
+        # the printed year/month units; the two OCR models must still agree.
+        "month_digits": (0.405, 0.515),
         "month_day": (0.30, 0.985),
     }
     output: dict[str, dict[str, Path]] = {}
@@ -5363,6 +5451,127 @@ def _parse_date_slot_month_day(text: str) -> tuple[int, int] | None:
     except ValueError:
         return None
     return month, day
+
+
+def _parse_date_slot_digit(text: str, *, maximum: int) -> int | None:
+    """Return one OCR-owned numeric slot value without contextual repair."""
+    compact = re.sub(r"\s+", "", str(text).replace("O", "0").replace("o", "0"))
+    if not re.fullmatch(r"\d{1,2}", compact):
+        return None
+    value = int(compact)
+    return value if 1 <= value <= maximum else None
+
+
+def _date_component_consensus_from_artifacts(
+    artifacts: list[dict],
+) -> dict | None:
+    """Build a date only from independent fixed-template OCR components.
+
+    This route repairs the special case where a thin handwritten month digit
+    touches the form/stamp and whole-line OCR drops it. Mobile and Server must
+    agree separately on a complete year, the digit-only month crop, and an
+    explicit day ending in ``日``. The printed required date is intentionally
+    not an input. Any literal full-date conflict vetoes the candidate.
+    """
+    tight = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if tight is None:
+        return None
+
+    years = {"mobile": set(), "server": set()}
+    months = {"mobile": set(), "server": set()}
+    for variant in tight.get("date_slot_ocr_variants") or []:
+        model = str(variant.get("model", ""))
+        if model not in years or variant.get("preprocessing") != "最大通道去彩色":
+            continue
+        slot = str(variant.get("slot", ""))
+        for text in variant.get("ocr_texts") or []:
+            if slot == "完整年份槽位":
+                parsed_year = _parse_date_slot_year(str(text))
+                if parsed_year is not None:
+                    years[model].add(parsed_year)
+            elif slot == "月份数字窄槽":
+                parsed_month = _parse_date_slot_digit(str(text), maximum=12)
+                if parsed_month is not None:
+                    months[model].add(parsed_month)
+
+    explicit_months = {"mobile": set(), "server": set()}
+    days = {"mobile": set(), "server": set()}
+    default_backend = str(tight.get("date_line_ocr_backend", ""))
+    for variant in tight.get("date_line_ocr_variants") or []:
+        preprocessing = str(variant.get("preprocessing", ""))
+        backend = (
+            "PaddleOCR Server"
+            if "Server" in preprocessing or "大模型" in preprocessing
+            else default_backend
+        )
+        lowered = backend.lower()
+        model = (
+            "server" if "server" in lowered or "大模型" in backend
+            else "mobile" if "mobile" in lowered or "paddleocr" in lowered
+            else ""
+        )
+        if model not in days:
+            continue
+        for text in variant.get("ocr_texts") or []:
+            compact = re.sub(r"\s+", "", str(text))
+            for value in re.findall(r"(?<!\d)(\d{1,2})月", compact):
+                month = int(value)
+                if 1 <= month <= 12:
+                    explicit_months[model].add(month)
+            for value in re.findall(r"(?<!\d)(\d{1,2})日", compact):
+                day = int(value)
+                if 1 <= day <= 31:
+                    days[model].add(day)
+
+    common_years = years["mobile"] & years["server"]
+    common_months = months["mobile"] & months["server"]
+    common_days = days["mobile"] & days["server"]
+    if not (
+        len(common_years) == len(common_months) == len(common_days) == 1
+        and all(years[model] == common_years for model in years)
+        and all(months[model] == common_months for model in months)
+        and all(days[model] == common_days for model in days)
+    ):
+        return None
+    month = next(iter(common_months))
+    if any(values and values != {month} for values in explicit_months.values()):
+        return None
+    try:
+        candidate = date(
+            next(iter(common_years)), month, next(iter(common_days))
+        )
+    except ValueError:
+        return None
+
+    literal_dates: set[date] = set()
+    for artifact in artifacts:
+        for key in (
+            "ocr_variants",
+            "secondary_ocr_variants",
+            "date_line_ocr_variants",
+        ):
+            for variant in artifact.get(key) or []:
+                for text in variant.get("ocr_texts") or []:
+                    parsed = parse_date(str(text)) or (
+                        _parse_compact_full_date_audit_candidate(str(text))
+                    )
+                    if parsed is not None:
+                        literal_dates.add(parsed)
+    if literal_dates - {candidate}:
+        return None
+    return {
+        "date": candidate,
+        "support": {
+            "year": candidate.year,
+            "month": candidate.month,
+            "day": candidate.day,
+            "models": ["mobile", "server"],
+            "month_digit_preprocessing": "最大通道去彩色",
+        },
+    }
 
 
 def _cross_model_slot_required_date(

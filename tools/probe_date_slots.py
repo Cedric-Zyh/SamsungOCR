@@ -22,6 +22,10 @@ SLOTS = {
     "year_full": (0.0, 0.52),
     "year_suffix": (0.12, 0.47),
     "month": (0.36, 0.74),
+    # Digit-only window between the printed ``年`` and ``月`` glyphs.  Keep
+    # this separate from ``month`` so a thin handwritten ``1`` is not merged
+    # with the two following printed/handwritten glyphs by line recognition.
+    "month_digits": (0.405, 0.515),
     "day": (0.50, 0.985),
     "day_digits": (0.54, 0.82),
     # Some writers put month and day so close together that either individual
@@ -125,8 +129,8 @@ def _component_matches(slot: str, text: str, truth) -> bool:
             and int(match.group(1)) == truth.month
             and int(match.group(2)) == truth.day
         )
-    expected = truth.month if slot == "month" else truth.day
-    unit = "月" if slot == "month" else "日"
+    expected = truth.month if slot in {"month", "month_digits"} else truth.day
+    unit = "月" if slot in {"month", "month_digits"} else "日"
     before_unit = re.search(rf"(\d{{1,2}}){unit}", text)
     if before_unit:
         digits = before_unit.group(1)

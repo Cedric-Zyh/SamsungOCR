@@ -25,6 +25,8 @@ from receipt_ocr.analyzer import (
     _cross_model_far_lower_strict_date,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
+    _date_component_consensus_from_artifacts,
+    _parse_date_slot_digit,
     _has_shared_specific_stamp_type,
     _strong_unread_colored_stamp_route,
     _reconstruct_business_acceptance_from_audit,
@@ -2543,6 +2545,79 @@ def test_cross_year_consensus_requires_two_paddle_models_in_both_geometries():
     ) is None
 
 
+def _component_consensus_artifact() -> dict:
+    return {
+        "variant": "紧凑区域",
+        "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+        "date_slot_ocr_variants": [
+            {
+                "slot": "完整年份槽位",
+                "model": model,
+                "preprocessing": "最大通道去彩色",
+                "ocr_texts": ["2025年"],
+            }
+            for model in ("mobile", "server")
+        ] + [
+            {
+                "slot": "月份数字窄槽",
+                "model": model,
+                "preprocessing": "最大通道去彩色",
+                "ocr_texts": ["1"],
+            }
+            for model in ("mobile", "server")
+        ],
+        "date_line_ocr_variants": [
+            {
+                "preprocessing": "日期行去印章色",
+                "ocr_texts": ["206年月5日"],
+            },
+            {
+                "preprocessing": "日期行最大通道去彩色三倍放大 Server 跨几何复核",
+                "ocr_texts": ["202年月5日"],
+            },
+        ],
+        "ocr_variants": [],
+        "secondary_ocr_variants": [],
+    }
+
+
+def test_date_component_consensus_is_fully_ocr_owned_and_reliable():
+    evidence = _date_component_consensus_from_artifacts(
+        [_component_consensus_artifact()]
+    )
+
+    assert evidence is not None
+    assert evidence["date"] == date(2025, 1, 5)
+    assert evidence["support"]["models"] == ["mobile", "server"]
+    assert _parse_date_slot_digit("01", maximum=12) == 1
+    assert _parse_date_slot_digit("1月", maximum=12) is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("server_month", "2"),
+        ("server_day", "202年月6日"),
+        ("strict_conflict", "2025年1月6日"),
+    ],
+)
+def test_date_component_consensus_rejects_disagreement_or_full_date_conflict(
+    mutation, value,
+):
+    artifact = _component_consensus_artifact()
+    if mutation == "server_month":
+        artifact["date_slot_ocr_variants"][-1]["ocr_texts"] = [value]
+    elif mutation == "server_day":
+        artifact["date_line_ocr_variants"][-1]["ocr_texts"] = [value]
+    else:
+        artifact["date_line_ocr_variants"].append({
+            "preprocessing": "日期行 Server 大模型低置信度候选",
+            "ocr_texts": [value],
+        })
+
+    assert _date_component_consensus_from_artifacts([artifact]) is None
+
+
 def test_upscaled_table_clean_server_candidate_is_visible_but_unreliable(
     tmp_path, monkeypatch,
 ):
@@ -3106,6 +3181,12 @@ def test_fixed_template_slots_expose_cross_model_candidate_but_never_reliable(
     )
     assert tight["date_slot_month_day_processed_url"].endswith(
         "date-slot-month_day-max-channel.png"
+    )
+    assert tight["date_slot_month_digit_original_url"].endswith(
+        "date-slot-month_digits-original.jpg"
+    )
+    assert tight["date_slot_month_digit_processed_url"].endswith(
+        "date-slot-month_digits-max-channel.png"
     )
     assert "仅供人工复核" in tight["date_slot_acceptance_note"]
 
