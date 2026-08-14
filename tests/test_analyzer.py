@@ -729,6 +729,70 @@ def test_round_stamp_rotated_color_sheet_recovers_center_stamp_type(
     assert rotated_sheet["ocr_texts"] == ["业务专用章"]
 
 
+def test_branch_round_stamp_rotations_reconstruct_only_exact_observed_parts(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+    from receipt_ocr.image_processing import SealRegion
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (400, 600), "white").save(source)
+
+    def fake_save(_source, destination, _region):
+        Image.new("RGB", (240, 240), "white").save(destination)
+
+    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
+    )
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.extract_region_text",
+        lambda *_a: (
+            "0.490.0011备注仓库接收人盖章北昌后服士"
+            "供应商：中国外运物流发展有限公司广州分公司"
+        ),
+    )
+
+    organization = "北京亨通达科技有限公司西城西单分公司"
+    stamp_type = "北售后服务专用章"
+
+    def fake_ocr(path, *, backend, **_kwargs):
+        if backend == "paddle" and path.name == "seal-0-unwrapped.png":
+            # This reaches only the narrow 0.50 routing score and must not be
+            # mistaken for the complete branch organization by itself.
+            return [TextObservation("京亨通达", .91, 0, 0, 1, 1)]
+        if backend == "paddle_server":
+            if path.name == "seal-0-unwrapped.png":
+                return [TextObservation(organization, .97, 0, 0, 1, 1)]
+            if path.name == "seal-0-color-isolated-rotations.png":
+                return [TextObservation(stamp_type, .94, 0, 0, 1, 1)]
+        return []
+
+    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    requirement = organization + stamp_type
+    texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
+        source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
+        tmp_path / "artifacts", "/artifacts", "vision", "paddle",
+        requirement=requirement,
+    )
+
+    check = compare_seal_text(requirement, texts)
+    assert check["status"] == "匹配"
+    assert check["reliable"] is True
+    variants = artifacts[0]["server_audit_variants"]
+    assert next(
+        row for row in variants
+        if row["preprocessing"] == "保留章色旋转对照图"
+    )["ocr_texts"] == [stamp_type]
+    assert next(
+        row for row in variants
+        if row["preprocessing"] == "同章区完整公司与章型重组（无字符补写）"
+    )["ocr_texts"] == [requirement]
+
+
 def test_round_stamp_rotated_color_sheet_requires_strong_company_evidence(
     tmp_path, monkeypatch
 ):
@@ -1160,6 +1224,23 @@ def test_exact_company_and_specific_stamp_rows_reconstruct_without_new_glyphs(
     assert _reconstruct_exact_company_stamp_from_region(
         requirement, audit_texts
     ) == normalize_text(requirement)
+
+
+def test_exact_branch_company_and_prefixed_type_reconstruct_without_new_glyphs():
+    requirement = (
+        "北京亨通达科技有限公司西城西单分公司北售后服务专用章"
+    )
+    organization = "北京亨通达科技有限公司西城西单分公司"
+    stamp_type = "北售后服务专用章"
+    assert _reconstruct_exact_company_stamp_from_region(
+        requirement, [organization, stamp_type]
+    ) == requirement
+    assert _reconstruct_exact_company_stamp_from_region(
+        requirement, ["北京亨通达科技有限公司", stamp_type]
+    ) == ""
+    assert _reconstruct_exact_company_stamp_from_region(
+        requirement, [organization, "售后服务专用章"]
+    ) == ""
 
 
 @pytest.mark.parametrize(

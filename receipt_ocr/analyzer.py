@@ -297,18 +297,13 @@ def _reconstruct_exact_company_stamp_from_region(
 
     A clean round seal can put the legal company on its arc and the stamp type
     in the centre, so Paddle returns them as separate rows.  Reconstruction is
-    deliberately limited to an exact standalone legal company, an exact
-    specific type row, and an independently exact short identifier when the
-    printed requirement has one.  Branch wording or missing type glyphs are
-    never copied from the requirement.
+    deliberately limited to an exact standalone legal organization (including
+    an explicitly observed branch), an exact specific type row, and an
+    independently exact short identifier when the printed requirement has
+    one.  Branch wording or missing type glyphs are never copied from the
+    requirement.
     """
     expected = normalize_text(requirement)
-    marker = "有限公司"
-    marker_at = expected.find(marker)
-    if marker_at < 0:
-        return ""
-    company = expected[: marker_at + len(marker)]
-    suffix = expected[marker_at + len(marker) :]
     specific_types = (
         "售后业务专用章",
         "手机售后专用章",
@@ -321,34 +316,55 @@ def _reconstruct_exact_company_stamp_from_region(
         "收货专用章",
         "仓储部收货章",
     )
-    stamp_type = next(
+    type_match = next(
         (
-            value for value in specific_types
-            if suffix == value or re.fullmatch(re.escape(value) + r"\d{1,3}", suffix)
+            (value, match)
+            for value in specific_types
+            if (
+                match := re.search(
+                    re.escape(value) + r"(?P<identifier>\d{0,3})$",
+                    expected,
+                )
+            ) is not None
         ),
-        "",
+        None,
     )
-    if not stamp_type:
+    if type_match is None:
         return ""
+    base_type, match = type_match
+    legal_markers = list(re.finditer(
+        r"有限责任公司|有限公司|分公司", expected[: match.start()]
+    ))
+    if not legal_markers:
+        return ""
+    legal_end = legal_markers[-1].end()
+    organization = expected[:legal_end]
+    type_prefix = expected[legal_end : match.start()]
+    # Branch stamps sometimes put a short directional/brand prefix such as
+    # ``北`` or ``三星`` on the type arc.  It must be observed as part of the
+    # exact same-region type row; longer narrative text is not reclassified.
+    if type_prefix and not re.fullmatch(r"[\u4e00-\u9fff]{1,3}", type_prefix):
+        return ""
+    stamp_type = type_prefix + base_type
+    identifier = match.group("identifier")
     normalized = [
         normalize_text(text) for text in region_texts if normalize_text(text)
     ]
-    company_seen = any(
-        text == company
+    organization_seen = any(
+        text == organization
         or (
-            text.startswith(company)
-            and re.fullmatch(r"\d{6,16}", text[len(company) :])
+            text.startswith(organization)
+            and re.fullmatch(r"\d{6,16}", text[len(organization) :])
         )
         for text in normalized
     )
-    if not company_seen or stamp_type not in normalized:
+    if not organization_seen or stamp_type not in normalized:
         return ""
     if compare_seal_text(requirement, normalized).get("company_conflict"):
         return ""
-    identifier = suffix[len(stamp_type) :]
     if identifier and identifier not in normalized:
         return ""
-    return company + stamp_type + identifier
+    return organization + stamp_type + identifier
 
 
 def _reconstruct_business_acceptance_from_mobile_bands(
@@ -2105,6 +2121,11 @@ class ReceiptAnalyzer:
                     "专用章", "维修专章", "收货章", "仓储部", "维修中心"
                 )
             )
+            branch_stamp_rotation_route = bool(
+                "分公司" in normalize_text(requirement)
+                and explicit_stamp_type
+                and float(preliminary.get("score", 0)) >= 0.50
+            )
             shared_specific_stamp_type = _has_shared_specific_stamp_type(
                 requirement, texts
             )
@@ -2398,6 +2419,7 @@ class ReceiptAnalyzer:
                         and explicit_stamp_type
                         and (
                             overlapping_repair_route
+                            or branch_stamp_rotation_route
                             or (
                                 float(preliminary.get("score", 0)) >= 0.72
                                 and float(preliminary.get("company_score", 0))
