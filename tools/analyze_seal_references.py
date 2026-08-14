@@ -7,6 +7,13 @@ from pathlib import Path
 from receipt_ocr.database import Database
 from receipt_ocr.evaluation import load_ground_truth
 from receipt_ocr.seal_reference import (
+    CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+    CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    CHROMATIC_CONSENSUS_MIN_INLIER_RATIO,
+    CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE,
+    CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+    CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
     COLOR_MASK_MIN_CORRELATION,
     COLOR_MASK_MIN_DICE,
     COLOR_MASK_MIN_SCORE,
@@ -189,6 +196,23 @@ def build_report(
                 "inlier_ratio": HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO,
                 "surface_coverage": (
                     HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
+                ),
+            },
+            "chromatic_crop_consensus": {
+                "distinct_references": (
+                    CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "good_matches": CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": CHROMATIC_CONSENSUS_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+                ),
+                "top_inliers": CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+                "top_inlier_ratio": (
+                    CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO
                 ),
             },
             "color_mask": {

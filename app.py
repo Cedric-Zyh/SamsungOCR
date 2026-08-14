@@ -123,6 +123,7 @@ def _apply_visual_seal_reference(result: dict) -> dict:
     consensus_routes = {
         "multi_reference_consensus",
         "high_purity_multi_reference_consensus",
+        "chromatic_crop_multi_reference_consensus",
     }
     candidate_index = int(
         evidence.get("consensus_candidate_index", -1)
@@ -162,6 +163,8 @@ def _apply_visual_seal_reference(result: dict) -> dict:
             if route == "multi_reference_consensus"
             else "人工真值参考章 + SIFT/RANSAC 多参考高纯度一致"
             if route == "high_purity_multi_reference_consensus"
+            else "人工真值参考章 + 章色稳健裁剪/SIFT 多参考一致"
+            if route == "chromatic_crop_multi_reference_consensus"
             else "人工真值参考章 + 彩色墨迹整体几何一致"
             if route == "color_mask_geometry"
             else "人工真值参考章 + 彩色墨迹/SIFT 联合几何一致"

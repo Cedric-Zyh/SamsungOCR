@@ -6,6 +6,13 @@ import cv2
 import numpy as np
 
 from receipt_ocr.seal_reference import (
+    CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+    CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    CHROMATIC_CONSENSUS_MIN_INLIER_RATIO,
+    CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE,
+    CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+    CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
     COLOR_MASK_MIN_CORRELATION,
     COLOR_MASK_MIN_DICE,
     COLOR_MASK_MIN_SCORE,
@@ -47,6 +54,7 @@ from receipt_ocr.seal_reference import (
     ULTRA_SUPPORT_MIN_INLIER_RATIO,
     ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
     _best_consensus,
+    _best_chromatic_crop_consensus,
     _best_high_purity_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
@@ -290,6 +298,167 @@ def test_match_reports_high_purity_multi_reference_consensus(
     assert evidence["accepted"] is True
     assert evidence["route"] == "high_purity_multi_reference_consensus"
     assert evidence["consensus_reference_count"] == 2
+
+
+def _chromatic_consensus_evidence(
+    reference: str,
+    *,
+    candidate_index: int = 0,
+    inliers: int = CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    ratio: float = CHROMATIC_CONSENSUS_MIN_INLIER_RATIO,
+) -> dict:
+    return {
+        "candidate_index": candidate_index,
+        "candidate_url": f"/files/artifacts/candidate/{candidate_index}.png",
+        "reference_filename": reference,
+        "reference_url": f"/files/artifacts/reference/{reference}.png",
+        "good_matches": 0,
+        "homography_inliers": 0,
+        "inlier_ratio": 0.0,
+        "candidate_coverage": 0.0,
+        "reference_coverage": 0.0,
+        "chromatic_good_matches": CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+        "chromatic_homography_inliers": inliers,
+        "chromatic_inlier_ratio": ratio,
+        "chromatic_candidate_coverage": (
+            CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+        ),
+        "chromatic_reference_coverage": (
+            CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+        ),
+    }
+
+
+def test_chromatic_crop_consensus_requires_two_files_and_every_boundary():
+    first = _chromatic_consensus_evidence(
+        "confirmed-a.jpg",
+        inliers=CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+        ratio=CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
+    )
+    second = _chromatic_consensus_evidence("confirmed-b.jpg")
+    accepted = _best_chromatic_crop_consensus([first, second])
+    assert CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES == 2
+    assert accepted["accepted"] is True
+    assert accepted["reference_count"] == 2
+
+    for key in (
+        "chromatic_good_matches", "chromatic_homography_inliers",
+        "chromatic_inlier_ratio", "chromatic_candidate_coverage",
+        "chromatic_reference_coverage",
+    ):
+        reduced = dict(second)
+        reduced[key] -= 1 if key in {
+            "chromatic_good_matches", "chromatic_homography_inliers"
+        } else 0.001
+        assert _best_chromatic_crop_consensus(
+            [first, reduced]
+        )["accepted"] is False
+
+    weak_top_inliers = {
+        **first,
+        "chromatic_homography_inliers": (
+            CHROMATIC_CONSENSUS_MIN_TOP_INLIERS - 1
+        ),
+    }
+    assert _best_chromatic_crop_consensus(
+        [weak_top_inliers, second]
+    )["accepted"] is False
+    weak_top_ratio = {
+        **first,
+        "chromatic_inlier_ratio": (
+            CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO - 0.001
+        ),
+    }
+    assert _best_chromatic_crop_consensus(
+        [weak_top_ratio, second]
+    )["accepted"] is False
+
+    duplicate = [
+        first, {**second, "reference_filename": "confirmed-a.jpg"}
+    ]
+    assert _best_chromatic_crop_consensus(duplicate)["accepted"] is False
+    split = [first, {**second, "candidate_index": 1}]
+    assert _best_chromatic_crop_consensus(split)["accepted"] is False
+
+
+def test_match_reports_chromatic_crop_multi_reference_consensus(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    references = [
+        artifact_root / "reference-a" / "seal.png",
+        artifact_root / "reference-b" / "seal.png",
+    ]
+    for path in (candidate, *references):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "测试科技有限公司维修专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [
+        SealReference(
+            filename=f"confirmed-{index}.jpg",
+            requirement=requirement,
+            artifact_url=f"/files/artifacts/reference-{index}/seal.png",
+            path=path,
+        )
+        for index, path in enumerate(references)
+    ]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": 0,
+        "homography_inliers": 0,
+        "inlier_ratio": 0.0,
+        "candidate_coverage": 0.0,
+        "reference_coverage": 0.0,
+    })
+    monkeypatch.setattr(matcher, "_compare_chromatic_crop", lambda *_a: {
+        "good_matches": CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+        "homography_inliers": CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+        "inlier_ratio": CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
+        "candidate_coverage": CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE,
+        "reference_coverage": CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+    evidence = matcher.match(_result(
+        "/files/artifacts/candidate/seal.png"
+    ))
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "chromatic_crop_multi_reference_consensus"
+    assert evidence["consensus_reference_count"] == 2
+    assert evidence["regular_geometry"]["good_matches"] == 0
+
+
+def test_chromatic_crop_artifact_excludes_distant_black_residue(tmp_path):
+    artifact_root = tmp_path / "artifacts"
+    source = artifact_root / "sample" / "seal-0-color-isolated.png"
+    source.parent.mkdir(parents=True)
+    image = np.full((400, 800, 3), 255, dtype=np.uint8)
+    cv2.ellipse(image, (400, 200), (150, 120), 0, 0, 360, (20, 20, 220), 8)
+    cv2.putText(
+        image, "0451", (330, 215), cv2.FONT_HERSHEY_SIMPLEX,
+        1.0, (20, 20, 220), 3,
+    )
+    cv2.line(image, (5, 30), (50, 30), (0, 0, 0), 5)
+    cv2.line(image, (750, 360), (795, 360), (0, 0, 0), 5)
+    cv2.imwrite(str(source), image)
+
+    matcher = SealReferenceMatcher(artifact_root)
+    url = matcher._write_chromatic_crop_artifact(
+        source, "/files/artifacts/sample/seal-0-color-isolated.png"
+    )
+    output = artifact_root / "sample" / "seal-0-chromatic-crop.png"
+    cropped = cv2.imread(str(output))
+    assert url == "/files/artifacts/sample/seal-0-chromatic-crop.png"
+    assert cropped is not None
+    assert cropped.shape[0] < image.shape[0]
+    assert cropped.shape[1] < image.shape[1]
 
 
 def test_high_ratio_single_reference_enforces_compensating_boundaries():
@@ -576,7 +745,7 @@ def test_sift_homography_covers_a_complete_repeated_stamp(tmp_path):
     assert metrics["reference_coverage"] >= MIN_SURFACE_COVERAGE
 
 
-def test_app_high_purity_consensus_promotion_preserves_raw_ocr(monkeypatch):
+def test_app_chromatic_consensus_promotion_preserves_raw_ocr(monkeypatch):
     import app as app_module
 
     evidence = {
@@ -584,7 +753,7 @@ def test_app_high_purity_consensus_promotion_preserves_raw_ocr(monkeypatch):
         "candidate_index": 1,
         "consensus_candidate_index": 0,
         "consensus_reference_count": 2,
-        "route": "high_purity_multi_reference_consensus",
+        "route": "chromatic_crop_multi_reference_consensus",
         "candidate_url": "/files/artifacts/new/seal.png",
         "reference_filename": "confirmed.jpg",
         "reference_url": "/files/artifacts/ref/seal.png",
@@ -625,7 +794,7 @@ def test_app_high_purity_consensus_promotion_preserves_raw_ocr(monkeypatch):
     assert promoted["seal_check"]["ocr_only_status"] == "无法判断"
     assert promoted["seal_check"]["status"] == "匹配"
     assert promoted["seal_check"]["reliable"] is True
-    assert "多参考高纯度一致" in promoted["seal_check"]["match_basis"]
+    assert "章色稳健裁剪" in promoted["seal_check"]["match_basis"]
     assert promoted["overall"] == "通过"
     assert promoted["review_status"] == "无需复核"
     assert promoted["processing_artifacts"]["seals"][0][

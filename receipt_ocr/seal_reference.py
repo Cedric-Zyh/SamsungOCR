@@ -78,6 +78,21 @@ HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 65
 HIGH_PURITY_CONSENSUS_MIN_INLIER_RATIO = 0.70
 HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE = 0.30
 
+# Black form lines and signatures sometimes survive the color-isolation stage
+# and enlarge the grayscale SIFT crop even when the stamp itself is complete.
+# A second representation derives crop bounds from chromatic ink but retains
+# the original grayscale texture for SIFT.  It may promote only when two
+# distinct human-confirmed files agree; the leading vote must be exceptionally
+# pure and dense, while the second still carries substantial independent
+# support.  The full 301-image matrix accepts one positive and no wrong stamp.
+CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES = 2
+CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES = 100
+CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 65
+CHROMATIC_CONSENSUS_MIN_INLIER_RATIO = 0.68
+CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE = 0.24
+CHROMATIC_CONSENSUS_MIN_TOP_INLIERS = 95
+CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO = 0.85
+
 # Color-ink geometry is a fallback for faded scans where SIFT cannot retain
 # enough local keypoints.  The full 301-receipt matrix has a wide margin:
 # accepted positives start at 0.8158/0.8096/0.8319 for composite score,
@@ -125,6 +140,9 @@ class SealReferenceMatcher:
         self.references: dict[str, list[SealReference]] = {}
         self.truth_filenames: set[str] = set()
         self._descriptor_cache: dict[str, tuple[list, np.ndarray | None, tuple[int, int]]] = {}
+        self._chromatic_descriptor_cache: dict[
+            str, tuple[list, np.ndarray | None, tuple[int, int]]
+        ] = {}
         self._color_mask_cache: dict[str, np.ndarray | None] = {}
         self._lock = threading.RLock()
         self._sift = cv2.SIFT_create(
@@ -194,6 +212,11 @@ class SealReferenceMatcher:
                 for key, value in self._descriptor_cache.items()
                 if key in existing and Path(key).is_file()
             }
+            self._chromatic_descriptor_cache = {
+                key: value
+                for key, value in self._chromatic_descriptor_cache.items()
+                if key in existing and Path(key).is_file()
+            }
             self._color_mask_cache = {
                 key: value
                 for key, value in self._color_mask_cache.items()
@@ -228,16 +251,31 @@ class SealReferenceMatcher:
             candidate_path = self._artifact_path(candidate_url)
             if candidate_path is None:
                 continue
+            candidate_chromatic_crop_url = (
+                self._write_chromatic_crop_artifact(
+                    candidate_path, candidate_url
+                )
+            )
             for reference in references:
                 metrics = self._compare(candidate_path, reference.path)
+                chromatic_metrics = {
+                    f"chromatic_{key}": value
+                    for key, value in self._compare_chromatic_crop(
+                        candidate_path, reference.path
+                    ).items()
+                }
                 color_metrics = self._compare_color_mask(
                     candidate_path, reference.path
                 )
                 evidence = {
                     **metrics,
+                    **chromatic_metrics,
                     **color_metrics,
                     "candidate_index": int(artifact.get("index", -1)),
                     "candidate_url": candidate_url,
+                    "candidate_chromatic_crop_url": (
+                        candidate_chromatic_crop_url
+                    ),
                     "reference_filename": reference.filename,
                     "reference_url": reference.artifact_url,
                     "requirement": str(seal_check.get("requirement") or ""),
@@ -263,6 +301,10 @@ class SealReferenceMatcher:
         high_purity_consensus_accepted = bool(
             high_purity_consensus.get("accepted")
         )
+        chromatic_consensus = _best_chromatic_crop_consensus(all_evidence)
+        chromatic_consensus_accepted = bool(
+            chromatic_consensus.get("accepted")
+        )
         color_mask_accepted = bool(
             best_color is not None and _passes_color_mask_gate(best_color)
         )
@@ -273,10 +315,13 @@ class SealReferenceMatcher:
             consensus if consensus_accepted
             else high_purity_consensus
             if high_purity_consensus_accepted
+            else chromatic_consensus
+            if chromatic_consensus_accepted
             else consensus
         )
         if (
             consensus_accepted or high_purity_consensus_accepted
+            or chromatic_consensus_accepted
         ) and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
             or ultra_support_accepted
@@ -301,6 +346,7 @@ class SealReferenceMatcher:
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or ultra_support_accepted
                 or consensus_accepted or high_purity_consensus_accepted
+                or chromatic_consensus_accepted
             )
         ):
             best = best_color
@@ -308,6 +354,7 @@ class SealReferenceMatcher:
             strict_accepted or high_ratio_accepted
             or high_support_accepted or ultra_support_accepted
             or consensus_accepted or high_purity_consensus_accepted
+            or chromatic_consensus_accepted
             or color_mask_accepted or color_sift_accepted
         )
         route = (
@@ -318,6 +365,8 @@ class SealReferenceMatcher:
             else "multi_reference_consensus" if consensus_accepted
             else "high_purity_multi_reference_consensus"
             if high_purity_consensus_accepted
+            else "chromatic_crop_multi_reference_consensus"
+            if chromatic_consensus_accepted
             else "color_mask_geometry" if color_mask_accepted
             else "color_mask_sift_geometry" if color_sift_accepted
             else "rejected"
@@ -331,6 +380,19 @@ class SealReferenceMatcher:
             active_consensus.get("reference_count", 0)
         )
         best["consensus_matches"] = active_consensus.get("matches", [])
+        if route == "chromatic_crop_multi_reference_consensus":
+            best["regular_geometry"] = {
+                key: best.get(key, 0)
+                for key in (
+                    "good_matches", "homography_inliers", "inlier_ratio",
+                    "candidate_coverage", "reference_coverage",
+                )
+            }
+            for key in (
+                "good_matches", "homography_inliers", "inlier_ratio",
+                "candidate_coverage", "reference_coverage",
+            ):
+                best[key] = best.get(f"chromatic_{key}", 0)
         best["thresholds"] = {
             "strict": {
                 "good_matches": MIN_GOOD_MATCHES,
@@ -378,6 +440,23 @@ class SealReferenceMatcher:
                     HIGH_PURITY_CONSENSUS_MIN_SURFACE_COVERAGE
                 ),
             },
+            "chromatic_crop_consensus": {
+                "distinct_references": (
+                    CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "good_matches": CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": CHROMATIC_CONSENSUS_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+                ),
+                "top_inliers": CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+                "top_inlier_ratio": (
+                    CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO
+                ),
+            },
             "color_mask": {
                 "score": COLOR_MASK_MIN_SCORE,
                 "correlation": COLOR_MASK_MIN_CORRELATION,
@@ -411,6 +490,8 @@ class SealReferenceMatcher:
                 if consensus_accepted else
                 "同一章区与两份独立人工真值阳性章形成高纯度几何一致"
                 if high_purity_consensus_accepted else
+                "排除黑色表格与签字噪声后，同一章区与两份独立人工真值阳性章一致"
+                if chromatic_consensus_accepted else
                 "与人工真值阳性章的彩色墨迹形成整体几何一致"
                 if color_mask_accepted else
                 "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
@@ -433,12 +514,38 @@ class SealReferenceMatcher:
 
     def _compare(self, candidate: Path, reference: Path) -> dict:
         with self._lock:
-            candidate_keypoints, candidate_descriptors, candidate_shape = (
-                self._descriptors(candidate)
-            )
-            reference_keypoints, reference_descriptors, reference_shape = (
-                self._descriptors(reference)
-            )
+            candidate_values = self._descriptors(candidate)
+            reference_values = self._descriptors(reference)
+        return self._compare_descriptor_values(
+            candidate_values, reference_values
+        )
+
+    def _compare_chromatic_crop(
+        self, candidate: Path, reference: Path
+    ) -> dict:
+        with self._lock:
+            candidate_values = self._chromatic_descriptors(candidate)
+            reference_values = self._chromatic_descriptors(reference)
+        return self._compare_descriptor_values(
+            candidate_values, reference_values
+        )
+
+    def _compare_descriptor_values(
+        self,
+        candidate_values: tuple[
+            list, np.ndarray | None, tuple[int, int]
+        ],
+        reference_values: tuple[
+            list, np.ndarray | None, tuple[int, int]
+        ],
+    ) -> dict:
+        candidate_keypoints, candidate_descriptors, candidate_shape = (
+            candidate_values
+        )
+        reference_keypoints, reference_descriptors, reference_shape = (
+            reference_values
+        )
+        with self._lock:
             if (
                 candidate_descriptors is None
                 or reference_descriptors is None
@@ -488,6 +595,32 @@ class SealReferenceMatcher:
             self._color_mask(candidate), self._color_mask(reference)
         )
 
+    def _write_chromatic_crop_artifact(
+        self, path: Path, source_url: str
+    ) -> str:
+        """Persist the exact robust crop used by the alternate SIFT route."""
+        crop = _chromatic_crop_image(path)
+        if crop is None:
+            return ""
+        match = re.fullmatch(r"/files/artifacts/(.+)", source_url)
+        if not match:
+            return ""
+        source_name = path.name
+        if source_name.endswith("-color-isolated.png"):
+            output_name = source_name.replace(
+                "-color-isolated.png", "-chromatic-crop.png"
+            )
+        else:
+            output_name = f"{path.stem}-chromatic-crop.png"
+        output = path.with_name(output_name)
+        if not output.is_file():
+            encoded, payload = cv2.imencode(".png", crop)
+            if not encoded:
+                return ""
+            payload.tofile(str(output))
+        relative = output.relative_to(self.artifact_root).as_posix()
+        return f"/files/artifacts/{relative}"
+
     def _color_mask(self, path: Path) -> np.ndarray | None:
         key = str(path)
         if key not in self._color_mask_cache:
@@ -534,6 +667,36 @@ class SealReferenceMatcher:
         self._descriptor_cache[key] = value
         return value
 
+    def _chromatic_descriptors(
+        self, path: Path
+    ) -> tuple[list, np.ndarray | None, tuple[int, int]]:
+        """Crop by colored ink, then retain grayscale texture for SIFT."""
+        key = str(path)
+        cached = self._chromatic_descriptor_cache.get(key)
+        if cached is not None:
+            return cached
+        color = _chromatic_crop_image(path)
+        if color is None:
+            value = ([], None, (1, 1))
+            self._chromatic_descriptor_cache[key] = value
+            return value
+        image = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+        scale = 800 / max(1, max(image.shape))
+        if scale < 1.0 or scale > 1.2:
+            image = cv2.resize(
+                image,
+                None,
+                fx=scale,
+                fy=scale,
+                interpolation=(
+                    cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+                ),
+            )
+        keypoints, descriptors = self._sift.detectAndCompute(image, None)
+        value = (keypoints or [], descriptors, image.shape[:2])
+        self._chromatic_descriptor_cache[key] = value
+        return value
+
 
 def _empty_metrics() -> dict:
     return {
@@ -543,6 +706,28 @@ def _empty_metrics() -> dict:
         "candidate_coverage": 0.0,
         "reference_coverage": 0.0,
     }
+
+
+def _chromatic_crop_image(path: Path) -> np.ndarray | None:
+    """Crop to chromatic ink while preserving original color/gray texture."""
+    image = cv2.imdecode(
+        np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR
+    )
+    if image is None:
+        return None
+    blue, green, red = cv2.split(image)
+    high = np.maximum(np.maximum(red, green), blue).astype(np.int16)
+    low = np.minimum(np.minimum(red, green), blue).astype(np.int16)
+    chromatic = ((high - low) >= 22) & (low <= 235)
+    ys, xs = np.where(chromatic)
+    if len(xs) < 180:
+        return image
+    pad = 8
+    x1 = max(0, int(xs.min()) - pad)
+    x2 = min(image.shape[1], int(xs.max()) + pad + 1)
+    y1 = max(0, int(ys.min()) - pad)
+    y2 = min(image.shape[0], int(ys.max()) + pad + 1)
+    return image[y1:y2, x1:x2]
 
 
 def _normalized_color_ink(path: Path) -> np.ndarray | None:
@@ -807,6 +992,20 @@ def _passes_high_purity_consensus_vote(evidence: dict) -> bool:
     )
 
 
+def _passes_chromatic_crop_consensus_vote(evidence: dict) -> bool:
+    return bool(
+        evidence["good_matches"] >= CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES
+        and evidence["homography_inliers"]
+        >= CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+        and evidence["inlier_ratio"]
+        >= CHROMATIC_CONSENSUS_MIN_INLIER_RATIO
+        and evidence["candidate_coverage"]
+        >= CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+        and evidence["reference_coverage"]
+        >= CHROMATIC_CONSENSUS_MIN_SURFACE_COVERAGE
+    )
+
+
 def _best_consensus(all_evidence: list[dict]) -> dict:
     return _best_consensus_group(
         all_evidence,
@@ -825,12 +1024,32 @@ def _best_high_purity_consensus(all_evidence: list[dict]) -> dict:
     )
 
 
+def _best_chromatic_crop_consensus(all_evidence: list[dict]) -> dict:
+    normalized = []
+    for evidence in all_evidence:
+        item = dict(evidence)
+        for key in (
+            "good_matches", "homography_inliers", "inlier_ratio",
+            "candidate_coverage", "reference_coverage",
+        ):
+            item[key] = evidence.get(f"chromatic_{key}", 0)
+        normalized.append(item)
+    return _best_consensus_group(
+        normalized,
+        vote_gate=_passes_chromatic_crop_consensus_vote,
+        minimum_references=CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
+        minimum_top_inliers=CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
+        minimum_top_ratio=CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
+    )
+
+
 def _best_consensus_group(
     all_evidence: list[dict],
     *,
     vote_gate: Any,
     minimum_references: int,
     minimum_top_inliers: int,
+    minimum_top_ratio: float = 0.0,
 ) -> dict:
     """Return the strongest same-region, distinct-file consensus group."""
     by_candidate: dict[int, dict[str, dict]] = defaultdict(dict)
@@ -858,6 +1077,8 @@ def _best_consensus_group(
             "accepted": bool(
                 len(matches) >= minimum_references
                 and top_inliers >= minimum_top_inliers
+                and float(matches[0]["inlier_ratio"])
+                >= minimum_top_ratio
             ),
             "matches": [
                 {
@@ -949,6 +1170,24 @@ def _reference_confidence(
                     0,
                     second_inliers
                     - HIGH_PURITY_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+                ) / 5,
+            ),
+        )
+    elif route == "chromatic_crop_multi_reference_consensus":
+        second_inliers = int(
+            ((consensus or {}).get("matches") or [{}, {}])[1].get(
+                "homography_inliers",
+                CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+            )
+        ) if len((consensus or {}).get("matches") or []) >= 2 else 0
+        confidence = min(
+            0.94,
+            0.91 + 0.01 * min(
+                3.0,
+                max(
+                    0,
+                    second_inliers
+                    - CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
                 ) / 5,
             ),
         )
