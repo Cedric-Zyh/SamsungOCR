@@ -173,6 +173,7 @@ def _has_shared_specific_stamp_type(requirement: str, texts: list[str]) -> bool:
         expected in requirement and observed_token in observed
         for expected, observed_token in (
             ("维修专用章", "维修专用"),
+            ("维修专章", "维修专用"),
             ("售后专用章", "售后专用"),
             ("业务专用章", "业务专用"),
             ("服务专用章", "服务专用"),
@@ -427,6 +428,91 @@ def _shared_long_organization_suffix(
             suffix in text for text in server
         ):
             return suffix
+    return ""
+
+
+def _region_overlap_over_smaller(first: SealRegion, second: SealRegion) -> float:
+    """Return intersection area divided by the smaller seal-region area."""
+    left = max(first.x, second.x)
+    top = max(first.y, second.y)
+    right = min(first.x + first.width, second.x + second.width)
+    bottom = min(first.y + first.height, second.y + second.height)
+    if right <= left or bottom <= top:
+        return 0.0
+    intersection = (right - left) * (bottom - top)
+    smaller = min(
+        first.width * first.height,
+        second.width * second.height,
+    )
+    return intersection / smaller if smaller > 0 else 0.0
+
+
+def _reconstruct_overlapping_repair_stamp(
+    requirement: str,
+    audited_regions: list[dict],
+) -> str:
+    """Join exact OCR fragments from two strongly overlapping customer seals.
+
+    The reviewed receipt can contain two customer stamps applied on top of one
+    another.  Color segmentation then returns two overlapping boxes: one keeps
+    the start of the legal company and the explicit stamp type, while the other
+    keeps the remainder of the same company arc.  Reconstruction is allowed
+    only for the printed ``维修专章`` template, requires an independently read
+    ``维修专用章`` token, and joins two exact complementary company fragments
+    from different overlapping regions.  No missing glyph is copied into the
+    output, and any complete-company conflict remains a hard veto.
+    """
+    expected = normalize_text(requirement)
+    marker = "有限公司"
+    marker_at = expected.find(marker)
+    if (
+        marker_at < 0
+        or expected[marker_at + len(marker):]
+        not in {"维修专章", "维修专用章"}
+    ):
+        return ""
+    company = expected[: marker_at + len(marker)]
+    for first_index, first in enumerate(audited_regions):
+        first_region = first.get("region")
+        if not isinstance(first_region, SealRegion):
+            continue
+        first_texts = {
+            normalize_text(text)
+            for text in first.get("texts", [])
+            if normalize_text(text)
+        }
+        for second in audited_regions[first_index + 1:]:
+            second_region = second.get("region")
+            if not isinstance(second_region, SealRegion):
+                continue
+            if (
+                first_region.role != "收货客户章"
+                or second_region.role != "收货客户章"
+                or first_region.color != second_region.color
+                or _region_overlap_over_smaller(
+                    first_region, second_region
+                ) < 0.35
+            ):
+                continue
+            second_texts = {
+                normalize_text(text)
+                for text in second.get("texts", [])
+                if normalize_text(text)
+            }
+            all_texts = sorted(first_texts | second_texts)
+            if "维修专用章" not in all_texts:
+                continue
+            if compare_seal_text(requirement, all_texts).get(
+                "company_conflict"
+            ):
+                continue
+            for split in range(2, len(company) - 1):
+                left, right = company[:split], company[split:]
+                if (
+                    (left in first_texts and right in second_texts)
+                    or (left in second_texts and right in first_texts)
+                ):
+                    return left + right + "维修专用章"
     return ""
 
 
@@ -1593,7 +1679,9 @@ class ReceiptAnalyzer:
             )
             explicit_stamp_type = any(
                 token in requirement
-                for token in ("专用章", "收货章", "仓储部", "维修中心")
+                for token in (
+                    "专用章", "维修专章", "收货章", "仓储部", "维修中心"
+                )
             )
             shared_specific_stamp_type = _has_shared_specific_stamp_type(
                 requirement, texts
@@ -1703,6 +1791,21 @@ class ReceiptAnalyzer:
                     ).get("score", 0),
                     reverse=True,
                 )
+                overlapping_repair_route = bool(
+                    normalize_text(requirement).endswith(
+                        ("维修专章", "维修专用章")
+                    )
+                    and any(
+                        first["region"].role == "收货客户章"
+                        and second["region"].role == "收货客户章"
+                        and first["region"].color == second["region"].color
+                        and _region_overlap_over_smaller(
+                            first["region"], second["region"]
+                        ) >= 0.35
+                        for first_index, first in enumerate(ranked_candidates)
+                        for second in ranked_candidates[first_index + 1:]
+                    )
+                )
                 # A heavy rectangular station stamp can be split into upper
                 # and lower boxes by table lines. Mobile may rank the numeric
                 # half first even though Server recovers the complete text
@@ -1724,6 +1827,7 @@ class ReceiptAnalyzer:
                     if (
                         numbered_service_stamp
                         or company_only_requirement
+                        or overlapping_repair_route
                         # One overlapping round detection can preserve the
                         # center type while another preserves the company
                         # arc. Both derivatives contain colored ink only;
@@ -1736,6 +1840,7 @@ class ReceiptAnalyzer:
                     )
                     else 1
                 )
+                overlapping_server_audits: list[dict] = []
                 for audit_position, candidate in enumerate(
                     ranked_candidates[:audit_limit]
                 ):
@@ -1868,9 +1973,15 @@ class ReceiptAnalyzer:
                     if (
                         not candidate["rectangular"]
                         and candidate.get("unwrapped_rotated") is not None
-                        and float(preliminary.get("score", 0)) >= 0.72
-                        and float(preliminary.get("company_score", 0)) >= 0.70
                         and explicit_stamp_type
+                        and (
+                            overlapping_repair_route
+                            or (
+                                float(preliminary.get("score", 0)) >= 0.72
+                                and float(preliminary.get("company_score", 0))
+                                >= 0.70
+                            )
+                        )
                     ):
                         audit_paths.append((
                             "圆章展开 180°",
@@ -1982,6 +2093,11 @@ class ReceiptAnalyzer:
                     # pre-audit evidence already contains a complete near-name
                     # conflict.
                     if server_audit_used_for_matching:
+                        overlapping_server_audits.append({
+                            "index": candidate["index"],
+                            "region": candidate["region"],
+                            "texts": list(audit_texts),
+                        })
                         texts.extend(audit_texts)
                         if len(audit_texts) >= 2 and combined_audit:
                             texts.append(combined_audit)
@@ -2041,6 +2157,27 @@ class ReceiptAnalyzer:
                                     "只采用实际文字，不补写缺失地名"
                                     if robust_shared_suffix else
                                     "稳健边界未形成跨模型共同长后缀，保持待复核"
+                                ),
+                            )
+                overlapping_repair_text = (
+                    _reconstruct_overlapping_repair_stamp(
+                        requirement, overlapping_server_audits
+                    )
+                    if overlapping_repair_route else ""
+                )
+                if overlapping_repair_text:
+                    texts.append(overlapping_repair_text)
+                    for entry in overlapping_server_audits:
+                        artifact_index = int(entry.get("index", -1))
+                        if 0 <= artifact_index < len(artifacts):
+                            artifacts[artifact_index].update(
+                                overlapping_region_reconstructed_text=(
+                                    overlapping_repair_text
+                                ),
+                                overlapping_region_acceptance_note=(
+                                    "两枚同色收货客户章显著重叠；Server 在不同"
+                                    "章区读到互补的精确公司分片及维修专用章，"
+                                    "按实识别字符重组"
                                 ),
                             )
         return texts, artifacts
@@ -5198,6 +5335,16 @@ def _prefer_detail_requirement(primary: str, detail: str) -> bool:
         return False
     if len(primary_key) < 6:
         return True
+    # ``维修专章`` is itself a complete printed stamp type on reviewed
+    # Samsung receipts. Vision may hallucinate the conventional extra ``用``
+    # and look one glyph "fuller" than Paddle's exact reading. Keep the
+    # primary form value in this one unambiguous insertion case; seal matching
+    # handles ``维修专章``/``维修专用章`` as equivalent separately.
+    if (
+        primary_key.endswith("维修专章")
+        and detail_key == primary_key.removesuffix("维修专章") + "维修专用章"
+    ):
+        return False
     similarity = SequenceMatcher(None, primary_key, detail_key).ratio()
     return similarity >= 0.72 and len(detail_key) >= len(primary_key) + 1
 

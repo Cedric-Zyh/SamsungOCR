@@ -26,6 +26,7 @@ from receipt_ocr.analyzer import (
     _strong_unread_colored_stamp_route,
     _reconstruct_business_acceptance_from_audit,
     _reconstruct_exact_company_stamp_from_region,
+    _reconstruct_overlapping_repair_stamp,
     _reconstruct_business_acceptance_from_mobile_bands,
     _shared_long_organization_suffix,
     _prefer_detail_field,
@@ -837,6 +838,10 @@ def test_specific_stamp_type_can_route_low_company_evidence_to_server_audit():
         ["仓库接收人", "维修专用章"],
     ) is True
     assert _has_shared_specific_stamp_type(
+        "杭州索兰科技有限公司维修专章",
+        ["维修专用章"],
+    ) is True
+    assert _has_shared_specific_stamp_type(
         "青岛和沃电子技术有限公司业务专用章",
         ["业务专用"],
     ) is True
@@ -1060,6 +1065,99 @@ def test_exact_company_stamp_reconstruction_rejects_missing_or_extra_parts(
     assert _reconstruct_exact_company_stamp_from_region(
         requirement, audit_texts
     ) == ""
+
+
+def test_overlapping_repair_stamp_reconstructs_only_exact_cross_region_parts():
+    from receipt_ocr.image_processing import SealRegion
+
+    requirement = "杭州索兰科技有限公司维修专章"
+    upper = SealRegion(.70, .46, .23, .16, "red", "收货客户章", .38)
+    lower = SealRegion(.73, .54, .23, .16, "red", "收货客户章", .42)
+    evidence = [
+        {"region": upper, "texts": ["兰科技有限公司"]},
+        {"region": lower, "texts": ["杭州索", "维修专用章"]},
+    ]
+
+    assert _reconstruct_overlapping_repair_stamp(
+        requirement, evidence
+    ) == "杭州索兰科技有限公司维修专用章"
+    assert _reconstruct_overlapping_repair_stamp(
+        "杭州索兰科技有限公司维修专用章", evidence
+    ) == "杭州索兰科技有限公司维修专用章"
+    assert _reconstruct_overlapping_repair_stamp(
+        requirement,
+        [evidence[0], {**evidence[1], "texts": ["杭州松", "维修专用章"]}],
+    ) == ""
+    assert _reconstruct_overlapping_repair_stamp(
+        requirement,
+        [evidence[0], {**evidence[1], "texts": ["杭州索"]}],
+    ) == ""
+    non_overlapping = SealRegion(
+        .05, .70, .23, .16, "red", "收货客户章", .42
+    )
+    assert _reconstruct_overlapping_repair_stamp(
+        requirement,
+        [evidence[0], {"region": non_overlapping, "texts": evidence[1]["texts"]}],
+    ) == ""
+
+
+def test_hybrid_overlapping_repair_stamps_use_two_server_regions(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+    from receipt_ocr.image_processing import SealRegion
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (400, 600), "white").save(source)
+
+    def fake_save(_source, destination, _region, **_kwargs):
+        Image.new("RGB", (320, 240), "white").save(destination)
+
+    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
+    )
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.extract_region_text",
+        lambda _rows, region: (
+            "兰科技有限公司" if region.y < .5 else "杭州索维修专用章"
+        ),
+    )
+
+    def fake_ocr(path, *, backend, **_kwargs):
+        if backend != "paddle_server":
+            return []
+        if path.name == "seal-0-unwrapped.png":
+            return [TextObservation("兰科技有限公司", .97, 0, 0, 1, 1)]
+        if path.name == "seal-1-color-isolated-rotations.png":
+            return [
+                TextObservation("杭州索", .96, 0, 0, 1, .4),
+                TextObservation("维修专用章", .98, 0, .5, 1, .4),
+            ]
+        return []
+
+    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    regions = [
+        SealRegion(.70, .46, .23, .16, "red", "收货客户章", .38),
+        SealRegion(.73, .54, .23, .16, "red", "收货客户章", .42),
+    ]
+    requirement = "杭州索兰科技有限公司维修专章"
+    texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
+        source, [], regions,
+        tmp_path / "artifacts", "/artifacts", "vision", "paddle",
+        requirement=requirement,
+    )
+
+    check = compare_seal_text(requirement, texts)
+    assert check["reliable"] is True
+    assert check["recognized"] == "杭州索兰科技有限公司维修专用章"
+    assert all(
+        item["overlapping_region_reconstructed_text"] == check["recognized"]
+        for item in artifacts
+    )
 
 
 def test_mobile_rectangular_bands_resolve_only_exact_business_company():
@@ -1930,6 +2028,10 @@ def test_fuller_similar_signature_requirement_can_replace_primary_ocr():
         "三星电维修中2310637", "三星电子维修中心2310637"
     ) is True
     assert _prefer_detail_requirement("贵州宏羿科技有限公司", "无关公司的其他印章") is False
+    assert _prefer_detail_requirement(
+        "杭州索兰科技有限公司维修专章",
+        "杭州索兰科技有限公司维修专用章",
+    ) is False
 
 
 def test_long_detail_can_replace_unusable_signature_fragment_but_stays_reviewable():
