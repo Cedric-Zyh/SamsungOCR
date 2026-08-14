@@ -107,6 +107,21 @@ TRIMMED_CHROMATIC_MIN_HOMOGRAPHY_INLIERS = 75
 TRIMMED_CHROMATIC_MIN_INLIER_RATIO = 0.80
 TRIMMED_CHROMATIC_MIN_SURFACE_COVERAGE = 0.50
 
+# A numbered Samsung service-center pickup stamp has two independent semantic
+# anchors before geometry is considered: OCR must literally retain
+# ``三星电子服务中心`` from the current seal, and the printed requirement must
+# be the exact ``取机专用章 + seven-digit station`` structure shared with the
+# human-confirmed reference.  This allows a heavily table-occluded repeat to
+# sit slightly below the generic 80-inlier single-reference boundary, while
+# still requiring broad, pure geometry.  The complete 301-image reference
+# matrix has one positive at 99/74 matches/inliers, 74.75% purity and
+# 59.35%/51.58% coverage; the known wrong-stamp control is 46/24 with only
+# 8.6% reference coverage.
+BRANDED_STATION_MIN_GOOD_MATCHES = 95
+BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS = 70
+BRANDED_STATION_MIN_INLIER_RATIO = 0.72
+BRANDED_STATION_MIN_SURFACE_COVERAGE = 0.50
+
 # Color-ink geometry is a fallback for faded scans where SIFT cannot retain
 # enough local keypoints.  The full 301-receipt matrix has a wide margin:
 # accepted positives start at 0.8158/0.8096/0.8319 for composite score,
@@ -341,6 +356,11 @@ class SealReferenceMatcher:
         high_ratio_accepted = _passes_high_ratio_gate(best)
         high_support_accepted = _passes_high_support_gate(best)
         ultra_support_accepted = _passes_ultra_support_gate(best)
+        branded_station_accepted = _passes_branded_station_gate(
+            best,
+            requirement=requirement,
+            recognized=str(seal_check.get("recognized") or ""),
+        )
         trimmed_chromatic_accepted = bool(
             best_trimmed_chromatic is not None
             and _passes_trimmed_chromatic_gate(best_trimmed_chromatic)
@@ -374,7 +394,8 @@ class SealReferenceMatcher:
             or chromatic_consensus_accepted
         ) and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
-            or ultra_support_accepted or trimmed_chromatic_accepted
+            or ultra_support_accepted or branded_station_accepted
+            or trimmed_chromatic_accepted
         ):
             consensus_candidate = int(active_consensus["candidate_index"])
             leading_reference = str(
@@ -395,6 +416,7 @@ class SealReferenceMatcher:
             and not (
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or ultra_support_accepted
+                or branded_station_accepted
             )
         ):
             best = best_trimmed_chromatic
@@ -403,6 +425,7 @@ class SealReferenceMatcher:
             and not (
                 strict_accepted or high_ratio_accepted
                 or high_support_accepted or ultra_support_accepted
+                or branded_station_accepted
                 or trimmed_chromatic_accepted
                 or consensus_accepted or high_purity_consensus_accepted
                 or chromatic_consensus_accepted
@@ -412,6 +435,7 @@ class SealReferenceMatcher:
         accepted = (
             strict_accepted or high_ratio_accepted
             or high_support_accepted or ultra_support_accepted
+            or branded_station_accepted
             or trimmed_chromatic_accepted
             or consensus_accepted or high_purity_consensus_accepted
             or chromatic_consensus_accepted
@@ -422,6 +446,8 @@ class SealReferenceMatcher:
             else "high_ratio_single_reference" if high_ratio_accepted
             else "high_support_minor_coverage" if high_support_accepted
             else "ultra_support_partial_coverage" if ultra_support_accepted
+            else "branded_station_single_reference"
+            if branded_station_accepted
             else "trimmed_chromatic_single_reference"
             if trimmed_chromatic_accepted
             else "multi_reference_consensus" if consensus_accepted
@@ -492,6 +518,18 @@ class SealReferenceMatcher:
                 "homography_inliers": ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": ULTRA_SUPPORT_MIN_INLIER_RATIO,
                 "surface_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+            },
+            "branded_station_single_reference": {
+                "good_matches": BRANDED_STATION_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": BRANDED_STATION_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    BRANDED_STATION_MIN_SURFACE_COVERAGE
+                ),
+                "required_text": "三星电子服务中心",
+                "requirement_structure": "取机专用章 + 7位站号",
             },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,
@@ -572,6 +610,8 @@ class SealReferenceMatcher:
                 if high_support_accepted else
                 "与人工真值阳性章形成超高支持度几何一致，局部覆盖不足源于遮挡或裁剪"
                 if ultra_support_accepted else
+                "当前章保留三星服务中心文字，并与同七位站号要求的人工真值阳性章形成大面积几何一致"
+                if branded_station_accepted else
                 "去除稀疏彩色扫描噪点后，与人工真值阳性章形成高纯度大面积几何一致"
                 if trimmed_chromatic_accepted else
                 "同一章区与至少两份独立人工真值阳性章形成几何一致"
@@ -1143,6 +1183,36 @@ def _passes_trimmed_chromatic_gate(evidence: dict) -> bool:
     )
 
 
+def _passes_branded_station_gate(
+    evidence: dict,
+    *,
+    requirement: str,
+    recognized: str,
+) -> bool:
+    """Accept only the numbered Samsung pickup-stamp reference shape."""
+    normalized_requirement = normalize_text(requirement)
+    normalized_recognized = normalize_text(recognized)
+    if not re.fullmatch(
+        r"三星电子服务中心取机专用章\d{7}站",
+        normalized_requirement,
+    ):
+        return False
+    if "三星电子服务中心" not in normalized_recognized:
+        return False
+    return bool(
+        int(evidence.get("good_matches", 0))
+        >= BRANDED_STATION_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= BRANDED_STATION_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= BRANDED_STATION_MIN_SURFACE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= BRANDED_STATION_MIN_SURFACE_COVERAGE
+    )
+
+
 def _passes_color_mask_gate(evidence: dict) -> bool:
     return bool(
         float(evidence.get("color_mask_score", 0)) >= COLOR_MASK_MIN_SCORE
@@ -1460,6 +1530,30 @@ def _reference_confidence(
                     0.0,
                     float(evidence["inlier_ratio"])
                     - TRIMMED_CHROMATIC_MIN_INLIER_RATIO,
+                ) / 0.15,
+            ),
+        )
+    elif route == "branded_station_single_reference":
+        # The semantic stamp family and seven-digit station structure are
+        # independent of SIFT.  Keep the one-reference result below the
+        # strongest generic matches even when its geometric margin grows.
+        confidence = min(
+            0.95,
+            0.92
+            + 0.02 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence["homography_inliers"])
+                    - BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
+                ) / 40,
+            )
+            + 0.01 * min(
+                1.0,
+                max(
+                    0.0,
+                    float(evidence["inlier_ratio"])
+                    - BRANDED_STATION_MIN_INLIER_RATIO,
                 ) / 0.15,
             ),
         )

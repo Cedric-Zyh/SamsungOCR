@@ -294,6 +294,7 @@ function renderArtifacts() {
         high_ratio_single_reference: '高内点率路线通过',
         high_support_minor_coverage: '高支持度微覆盖路线通过',
         ultra_support_partial_coverage: '超高支持度局部覆盖路线通过',
+        branded_station_single_reference: '三星服务中心站号章结构与几何联合通过',
       }[reference?.route] || '达到单参考严格门槛';
       const referenceInfo = reference
         ? `<small class="${reference.accepted ? '' : 'low-note'}">参考章几何复核：${reference.accepted ? acceptedRouteLabel : '未达到门槛'} · 内点 ${reference.homography_inliers || 0}/${reference.good_matches || 0} · 内点率 ${percent(reference.inlier_ratio || 0)} · 章面覆盖 ${percent(Math.min(reference.candidate_coverage || 0, reference.reference_coverage || 0))}${regularGeometryInfo}${reference.color_mask_score ? ` · 彩色墨迹 ${percent(reference.color_mask_score)}（相关 ${percent(reference.color_mask_correlation || 0)} / Dice ${percent(reference.color_mask_dice || 0)}）` : ''} · 参考 ${escapeHtml(reference.reference_filename || '')}${consensusInfo}</small>`

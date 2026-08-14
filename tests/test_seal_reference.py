@@ -6,6 +6,10 @@ import cv2
 import numpy as np
 
 from receipt_ocr.seal_reference import (
+    BRANDED_STATION_MIN_GOOD_MATCHES,
+    BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
+    BRANDED_STATION_MIN_INLIER_RATIO,
+    BRANDED_STATION_MIN_SURFACE_COVERAGE,
     CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
     CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
     CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -62,6 +66,7 @@ from receipt_ocr.seal_reference import (
     _best_high_purity_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
+    _passes_branded_station_gate,
     _passes_trimmed_chromatic_gate,
     _passes_ultra_support_gate,
     _passes_color_mask_gate,
@@ -600,6 +605,81 @@ def test_high_ratio_single_reference_enforces_compensating_boundaries():
             "good_matches", "homography_inliers"
         } else 0.001
         assert _passes_high_ratio_gate(reduced) is False
+
+
+def test_branded_station_reference_requires_structure_text_and_geometry():
+    evidence = {
+        "good_matches": BRANDED_STATION_MIN_GOOD_MATCHES,
+        "homography_inliers": BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": BRANDED_STATION_MIN_INLIER_RATIO,
+        "candidate_coverage": BRANDED_STATION_MIN_SURFACE_COVERAGE,
+        "reference_coverage": BRANDED_STATION_MIN_SURFACE_COVERAGE,
+    }
+    requirement = "三星电子服务中心取机专用章5785258站"
+    recognized = "三星电子服务中心"
+    assert _passes_branded_station_gate(
+        evidence, requirement=requirement, recognized=recognized
+    ) is True
+
+    for key in evidence:
+        reduced = dict(evidence)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert _passes_branded_station_gate(
+            reduced, requirement=requirement, recognized=recognized
+        ) is False
+    assert _passes_branded_station_gate(
+        evidence,
+        requirement="三星电子服务中心取机专用章578525站",
+        recognized=recognized,
+    ) is False
+    assert _passes_branded_station_gate(
+        evidence,
+        requirement=requirement,
+        recognized="三星电子维修中心",
+    ) is False
+
+
+def test_match_reports_branded_station_single_reference_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+    requirement = "三星电子服务中心取机专用章5785258站"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg", requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png", path=reference,
+    )]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": BRANDED_STATION_MIN_GOOD_MATCHES,
+        "homography_inliers": BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": BRANDED_STATION_MIN_INLIER_RATIO,
+        "candidate_coverage": BRANDED_STATION_MIN_SURFACE_COVERAGE,
+        "reference_coverage": BRANDED_STATION_MIN_SURFACE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_a: {
+        "color_mask_score": 0.0,
+        "color_mask_correlation": 0.0,
+        "color_mask_dice": 0.0,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+    result = _result("/files/artifacts/candidate/seal.png")
+    result["seal_check"]["requirement"] = requirement
+    result["seal_check"]["recognized"] = "三星电子服务中心"
+
+    matched = matcher.match(result)
+
+    assert matched["accepted"] is True
+    assert matched["route"] == "branded_station_single_reference"
+    assert matched["confidence"] >= 0.92
 
 
 def test_high_support_minor_coverage_enforces_every_compensating_boundary():
