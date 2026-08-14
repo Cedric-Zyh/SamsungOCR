@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+.idea/
+.DS_Store
+.playwright-cli/
+.pytest_cache/
+.env
+node_modules
+
+# 本地运行产物、数据库、中间过程图和导出文件均可由源码重新生成。
+output/
+outputs/
+storage/
+tmp/
+
+# 样单图片保留在本地；人工真值 JSON 单独纳入版本控制。
+数据/*.jpg
+数据/*.jpeg
+数据/*.png
+数据/*.bmp
+数据/*.webp
+
+# 外部接口文档作为本地参考资料，不提交二进制附件。
+*.pdf
+
+storage/uploads/
+storage/previews/
+storage/artifacts/
+storage/exports/*.json
+storage/results.db

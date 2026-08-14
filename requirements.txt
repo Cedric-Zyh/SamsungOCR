@@ -1,0 +1,14 @@
+Flask==3.1.3
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+pandas==2.2.3
+Bottleneck==1.4.2
+Pillow==10.0.1
+paddlepaddle==3.3.1
+paddleocr==3.6.0
+pyobjc-core==12.2.2; platform_system == "Darwin"
+pyobjc-framework-Cocoa==12.2.2; platform_system == "Darwin"
+pyobjc-framework-Quartz==12.2.2; platform_system == "Darwin"
+pyobjc-framework-CoreML==12.2.2; platform_system == "Darwin"
+pyobjc-framework-Vision==12.2.2; platform_system == "Darwin"
+requests==2.31.0

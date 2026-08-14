@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>三星回单核验台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e44e2e'/%3E%3Cpath d='M18 18h28v28H18z' fill='none' stroke='white' stroke-width='4'/%3E%3Cpath d='M24 27h16M24 35h11' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="shell app-shell">
+    <header class="hero compact-hero">
+      <div><p class="eyebrow">SAMSUNG · POD REVIEW</p><h1>三星回单核验台</h1><p class="subtitle">批量识别、证据回看、人工复核与准确率追踪。</p></div>
+      <div class="engine-card"><span class="status-dot"></span><div><strong>本地识别引擎已就绪</strong><small>Vision / PaddleOCR · 可扩展后端</small></div></div>
+    </header>
+
+    <section class="dashboard-section">
+      <div class="section-heading"><div><p class="eyebrow">QUALITY OVERVIEW</p><h2>质量概览</h2><small id="accuracy-scope">正在加载评测口径…</small></div><button id="refresh-report" class="text-button">刷新统计</button></div>
+      <div id="kpi-grid" class="kpi-grid"><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div></div>
+      <div class="report-grid"><div class="report-card"><h3>错误类型统计</h3><div id="error-stats" class="stat-list"></div></div><div class="report-card"><h3>字段准确率</h3><div id="field-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>商品单元格准确率</h3><div id="product-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>OCR 后端对比</h3><div id="backend-comparison" class="backend-list"></div></div></div>
+    </section>
+
+    <section class="workspace batch-workspace">
+      <div class="upload-panel">
+        <div id="drop-zone" class="drop-zone small-drop" aria-label="上传回单图片">
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
+          <input id="folder-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" webkitdirectory directory multiple hidden>
+          <div class="upload-icon">↥</div><h2>拖入多张回单图片</h2><p>支持一次批量上传，也可以选择整个文件夹</p>
+          <div class="button-row"><button type="button" class="primary-button" id="choose-file">选择图片</button><button type="button" class="secondary-button" id="choose-folder">选择文件夹</button></div>
+        </div>
+        <div class="ocr-engine-picker">
+          <label for="ocr-backend"><span>本次 OCR 引擎</span><select id="ocr-backend">{% for backend in ocr_backend_catalog %}<option value="{{ backend.id }}" data-model-home="{{ backend.model_home }}" data-model-name="{{ backend.model_name or '' }}" data-max-page-side="{{ backend.get('max_page_side', '') }}" data-route-page="{{ backend.get('route', {}).get('page', '') }}" data-route-date="{{ backend.get('route', {}).get('date', '') }}" data-route-seal="{{ backend.get('route', {}).get('seal', '') }}" data-safety-policy="{{ backend.get('safety_policy', '') }}" data-usage-note="{{ backend.get('usage_note', '') }}" data-reason="{{ backend.reason }}" {{ 'selected' if backend.id == default_ocr_backend else '' }} {{ 'disabled' if not backend.available else '' }}>{{ backend.label }}{{ '（推荐）' if backend.get('recommended') else '' }}{{ '' if backend.available else '（不可用）' }}</option>{% endfor %}</select></label>
+          <small id="ocr-backend-detail"></small>
+        </div>
+        <div class="sample-row"><span>已标注样单</span><div class="sample-buttons"><button class="sample-button accent" id="run-all-samples">一键测试全部 {{ samples|length }} 张</button>{% for sample in samples %}<button class="sample-button" data-sample="{{ sample }}">{{ sample.split('.')[0] }}</button>{% endfor %}</div></div>
+      </div>
+      <aside class="rules-panel batch-aside"><h3>安全判定规则</h3><div class="rule-item"><span>01</span><div><strong>低置信度标黄</strong><p>字段低于 72% 自动提示，不隐瞒不确定性。</p></div></div><div class="rule-item"><span>02</span><div><strong>证据不足待复核</strong><p>日期或印章不可靠时禁止自动判定通过。</p></div></div><div class="rule-item"><span>03</span><div><strong>全过程可追溯</strong><p>保留原始值、人工值、修改时间和中间处理图。</p></div></div><div class="api-note {{ 'active' if seal_api_enabled else '' }}"><b>{{ '印章 API 已启用' if seal_api_enabled else '当前使用本地印章识别' }}</b><span>{{ '远程与本地结果交叉验证' if seal_api_enabled else '配置 SEAL_API_KEY 后可自动增强' }}</span></div></aside>
+    </section>
+
+    <section id="task-section" class="queue-section hidden">
+      <div class="section-heading"><div><p class="eyebrow">BATCH TASK</p><h2 id="task-name">批量识别任务</h2></div><span id="task-summary"></span></div>
+      <div class="progress-track"><span id="task-progress"></span></div>
+      <div class="task-metrics"><div><b id="task-total">0</b><span>总数</span></div><div><b id="task-completed">0</b><span>完成</span></div><div><b id="task-success">0</b><span>成功</span></div><div><b id="task-failed">0</b><span>失败</span></div><div><b id="task-review">0</b><span>待复核</span></div></div>
+      <div id="queue" class="queue compact-queue"></div>
+    </section>
+
+    <section class="results-section records-section">
+      <div class="section-heading records-heading"><div><p class="eyebrow">REVIEW WORKBENCH</p><h2>回单记录</h2></div><div class="toolbar-actions"><button id="bulk-pass" class="secondary-button">批量确认通过</button><button id="bulk-pending" class="secondary-button">批量待复核</button><button id="bulk-retry" class="secondary-button">批量重新识别</button><button id="export-excel" class="primary-button">导出 Excel</button></div></div>
+      <form id="filters" class="filters"><input name="filename" placeholder="文件名"><input name="order_id" placeholder="订单号"><input name="customer" placeholder="客户"><input type="date" name="date"><select name="overall"><option value="">全部核验结果</option><option>通过</option><option>不通过</option><option>需人工复核</option><option>识别失败</option></select><select name="review_status"><option value="">全部复核状态</option><option>无需复核</option><option>待复核</option><option>确认通过</option><option>确认不通过</option></select><button class="secondary-button" type="submit">筛选</button><button class="text-button" type="reset" id="reset-filters">清空</button></form>
+      <div class="table-wrap"><table class="records-table"><thead><tr><th><input id="select-all" type="checkbox" aria-label="全选"></th><th>文件名 / 订单号</th><th>客户</th><th>要求 / 实际到货</th><th>日期</th><th>印章</th><th>整体结论</th><th>复核状态</th><th>处理时间</th><th>操作</th></tr></thead><tbody id="records-body"><tr><td colspan="10" class="empty-state">正在加载记录…</td></tr></tbody></table></div>
+    </section>
+
+    <footer><span>解释器：{{ python_path }}</span><span>数据库：storage/results.db</span></footer>
+  </main>
+
+  <div id="review-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="review-title">
+    <div class="modal-backdrop" data-close-modal></div>
+    <section class="modal-panel"><header class="modal-header"><div><p class="eyebrow">HUMAN REVIEW</p><h2 id="review-title">人工复核</h2></div><button class="icon-button" data-close-modal aria-label="关闭">×</button></header><div id="review-content" class="modal-content"></div></section>
+  </div>
+
+  <template id="review-template">
+    <div class="review-layout">
+      <aside class="review-preview"><img data-preview alt="回单标注预览"><div class="status-summary" data-status-summary></div></aside>
+      <form id="review-form" class="review-form"><input type="hidden" name="result_id"><section class="review-block"><h3>识别字段 <span>黄色项需要重点检查</span></h3><div class="editable-fields" data-fields></div></section><section class="review-block product-review-block" data-product-section><h3>商品明细表 <span>按表头定位列、按纵坐标聚合行；黄色单元格需要检查</span></h3><div class="product-table-wrap" data-product-table></div></section><section class="review-block"><h3>日期与印章人工值</h3><div class="edit-grid"><label>实际收货日期<input type="date" name="actual_date"></label><label>识别印章内容<textarea name="seal_text" rows="3"></textarea></label><label>错误类型<select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select></label><label>人工备注<textarea name="human_note" rows="3"></textarea></label></div></section><section class="review-block truth-block"><h3>评测真值 <span data-truth-status>正在检查是否已有真值…</span></h3><p>确认字段、商品、实际日期和印章结论后，可将当前人工值纳入准确率分母；每次更新都会写入本地审计历史。</p><div class="truth-controls"><label class="check-label"><input type="checkbox" name="save_ground_truth"> 本次确认同时保存为评测真值</label><label>印章真值结论<select name="truth_seal_should_match"><option value="">请选择人工结论</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select></label></div><div data-truth-history class="truth-history"></div></section><section class="review-block"><h3>中间处理过程</h3><div class="artifact-tabs"><button type="button" class="artifact-tab active" data-artifact-tab="date">手写日期区域</button><button type="button" class="artifact-tab" data-artifact-tab="seals">印章区域</button></div><div data-artifacts></div></section><section class="review-block"><h3>复核历史</h3><div data-history class="history-list"></div></section><div class="review-actions"><button type="button" class="secondary-button" data-retry>单张重新识别</button><button type="button" class="secondary-button warning-button" data-save-pending>保存并待复核</button><button type="button" class="danger-button" data-confirm-fail>确认不通过</button><button type="button" class="primary-button success-button" data-confirm-pass>确认通过</button></div></form>
+    </div>
+  </template>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260814-6"></script>
+</body>
+</html>

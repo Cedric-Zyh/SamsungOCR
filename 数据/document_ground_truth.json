@@ -1,0 +1,23 @@
+{
+  "documents": {
+    "7279511621_01.jpg": {"type": "warehouse_authorization"},
+    "7284571207.jpg": {"type": "receipt", "product_row_count": 33},
+    "7284571207_01.jpg": {"type": "product_continuation", "product_row_count": 34},
+    "7287296276_01.jpg": {"type": "warehouse_authorization"},
+    "7295149808_01.jpg": {"type": "warehouse_authorization"},
+    "7306087413_01.jpg": {"type": "warehouse_authorization"},
+    "7314208184_01.jpg": {"type": "warehouse_authorization"},
+    "7323206930_01.jpg": {"type": "warehouse_authorization"},
+    "7324045137_01.jpg": {"type": "warehouse_authorization"},
+    "7324339102_01.jpg": {"type": "warehouse_authorization"}
+  },
+  "logical_receipts": {
+    "7284571207": {
+      "page_count": 2,
+      "product_row_count": 67,
+      "first_row_number": 10,
+      "last_row_number": 670,
+      "row_number_step": 10
+    }
+  }
+}
