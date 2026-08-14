@@ -31,6 +31,9 @@ from receipt_ocr.analyzer import (
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _cross_model_server_strict_component_date,
+    _parse_full_year_month_day_audit,
+    _white_day_conflict_prefilter_from_artifacts,
+    _white_day_conflict_audit_candidate,
     _date_component_consensus_from_artifacts,
     _server_cross_geometry_strict_date_from_artifacts,
     _server_strict_component_consensus_from_artifacts,
@@ -3379,6 +3382,82 @@ def test_day_slot_requires_mobile_server_and_both_preprocessings():
     assert not _day_slot_confirms_value(strong[:3], 13)
     strong[-1]["parsed_components"] = ["3"]
     assert not _day_slot_confirms_value(strong, 13)
+
+
+def _white_day_conflict_artifacts():
+    return [
+        {
+            "variant": geometry,
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年8月22月"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年8月23月"],
+                },
+            ],
+        }
+        for geometry in ("紧凑区域", "宽区域")
+    ]
+
+
+def test_white_day_conflict_prefilter_requires_hybrid_two_geometries():
+    assert _parse_full_year_month_day_audit(
+        "2025年8月22月"
+    ) == date(2025, 8, 22)
+    assert _parse_full_year_month_day_audit("20年8月22日") is None
+
+    artifacts = _white_day_conflict_artifacts()
+    selected = _white_day_conflict_prefilter_from_artifacts(
+        artifacts, "2025-08-23"
+    )
+    assert selected is not None
+    assert selected["date"] == date(2025, 8, 22)
+    assert selected["conflict"] == date(2025, 8, 23)
+    assert _white_day_conflict_prefilter_from_artifacts(
+        artifacts[:1], "2025-08-23"
+    ) is None
+    artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    assert _white_day_conflict_prefilter_from_artifacts(
+        artifacts, "2025-08-23"
+    ) is None
+
+
+def test_white_day_conflict_candidate_stays_component_strict():
+    prefilter = _white_day_conflict_prefilter_from_artifacts(
+        _white_day_conflict_artifacts(), "2025-08-23"
+    )
+    variants = [
+        {
+            "slot": "整行冲突完整年份槽位",
+            "model": model,
+            "preprocessing": "最大通道去彩色",
+            "ocr_texts": ["2025年8"],
+        }
+        for model in ("mobile", "server")
+    ] + [
+        {
+            "slot": "整行冲突白边日上下文槽位",
+            "model": model,
+            "preprocessing": preprocessing,
+            "ocr_texts": ["月22日" if model == "server" else "月22月"],
+        }
+        for model in ("mobile", "server")
+        for preprocessing in ("白边标准化", "裁后白边标准化")
+    ]
+    assert _white_day_conflict_audit_candidate(
+        prefilter, variants
+    ) == date(2025, 8, 22)
+    variants[-1]["ocr_texts"] = ["月23日"]
+    assert _white_day_conflict_audit_candidate(prefilter, variants) is None
 
 
 def test_missing_year_separator_parser_requires_all_literal_components():
