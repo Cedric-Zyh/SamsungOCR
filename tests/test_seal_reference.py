@@ -10,6 +10,16 @@ from receipt_ocr.seal_reference import (
     BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
     BRANDED_STATION_MIN_INLIER_RATIO,
     BRANDED_STATION_MIN_SURFACE_COVERAGE,
+    COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE,
+    COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES,
+    COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+    COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
+    COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT,
+    COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE,
     CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
     CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
     CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -67,6 +77,7 @@ from receipt_ocr.seal_reference import (
     _passes_high_ratio_gate,
     _passes_high_support_gate,
     _passes_branded_station_gate,
+    _passes_company_conflict_reference_gate,
     _passes_trimmed_chromatic_gate,
     _passes_ultra_support_gate,
     _passes_color_mask_gate,
@@ -134,20 +145,174 @@ def test_reference_match_requires_every_strict_boundary(tmp_path, monkeypatch):
         assert matcher.match(result)["accepted"] is False
 
 
-def test_reference_match_rejects_company_conflict_before_visual_comparison(
+def test_reference_match_keeps_generic_company_conflict_block(
     tmp_path, monkeypatch
 ):
-    matcher = SealReferenceMatcher(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    candidate.parent.mkdir(parents=True)
+    reference.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate")
+    reference.write_bytes(b"reference")
+    matcher = SealReferenceMatcher(artifact_root)
+    requirement = "测试科技有限公司维修专用章"
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    called = {"value": False}
+
+    def compare(*_args):
+        called["value"] = True
+        return {
+            "good_matches": MIN_GOOD_MATCHES,
+            "homography_inliers": MIN_HOMOGRAPHY_INLIERS,
+            "inlier_ratio": MIN_INLIER_RATIO,
+            "candidate_coverage": MIN_SURFACE_COVERAGE,
+            "reference_coverage": MIN_SURFACE_COVERAGE,
+        }
+
     monkeypatch.setattr(
-        matcher,
-        "_compare",
-        lambda *_a: (_ for _ in ()).throw(AssertionError("不应执行视觉匹配")),
+        matcher, "_compare", compare,
     )
     evidence = matcher.match(_result(
         "/files/artifacts/candidate/seal.png", conflict=True
     ))
+    assert called["value"] is True
     assert evidence["accepted"] is False
-    assert "前提" in evidence["reason"]
+    assert "公司主体冲突" in evidence["reason"]
+
+
+def test_company_conflict_reference_gate_requires_every_independent_boundary():
+    seal_check = {
+        "requirement": "辽宁旭睿科技有限公司售后专用章",
+        "recognized": (
+            "辽丁旭睿科技有限公1辽宁旭香科技有限公司售后专用章"
+        ),
+        "company_conflict": True,
+        "company_score": COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
+    }
+    evidence = {
+        "good_matches": COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES,
+        "homography_inliers": (
+            COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+        ),
+        "inlier_ratio": COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
+        "candidate_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        ),
+        "reference_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        ),
+        "chromatic_good_matches": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+        ),
+        "chromatic_homography_inliers": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        ),
+        "chromatic_inlier_ratio": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+        ),
+        "chromatic_candidate_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+        "chromatic_reference_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+    }
+    assert COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT == 6
+    assert _passes_company_conflict_reference_gate(evidence, seal_check)
+    for key in evidence:
+        reduced = dict(evidence)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert not _passes_company_conflict_reference_gate(
+            reduced, seal_check
+        )
+    assert not _passes_company_conflict_reference_gate(
+        evidence, {**seal_check, "recognized": "无关公司售后专用章"}
+    )
+    assert not _passes_company_conflict_reference_gate(
+        evidence, {**seal_check, "recognized": "辽丁旭睿科技有限公1"}
+    )
+    assert not _passes_company_conflict_reference_gate(
+        evidence,
+        {
+            **seal_check,
+            "company_score": COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE
+            - 0.001,
+        },
+    )
+    assert not _passes_company_conflict_reference_gate(
+        evidence, {**seal_check, "company_conflict": False}
+    )
+    assert not _passes_company_conflict_reference_gate(
+        evidence, {**seal_check, "requirement": "辽宁旭睿科技有限公司业务专用章"}
+    )
+
+
+def test_match_reports_company_conflict_ultra_reference_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "辽宁旭睿科技有限公司售后专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_args: {
+        "good_matches": COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES,
+        "homography_inliers": (
+            COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+        ),
+        "inlier_ratio": COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
+        "candidate_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        ),
+        "reference_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        ),
+    })
+    monkeypatch.setattr(matcher, "_compare_chromatic_crop", lambda *_args: {
+        "good_matches": COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
+        "homography_inliers": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        ),
+        "inlier_ratio": COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO,
+        "candidate_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+        "reference_coverage": (
+            COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+    })
+    result = _result(
+        "/files/artifacts/candidate/seal.png", conflict=True
+    )
+    result["seal_check"].update({
+        "requirement": requirement,
+        "recognized": "辽宁旭谷科技有限公司",
+        "all_recognized": ["辽丁旭省科技有限公司", "售后专用章"],
+        "company_score": COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
+    })
+    accepted = matcher.match(result)
+    assert accepted["accepted"] is True
+    assert accepted["route"] == "company_conflict_ultra_reference"
+    assert accepted["reference_filename"] == "confirmed.jpg"
+    assert "双表示" in accepted["reason"]
+    assert accepted["confidence"] == 0.93
 
 
 def _consensus_evidence(

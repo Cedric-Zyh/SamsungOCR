@@ -122,6 +122,28 @@ BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS = 70
 BRANDED_STATION_MIN_INLIER_RATIO = 0.72
 BRANDED_STATION_MIN_SURFACE_COVERAGE = 0.50
 
+# A complete but conflicting OCR company name remains a hard block for every
+# generic visual-reference route.  One exceptionally strong, independently
+# constrained fallback is allowed for a repeated 售后专用章: the current OCR
+# must still contain the exact specific stamp type and a company fragment,
+# while one human-confirmed same-requirement reference must form very dense
+# geometry in both the regular and chromatic-crop representations. Across two
+# real reruns the target regular geometry was 192/136 or 198/156; its
+# independent chromatic geometry was 180/145 at 80.56% purity and 55%+
+# bidirectional coverage. The strongest known wrong-stamp control is only
+# 46/24 regular and 46/21 chromatic. All thresholds are independent AND gates;
+# neither representation may promote the result alone.
+COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES = 180
+COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS = 130
+COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO = 0.70
+COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE = 0.50
+COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES = 175
+COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS = 140
+COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO = 0.78
+COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE = 0.50
+COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE = 0.82
+COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT = 6
+
 # Color-ink geometry is a fallback for faded scans where SIFT cannot retain
 # enough local keypoints.  The full 301-receipt matrix has a wide margin:
 # accepted positives start at 0.8158/0.8096/0.8319 for composite score,
@@ -160,8 +182,9 @@ class SealReferenceMatcher:
     route for repeated customer stamps: references must come from a positive
     ground-truth row, the normalized signature requirement must be identical,
     and local feature matches must form a broad homography over both stamp
-    surfaces.  A short logo/star match or a conflicting OCR company name can
-    never promote a result.
+    surfaces.  A short logo/star match can never promote a result. Conflicting
+    OCR company names remain blocked except for the explicit ultra-strong
+    same-requirement 售后章 route documented above.
     """
 
     def __init__(self, artifact_root: str | Path) -> None:
@@ -266,7 +289,6 @@ class SealReferenceMatcher:
         if (
             not self.enabled
             or seal_check.get("reliable") is True
-            or seal_check.get("company_conflict") is True
             or not str(seal_check.get("recognized") or "").strip()
         ):
             return {"accepted": False, "reason": "不满足视觉参考章复核前提"}
@@ -361,6 +383,9 @@ class SealReferenceMatcher:
             requirement=requirement,
             recognized=str(seal_check.get("recognized") or ""),
         )
+        company_conflict_reference_accepted = (
+            _passes_company_conflict_reference_gate(best, seal_check)
+        )
         trimmed_chromatic_accepted = bool(
             best_trimmed_chromatic is not None
             and _passes_trimmed_chromatic_gate(best_trimmed_chromatic)
@@ -432,17 +457,25 @@ class SealReferenceMatcher:
             )
         ):
             best = best_color
-        accepted = (
-            strict_accepted or high_ratio_accepted
-            or high_support_accepted or ultra_support_accepted
-            or branded_station_accepted
-            or trimmed_chromatic_accepted
-            or consensus_accepted or high_purity_consensus_accepted
-            or chromatic_consensus_accepted
-            or color_mask_accepted or color_sift_accepted
+        generic_routes_allowed = not bool(
+            seal_check.get("company_conflict")
+        )
+        accepted = company_conflict_reference_accepted or (
+            generic_routes_allowed and (
+                strict_accepted or high_ratio_accepted
+                or high_support_accepted or ultra_support_accepted
+                or branded_station_accepted
+                or trimmed_chromatic_accepted
+                or consensus_accepted or high_purity_consensus_accepted
+                or chromatic_consensus_accepted
+                or color_mask_accepted or color_sift_accepted
+            )
         )
         route = (
-            "strict_single_reference" if strict_accepted
+            "company_conflict_ultra_reference"
+            if company_conflict_reference_accepted
+            else "rejected" if not generic_routes_allowed
+            else "strict_single_reference" if strict_accepted
             else "high_ratio_single_reference" if high_ratio_accepted
             else "high_support_minor_coverage" if high_support_accepted
             else "ultra_support_partial_coverage" if ultra_support_accepted
@@ -531,6 +564,39 @@ class SealReferenceMatcher:
                 "required_text": "三星电子服务中心",
                 "requirement_structure": "取机专用章 + 7位站号",
             },
+            "company_conflict_ultra_reference": {
+                "good_matches": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES
+                ),
+                "homography_inliers": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO
+                ),
+                "surface_coverage": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
+                "company_score": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE
+                ),
+                "shared_company_fragment": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT
+                ),
+                "specific_stamp_type": "售后专用章",
+            },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,
                 "top_inliers": CONSENSUS_MIN_TOP_INLIERS,
@@ -602,6 +668,8 @@ class SealReferenceMatcher:
         )
         best["reason"] = (
             (
+                "当前章保留售后专用章和公司片段，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
+                if company_conflict_reference_accepted else
                 "与同签章要求的人工真值阳性章形成大面积几何一致"
                 if strict_accepted else
                 "与人工真值阳性章形成高内点率的大面积几何一致"
@@ -625,6 +693,8 @@ class SealReferenceMatcher:
                 "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
             )
             if accepted else
+            "公司主体冲突且未达到超高参考几何联合门槛"
+            if seal_check.get("company_conflict") else
             "视觉特征未达到人工真值参考章的严格几何门槛"
         )
         return best
@@ -1213,6 +1283,77 @@ def _passes_branded_station_gate(
     )
 
 
+def _longest_common_substring_length(left: str, right: str) -> int:
+    """Return the longest contiguous shared fragment length."""
+    if not left or not right:
+        return 0
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for left_character in left:
+        current = [0]
+        for index, right_character in enumerate(right, start=1):
+            value = (
+                previous[index - 1] + 1
+                if left_character == right_character else 0
+            )
+            current.append(value)
+            best = max(best, value)
+        previous = current
+    return best
+
+
+def _passes_company_conflict_reference_gate(
+    evidence: dict, seal_check: dict,
+) -> bool:
+    """Override one OCR conflict only with ultra-strong independent evidence."""
+    if seal_check.get("company_conflict") is not True:
+        return False
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    recognized = normalize_text(" ".join([
+        str(seal_check.get("recognized") or ""),
+        *[
+            str(value)
+            for value in (seal_check.get("all_recognized") or [])
+        ],
+    ]))
+    specific_type = "售后专用章"
+    if (
+        not requirement.endswith(specific_type)
+        or specific_type not in recognized
+    ):
+        return False
+    required_company = requirement[: -len(specific_type)]
+    shared_fragment = _longest_common_substring_length(
+        required_company, recognized
+    )
+    return bool(
+        float(seal_check.get("company_score", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE
+        and shared_fragment
+        >= COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT
+        and int(evidence.get("good_matches", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+        and int(evidence.get("chromatic_good_matches", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+        and int(evidence.get("chromatic_homography_inliers", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        and float(evidence.get("chromatic_inlier_ratio", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+        and float(evidence.get("chromatic_candidate_coverage", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+        and float(evidence.get("chromatic_reference_coverage", 0))
+        >= COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+    )
+
+
 def _passes_color_mask_gate(evidence: dict) -> bool:
     return bool(
         float(evidence.get("color_mask_score", 0)) >= COLOR_MASK_MIN_SCORE
@@ -1428,6 +1569,30 @@ def _reference_confidence(
             0.91 + 0.01 * min(
                 3.0,
                 max(0, second_inliers - CONSENSUS_MIN_HOMOGRAPHY_INLIERS) / 5,
+            ),
+        )
+    elif route == "company_conflict_ultra_reference":
+        # The visual margin is exceptional, but this route still overrides a
+        # contrary OCR company token.  Keep it below the strongest clean-text
+        # strict matches and expose the conflict in the evidence record.
+        confidence = min(
+            0.96,
+            0.93
+            + 0.02 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence["homography_inliers"])
+                    - COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+                ) / 60,
+            )
+            + 0.01 * min(
+                1.0,
+                max(
+                    0.0,
+                    float(evidence["inlier_ratio"])
+                    - COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
+                ) / 0.15,
             ),
         )
     elif route == "high_purity_multi_reference_consensus":

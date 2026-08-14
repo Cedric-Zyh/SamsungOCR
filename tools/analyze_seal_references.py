@@ -24,6 +24,16 @@ from receipt_ocr.seal_reference import (
     COLOR_SIFT_MIN_INLIER_RATIO,
     COLOR_SIFT_MIN_SCORE,
     COLOR_SIFT_MIN_SURFACE_COVERAGE,
+    COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO,
+    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE,
+    COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES,
+    COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS,
+    COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
+    COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT,
+    COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE,
     CONSENSUS_MIN_DISTINCT_REFERENCES,
     CONSENSUS_MIN_GOOD_MATCHES,
     CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -129,6 +139,21 @@ def build_report(
             "reference_coverage": float(
                 evidence.get("reference_coverage", 0)
             ),
+            "chromatic_good_matches": int(
+                evidence.get("chromatic_good_matches", 0)
+            ),
+            "chromatic_homography_inliers": int(
+                evidence.get("chromatic_homography_inliers", 0)
+            ),
+            "chromatic_inlier_ratio": float(
+                evidence.get("chromatic_inlier_ratio", 0)
+            ),
+            "chromatic_candidate_coverage": float(
+                evidence.get("chromatic_candidate_coverage", 0)
+            ),
+            "chromatic_reference_coverage": float(
+                evidence.get("chromatic_reference_coverage", 0)
+            ),
             "color_mask_score": float(
                 evidence.get("color_mask_score", 0)
             ),
@@ -175,6 +200,39 @@ def build_report(
                 "homography_inliers": ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": ULTRA_SUPPORT_MIN_INLIER_RATIO,
                 "surface_coverage": ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
+            },
+            "company_conflict_ultra_reference": {
+                "good_matches": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_GOOD_MATCHES
+                ),
+                "homography_inliers": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO
+                ),
+                "surface_coverage": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
+                "company_score": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE
+                ),
+                "shared_company_fragment": (
+                    COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT
+                ),
+                "specific_stamp_type": "售后专用章",
             },
             "consensus": {
                 "distinct_references": CONSENSUS_MIN_DISTINCT_REFERENCES,
