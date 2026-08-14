@@ -25,6 +25,8 @@ from receipt_ocr.analyzer import (
     _cross_model_far_lower_strict_date,
     _day_slot_confirms_value,
     _max_channel_truncated_mismatch_candidate,
+    _missing_year_separator_consensus_from_artifacts,
+    _parse_missing_year_separator_full_date,
     _cross_model_max_channel_required_with_truncated_conflict,
     _cross_model_slot_required_date,
     _date_component_consensus_from_artifacts,
@@ -3133,6 +3135,79 @@ def test_day_slot_requires_mobile_server_and_both_preprocessings():
     assert not _day_slot_confirms_value(strong[:3], 13)
     strong[-1]["parsed_components"] = ["3"]
     assert not _day_slot_confirms_value(strong, 13)
+
+
+def test_missing_year_separator_parser_requires_all_literal_components():
+    assert _parse_missing_year_separator_full_date(
+        "20256月16日"
+    ) == date(2025, 6, 16)
+    assert _parse_missing_year_separator_full_date("2025年6月16日") is None
+    assert _parse_missing_year_separator_full_date(
+        "20546月16日"
+    ) == date(2054, 6, 16)
+    assert _parse_missing_year_separator_full_date("20256月32日") is None
+
+
+def test_missing_year_separator_consensus_keeps_platform_and_conflict_guards():
+    artifact = {
+        "variant": "紧凑区域",
+        "ocr_backend": "macOS Vision",
+        "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+        "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+        "date_line_ocr_variants": [
+            {
+                "preprocessing": "日期行原图",
+                "ocr_texts": ["20256月16日"],
+            },
+            {
+                "preprocessing": "日期行去表格线",
+                "ocr_texts": ["2025年6月6日"],
+            },
+            {
+                "preprocessing": "日期行 Server 大模型复核",
+                "ocr_texts": ["2025年6月16日"],
+            },
+        ],
+    }
+    accepted = _missing_year_separator_consensus_from_artifacts(
+        [artifact], "2025-06-16"
+    )
+    assert accepted is not None and accepted["date"] == date(2025, 6, 16)
+    assert accepted["other_dates"] == ["2025-06-06"]
+
+    assert _missing_year_separator_consensus_from_artifacts(
+        [{**artifact, "ocr_backend": "PaddleOCR PP-OCRv5 Mobile"}],
+        "2025-06-16",
+    ) is None
+    assert _missing_year_separator_consensus_from_artifacts(
+        [artifact], "2025-06-15"
+    ) is None
+    wrong_literal_year = {
+        **artifact,
+        "date_line_ocr_variants": [
+            {
+                "preprocessing": "日期行原图",
+                "ocr_texts": ["20546月16日"],
+            },
+            {
+                "preprocessing": "日期行 Server 大模型复核",
+                "ocr_texts": ["2054年6月16日"],
+            },
+        ],
+    }
+    assert _missing_year_separator_consensus_from_artifacts(
+        [wrong_literal_year], "2025-06-16"
+    ) is None
+    conflicting = {
+        **artifact,
+        "date_line_ocr_variants": artifact["date_line_ocr_variants"] + [{
+            "preprocessing": "日期行灰度自动对比 Server 人工候选",
+            "ocr_texts": ["2025年6月12日"],
+        }],
+    }
+    assert _missing_year_separator_consensus_from_artifacts(
+        [conflicting], "2025-06-16"
+    ) is None
 
 
 def test_max_channel_cross_model_cross_geometry_confirms_strict_mismatch(

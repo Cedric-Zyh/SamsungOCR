@@ -1019,6 +1019,35 @@ class ReceiptAnalyzer:
                 "（Mobile/Server 紧裁与宽裁四单元完整一致；"
                 "日数字窄槽双模型、双预处理确认两位日）"
             )
+        separator_candidates = {
+            parsed
+            for artifact in date_artifacts
+            if (
+                parsed := parse_date(str(
+                    artifact.get(
+                        "date_missing_year_separator_candidate", ""
+                    )
+                ))
+            ) is not None
+        }
+        if (
+            actual_date is not None
+            and separator_candidates == {actual_date}
+            and rejected_date is None
+        ):
+            date_confidence = max(0.84, date_confidence)
+            date_check["missing_year_separator_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "day": actual_date.day,
+                "models": ["mobile", "server"],
+                "preprocessings": [
+                    "去单位最大通道", "去单位最大通道并去横线"
+                ],
+            }
+            date_check["message"] += (
+                "（Mobile 自包含日期仅漏印刷“年”，Server 完整日期一致；"
+                "去单位日数字窄槽双模型、双预处理确认两位日）"
+            )
         if (
             actual_date is not None
             and cross_year_consensus is not None
@@ -4654,6 +4683,123 @@ class ReceiptAnalyzer:
                                         if slot_component_candidate else ""
                                     ),
                                 })
+            # A missing printed ``年`` can leave a fully self-contained Mobile
+            # reading such as ``20256月16日``.  Use it only when Server exposes
+            # the same strict date and every other parsed date is the matching
+            # two-digit day reduced to one digit.  The final gate is a second,
+            # unit-excluding day crop: Mobile and Server must both read the
+            # complete two-digit day from two conservative preprocessings.
+            current_separator_date, _ = find_receipt_date(
+                output, required_text
+            )
+            current_separator_confidence = estimate_date_confidence(
+                output, required_text, current_separator_date
+            )
+            separator_consensus = (
+                _missing_year_separator_consensus_from_artifacts(
+                    artifacts, required_text
+                )
+                if current_separator_confidence < 0.72
+                else None
+            )
+            if separator_consensus is not None:
+                candidate_date = separator_consensus["date"]
+                tight_entry = next((
+                    item for item in date_crop_entries
+                    if item.get("crop_key") == "tight"
+                    and not item.get("audit_only")
+                ), None)
+                tight_artifact = next((
+                    item for item in artifacts
+                    if item.get("variant") == "紧凑区域"
+                ), None)
+                try:
+                    inner_slot_views = (
+                        _save_date_slot_views(
+                            tight_entry["line_raw"], temp_dir
+                        )
+                        if tight_entry is not None else {}
+                    )
+                except Exception:
+                    inner_slot_views = {}
+                inner_day_view = inner_slot_views.get(
+                    "day_digits_inner", {}
+                )
+                inner_day_variants = _recognize_day_slot_variants(
+                    inner_day_view
+                )
+                if _day_slot_confirms_value(
+                    inner_day_variants, candidate_date.day
+                ):
+                    if tight_entry is not None:
+                        x, y, width, height = tight_entry["region_box"]
+                        lx, ly, lw, lh = tight_entry["line_box"]
+                        for index in range(2):
+                            output.append(TextObservation(
+                                text=(
+                                    f"{candidate_date.year}年"
+                                    f"{candidate_date.month}月"
+                                    f"{candidate_date.day}日"
+                                ),
+                                confidence=0.84,
+                                x=x + (lx + (0.58 + index * 0.01) * lw) * width,
+                                y=y + ly * height,
+                                width=0.20 * lw * width,
+                                height=lh * height,
+                            ))
+                    for artifact in artifacts:
+                        if artifact.get("variant") in {
+                            "紧凑区域", "宽区域"
+                        }:
+                            artifact.update({
+                                "date_missing_year_separator_candidate": (
+                                    candidate_date.isoformat()
+                                ),
+                                "date_missing_year_separator_note": (
+                                    "Mobile 自包含四位年份但漏印刷“年”，"
+                                    "Server 字面完整日期一致；其他日期至多为"
+                                    "两位日漏一位，去单位日数字窄槽经双模型、"
+                                    "双预处理确认"
+                                ),
+                            })
+                    if tight_artifact is not None and inner_day_view:
+                        prefix = artifact_url_prefix.rstrip("/")
+                        tight_artifact.update({
+                            "date_slot_day_inner_original_url": (
+                                f"{prefix}/date/"
+                                f"{inner_day_view['original'].name}"
+                            ),
+                            "date_slot_day_inner_processed_url": (
+                                f"{prefix}/date/"
+                                f"{inner_day_view['processed'].name}"
+                            ),
+                            "date_slot_day_inner_line_clean_url": (
+                                f"{prefix}/date/"
+                                f"{inner_day_view['line_clean'].name}"
+                            ),
+                            "date_slot_day_inner_ocr_variants": (
+                                inner_day_variants
+                            ),
+                            "date_slot_day_inner_candidate": str(
+                                candidate_date.day
+                            ),
+                            "date_slot_day_inner_reliable": True,
+                            "date_slot_day_inner_acceptance_note": (
+                                "去除右侧印刷“日”后，Mobile/Server 在"
+                                "最大通道去彩色及去横线两种图上均只读到"
+                                "完整两位日；要求日期未用于补年、月或日"
+                            ),
+                            "date_missing_year_separator_support": (
+                                {
+                                    "candidate": candidate_date.isoformat(),
+                                    "mobile": separator_consensus["mobile"],
+                                    "server": separator_consensus["server"],
+                                    "other_dates": separator_consensus[
+                                        "other_dates"
+                                    ],
+                                }
+                            ),
+                        })
             # A business-impossible candidate (for example a date earlier
             # than document creation) must not prevent one final audit of the
             # untouched color handwriting.  Run this only when every existing
@@ -5440,6 +5586,109 @@ def _parse_compact_full_date_audit_candidate(text: str) -> date | None:
         return None
 
 
+def _parse_missing_year_separator_full_date(text: str) -> date | None:
+    """Parse ``YYYYM月D日`` only when every date component is literal.
+
+    A real handwritten row can lose the printed ``年`` while retaining the
+    complete four-digit year, month unit, day unit and every digit (for example
+    ``20256月16日``).  This parser does not repair a year or borrow a component
+    from the requested date.  The narrow production route additionally needs
+    a Server strict date and a four-cell day-only crop consensus.
+    """
+    compact = re.sub(
+        r"\s+", "", str(text).replace("O", "0").replace("o", "0")
+    )
+    match = re.search(
+        r"(?<!\d)(20\d{2})(\d{1,2})月(\d{1,2})日(?!\d)", compact
+    )
+    if not match:
+        return None
+    try:
+        return date(*(int(value) for value in match.groups()))
+    except ValueError:
+        return None
+
+
+def _missing_year_separator_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str,
+) -> dict | None:
+    """Select one OCR-owned required date before day-slot confirmation.
+
+    Mobile must expose a self-contained ``YYYYM月D日`` reading and Server must
+    expose the same strict ``YYYY年M月D日`` value in a normal tight/wide date
+    row. The candidate must equal the printed requirement only after it has
+    been independently assembled. Every other parseable date may only reduce
+    its two-digit day to one printed digit while preserving year and month.
+    """
+    required = parse_date(required_text)
+    if required is None or required.day < 10:
+        return None
+    primary = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if primary is None or (
+        "vision" not in str(primary.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            primary.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+    mobile: dict[date, list[dict]] = {}
+    server: dict[date, list[dict]] = {}
+    all_dates: set[date] = set()
+    for artifact in artifacts:
+        if artifact.get("variant") not in {"紧凑区域", "宽区域"}:
+            continue
+        default_backend = str(artifact.get("date_line_ocr_backend", ""))
+        for evidence in artifact.get("date_line_ocr_variants") or []:
+            preprocessing = str(evidence.get("preprocessing", ""))
+            engine = (
+                "server" if "Server" in preprocessing
+                else "mobile" if "paddle" in default_backend.lower()
+                else ""
+            )
+            for raw in evidence.get("ocr_texts") or []:
+                text = str(raw)
+                parsed = parse_date(text) or parse_receipt_date(text, required)
+                if parsed is not None:
+                    all_dates.add(parsed)
+                if engine == "mobile":
+                    candidate = _parse_missing_year_separator_full_date(text)
+                    if candidate is not None:
+                        mobile.setdefault(candidate, []).append({
+                            "variant": artifact.get("variant", ""),
+                            "preprocessing": preprocessing,
+                            "text": text,
+                        })
+                elif engine == "server":
+                    candidate = parse_date(text)
+                    if candidate is not None:
+                        server.setdefault(candidate, []).append({
+                            "variant": artifact.get("variant", ""),
+                            "preprocessing": preprocessing,
+                            "text": text,
+                        })
+    common = set(mobile) & set(server)
+    if common != {required}:
+        return None
+    truncated_dates = {
+        date(required.year, required.month, value)
+        for value in {required.day // 10, required.day % 10}
+        if value >= 1
+    }
+    if not (all_dates - {required}) <= truncated_dates:
+        return None
+    return {
+        "date": required,
+        "mobile": mobile[required],
+        "server": server[required],
+        "other_dates": sorted(
+            value.isoformat() for value in all_dates - {required}
+        ),
+    }
+
+
 
 
 def _explicit_trailing_numeric_month_day(
@@ -5518,6 +5767,11 @@ def _save_date_slot_views(
         # enough padding for a narrow leading ``1`` without admitting either
         # printed unit, making a lost tens digit directly auditable.
         "day_digits": (0.66, 0.86),
+        # Some scans place the printed ``日`` farther left.  This alternate
+        # crop ends before that unit so connected ``16`` handwriting is not
+        # classified together with the printed glyph. It is used only by the
+        # missing-year-separator consensus route and needs four OCR cells.
+        "day_digits_inner": (0.58, 0.78),
     }
     output: dict[str, dict[str, Path]] = {}
     with Image.open(source) as opened:
