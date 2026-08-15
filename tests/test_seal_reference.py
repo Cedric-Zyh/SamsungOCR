@@ -6,6 +6,18 @@ import cv2
 import numpy as np
 
 from receipt_ocr.seal_reference import (
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+    BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES,
+    BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+    BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO,
+    BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE,
     BRANDED_STATION_MIN_GOOD_MATCHES,
     BRANDED_STATION_MIN_HOMOGRAPHY_INLIERS,
     BRANDED_STATION_MIN_INLIER_RATIO,
@@ -99,6 +111,7 @@ from receipt_ocr.seal_reference import (
     _passes_high_ratio_gate,
     _passes_high_support_gate,
     _passes_branded_station_gate,
+    _passes_bare_company_one_glyph_reference_gate,
     _passes_clipped_company_reference_gate,
     _passes_company_conflict_reference_gate,
     _passes_receiving_one_glyph_reference_gate,
@@ -439,6 +452,120 @@ def test_match_reports_receiving_one_glyph_reference_route(
     assert accepted["route"] == "receiving_one_glyph_reference"
     assert accepted["reference_filename"] == "confirmed.jpg"
     assert "一个公司字冲突" in accepted["reason"]
+    assert accepted["confidence"] == 0.94
+
+
+def _bare_company_one_glyph_evidence() -> dict:
+    return {
+        "good_matches": BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES,
+        "homography_inliers": BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO,
+        "candidate_coverage": BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE,
+        "reference_coverage": BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE,
+        "chromatic_good_matches": (
+            BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+        ),
+        "chromatic_homography_inliers": (
+            BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        ),
+        "chromatic_inlier_ratio": (
+            BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+        ),
+        "chromatic_candidate_coverage": (
+            BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+        "chromatic_reference_coverage": (
+            BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+        "color_mask_score": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+        "color_mask_correlation": (
+            BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION
+        ),
+        "color_mask_dice": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE,
+    }
+
+
+def test_bare_company_one_glyph_gate_requires_three_visual_representations():
+    seal_check = {
+        "requirement": "贵州宏羿科技有限公司",
+        "recognized": "贵州宏开科技有限公司",
+        "all_recognized": ["贵州宏开科技有限", "科技有限公司"],
+        "company_conflict": True,
+        "company_score": BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+    }
+    evidence = _bare_company_one_glyph_evidence()
+    assert _passes_bare_company_one_glyph_reference_gate(
+        evidence, seal_check
+    )
+    for key, value in evidence.items():
+        reduced = dict(evidence)
+        reduced[key] = value - (
+            1 if key.endswith(("good_matches", "homography_inliers"))
+            else 0.001
+        )
+        assert not _passes_bare_company_one_glyph_reference_gate(
+            reduced, seal_check
+        )
+    unsafe_checks = (
+        {**seal_check, "company_conflict": False},
+        {**seal_check, "company_score": BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE - 0.001},
+        {**seal_check, "recognized": "贵州宏羿科技有限公司"},
+        {**seal_check, "recognized": "贵州宏开信息有限公司"},
+        {**seal_check, "recognized": "贵州宏科技有限公司"},
+        {**seal_check, "requirement": "贵州宏羿科技有限公司业务专用章"},
+        {**seal_check, "requirement": "签章要求贵州宏羿科技有限公司"},
+    )
+    for unsafe in unsafe_checks:
+        assert not _passes_bare_company_one_glyph_reference_gate(
+            evidence, unsafe
+        )
+
+
+def test_match_reports_bare_company_one_glyph_reference_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "贵州宏羿科技有限公司"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    evidence = _bare_company_one_glyph_evidence()
+    monkeypatch.setattr(matcher, "_compare", lambda *_args: {
+        key: value for key, value in evidence.items()
+        if not key.startswith(("chromatic_", "color_mask_"))
+    })
+    monkeypatch.setattr(matcher, "_compare_chromatic_crop", lambda *_args: {
+        key.removeprefix("chromatic_"): value
+        for key, value in evidence.items()
+        if key.startswith("chromatic_")
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda *_args: {
+        key: value for key, value in evidence.items()
+        if key.startswith("color_mask_")
+    })
+    result = _result(
+        "/files/artifacts/candidate/seal.png", conflict=True
+    )
+    result["seal_check"].update({
+        "requirement": requirement,
+        "recognized": "贵州宏开科技有限公司",
+        "all_recognized": ["贵州宏开科技有限", "科技有限公司"],
+        "company_score": BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+    })
+    accepted = matcher.match(result)
+    assert accepted["accepted"] is True
+    assert accepted["route"] == "bare_company_one_glyph_reference"
+    assert accepted["reference_filename"] == "confirmed.jpg"
+    assert "双SIFT" in accepted["reason"]
     assert accepted["confidence"] == 0.94
 
 

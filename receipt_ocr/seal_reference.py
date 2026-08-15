@@ -163,6 +163,26 @@ RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS = 100
 RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO = 0.75
 RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE = 0.60
 
+# A bare legal-company round seal has no independent stamp-type text anchor.
+# Therefore one OCR glyph substitution may be recovered only when *three*
+# visual representations agree with one same-requirement human-confirmed
+# reference: regular SIFT, chromatic-crop SIFT, and the registered whole-ink
+# color mask.  In the complete 301-image matrix the sole candidate is
+# 99/65 regular, 94/61 chromatic, and 0.7856 color-mask score. The closest
+# known wrong stamp is only 68/56, 63/51, and 0.4087 respectively.
+BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE = 0.83
+BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES = 95
+BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS = 60
+BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO = 0.64
+BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE = 0.60
+BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES = 90
+BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS = 60
+BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO = 0.64
+BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE = 0.58
+BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE = 0.77
+BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION = 0.78
+BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE = 0.77
+
 # A bare legal-company requirement can be clipped at the beginning by a table
 # line while retaining an exact long suffix (for example OCR reads
 # ``齐贵迪电子有限公司`` for ``乌鲁木齐贵迪电子有限公司``). This is distinct
@@ -430,6 +450,9 @@ class SealReferenceMatcher:
         receiving_one_glyph_reference_accepted = (
             _passes_receiving_one_glyph_reference_gate(best, seal_check)
         )
+        bare_company_one_glyph_reference_accepted = (
+            _passes_bare_company_one_glyph_reference_gate(best, seal_check)
+        )
         clipped_company_reference_accepted = (
             _passes_clipped_company_reference_gate(best, seal_check)
         )
@@ -510,6 +533,7 @@ class SealReferenceMatcher:
         accepted = (
             company_conflict_reference_accepted
             or receiving_one_glyph_reference_accepted
+            or bare_company_one_glyph_reference_accepted
             or clipped_company_reference_accepted
         ) or (
             generic_routes_allowed and (
@@ -527,6 +551,8 @@ class SealReferenceMatcher:
             if company_conflict_reference_accepted
             else "receiving_one_glyph_reference"
             if receiving_one_glyph_reference_accepted
+            else "bare_company_one_glyph_reference"
+            if bare_company_one_glyph_reference_accepted
             else "clipped_prefix_company_ultra_reference"
             if clipped_company_reference_accepted
             else "rejected" if not generic_routes_allowed
@@ -677,6 +703,36 @@ class SealReferenceMatcher:
                     RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
                 ),
             },
+            "bare_company_one_glyph_reference": {
+                "company_score": BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+                "company_glyph_substitutions": 1,
+                "requirement_structure": "纯法定公司名",
+                "good_matches": BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
+                "color_mask_score": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+                "color_mask_correlation": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION
+                ),
+                "color_mask_dice": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE,
+            },
             "clipped_prefix_company_ultra_reference": {
                 "recognized_length": (
                     CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH
@@ -787,6 +843,8 @@ class SealReferenceMatcher:
                 if company_conflict_reference_accepted else
                 "当前章只出现一个公司字冲突，且收货专用章文字与同要求人工真值阳性章的双表示大面积几何一致"
                 if receiving_one_glyph_reference_accepted else
+                "纯公司章只出现一个公司字冲突，并与同要求人工真值阳性章形成双SIFT及整体彩色墨迹一致"
+                if bare_company_one_glyph_reference_accepted else
                 "当前章公司全称仅缺前缀，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
                 if clipped_company_reference_accepted else
                 "与同签章要求的人工真值阳性章形成大面积几何一致"
@@ -1495,16 +1553,9 @@ def _passes_receiving_one_glyph_reference_gate(
     ]
     if not any(specific_type in fragment for fragment in fragments):
         return False
-    one_glyph_company = any(
-        len(fragment) == len(required_company)
-        and fragment.endswith(("有限公司", "有限责任公司"))
-        and sum(
-            left != right
-            for left, right in zip(required_company, fragment, strict=True)
-        ) == 1
-        for fragment in fragments
-    )
-    if not one_glyph_company:
+    if not _has_exactly_one_company_glyph_substitution(
+        required_company, fragments
+    ):
         return False
     return bool(
         float(seal_check.get("company_score", 0))
@@ -1529,6 +1580,77 @@ def _passes_receiving_one_glyph_reference_gate(
         >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
         and float(evidence.get("chromatic_reference_coverage", 0))
         >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+    )
+
+
+def _has_exactly_one_company_glyph_substitution(
+    required_company: str, fragments: list[str],
+) -> bool:
+    """Require an equal-length legal company with one positional mismatch."""
+    legal_suffixes = ("有限公司", "有限责任公司")
+    return any(
+        len(fragment) == len(required_company)
+        and fragment.endswith(legal_suffixes)
+        and sum(
+            left != right
+            for left, right in zip(required_company, fragment, strict=True)
+        ) == 1
+        for fragment in fragments
+    )
+
+
+def _passes_bare_company_one_glyph_reference_gate(
+    evidence: dict, seal_check: dict,
+) -> bool:
+    """Override one bare-company OCR glyph only with three visual agreements."""
+    if seal_check.get("company_conflict") is not True:
+        return False
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    if not re.fullmatch(
+        r"[\u4e00-\u9fffA-Za-z0-9（）()·]+(?:有限责任公司|有限公司)",
+        requirement,
+    ):
+        return False
+    fragments = [
+        normalize_text(str(seal_check.get("recognized") or "")),
+        *[
+            normalize_text(str(value))
+            for value in (seal_check.get("all_recognized") or [])
+        ],
+    ]
+    if not _has_exactly_one_company_glyph_substitution(
+        requirement, fragments
+    ):
+        return False
+    return bool(
+        float(seal_check.get("company_score", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE
+        and int(evidence.get("good_matches", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE
+        and int(evidence.get("chromatic_good_matches", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+        and int(evidence.get("chromatic_homography_inliers", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        and float(evidence.get("chromatic_inlier_ratio", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+        and float(evidence.get("chromatic_candidate_coverage", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        and float(evidence.get("chromatic_reference_coverage", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        and float(evidence.get("color_mask_score", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE
+        and float(evidence.get("color_mask_correlation", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION
+        and float(evidence.get("color_mask_dice", 0))
+        >= BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE
     )
 
 
@@ -1841,6 +1963,30 @@ def _reference_confidence(
                     int(evidence.get("chromatic_homography_inliers", 0))
                     - RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
                 ) / 30,
+            ),
+        )
+    elif route == "bare_company_one_glyph_reference":
+        # The bare company has no stamp-type anchor, so this confidence is
+        # backed by two local-feature representations plus a registered
+        # whole-ink mask, all against the exact same confirmed reference.
+        confidence = min(
+            0.96,
+            0.94
+            + 0.01 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence["homography_inliers"])
+                    - BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+                ) / 30,
+            )
+            + 0.01 * min(
+                1.0,
+                max(
+                    0.0,
+                    float(evidence.get("color_mask_score", 0))
+                    - BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+                ) / 0.15,
             ),
         )
     elif route == "clipped_prefix_company_ultra_reference":

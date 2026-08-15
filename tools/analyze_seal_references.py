@@ -7,6 +7,18 @@ from pathlib import Path
 from receipt_ocr.database import Database
 from receipt_ocr.evaluation import load_ground_truth
 from receipt_ocr.seal_reference import (
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
+    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+    BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+    BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES,
+    BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+    BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO,
+    BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE,
     CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
     CHROMATIC_CONSENSUS_MIN_GOOD_MATCHES,
     CHROMATIC_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
@@ -280,6 +292,36 @@ def build_report(
                 "chromatic_surface_coverage": (
                     RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
                 ),
+            },
+            "bare_company_one_glyph_reference": {
+                "company_score": BARE_COMPANY_ONE_GLYPH_MIN_COMPANY_SCORE,
+                "company_glyph_substitutions": 1,
+                "requirement_structure": "纯法定公司名",
+                "good_matches": BARE_COMPANY_ONE_GLYPH_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": BARE_COMPANY_ONE_GLYPH_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
+                "color_mask_score": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_SCORE,
+                "color_mask_correlation": (
+                    BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_CORRELATION
+                ),
+                "color_mask_dice": BARE_COMPANY_ONE_GLYPH_MIN_COLOR_MASK_DICE,
             },
             "clipped_prefix_company_ultra_reference": {
                 "recognized_length": (
