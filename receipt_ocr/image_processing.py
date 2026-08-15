@@ -956,3 +956,34 @@ def save_rectangular_seal_bands(
         encoded.tofile(str(destination))
         output.append(destination)
     return output
+
+
+def save_round_seal_type_band(
+    source: str | Path,
+    destination: str | Path,
+) -> Path:
+    """Save the lower inner text row of a color-isolated round stamp.
+
+    Reviewed circular customer stamps commonly put the legal company around
+    the rim and a horizontal type such as ``手机售后专用章`` below the star.
+    Whole-stamp detection tends to keep the much larger company arc and drop
+    this faint row.  ``source`` must already be a color-only white-background
+    derivative, so the focused band cannot import the black printed signature
+    requirement into seal-matching evidence.
+    """
+    image = _read_image(source)
+    height, width = image.shape[:2]
+    if height < 40 or width < 40:
+        raise ValueError("圆章章类型分带图片过小")
+    left, right = round(width * 0.08), round(width * 0.92)
+    top, bottom = round(height * 0.56), round(height * 0.84)
+    band = image[top:bottom, left:right]
+    if band.size == 0:
+        raise ValueError("圆章章类型分带为空")
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", band)
+    if not ok:
+        raise ValueError("圆章章类型分带图片编码失败")
+    encoded.tofile(str(destination))
+    return destination

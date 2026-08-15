@@ -12,6 +12,7 @@ from receipt_ocr.image_processing import (
     save_color_isolated_seal,
     save_rectangular_seal_code_line,
     save_rectangular_seal_bands,
+    save_round_seal_type_band,
     save_unwrapped_seal_bands,
     seal_region_is_rectangular,
 )
@@ -122,6 +123,25 @@ def test_rectangular_seal_bands_isolate_three_rows(tmp_path):
     ]
     assert heights == [98, 96, 98]
     assert all(cv2.imread(str(path)) is not None for path in paths)
+
+
+def test_round_seal_type_band_keeps_only_lower_inner_row(tmp_path):
+    import cv2
+
+    source = tmp_path / "round-color-only.png"
+    image = np.full((1000, 1000, 3), 255, dtype=np.uint8)
+    image[560:840, 80:920] = 90
+    assert cv2.imwrite(str(source), image)
+
+    destination = save_round_seal_type_band(
+        source, tmp_path / "round-type-band.png"
+    )
+    output = cv2.imread(str(destination))
+
+    assert destination.name == "round-type-band.png"
+    assert output is not None
+    assert output.shape[:2] == (280, 840)
+    assert round(float(output.mean())) == 90
 
 
 def test_color_isolated_seal_keeps_red_ink_and_removes_black_form_text(tmp_path):

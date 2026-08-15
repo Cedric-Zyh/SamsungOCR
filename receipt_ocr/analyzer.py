@@ -21,6 +21,7 @@ from .image_processing import (
     save_isolated_seal,
     save_rectangular_seal_code_line,
     save_rectangular_seal_bands,
+    save_round_seal_type_band,
     save_region_crop,
     save_unwrapped_seal,
     save_unwrapped_seal_bands,
@@ -365,6 +366,89 @@ def _reconstruct_exact_company_stamp_from_region(
     if identifier and identifier not in normalized:
         return ""
     return organization + stamp_type + identifier
+
+
+def _reconstruct_one_error_round_type_band(
+    requirement: str,
+    existing_region_texts: list[str],
+    type_band_rows: list[TextObservation],
+) -> str:
+    """Repair one high-confidence glyph in a focused round-stamp type row.
+
+    This is narrower than general fuzzy stamp matching.  The exact legal
+    organization must already exist in independent same-region evidence, the
+    color-only lower band must retain the literal ``专用章`` ending, and its
+    type must have the same length with exactly one substituted Han glyph.
+    Missing characters, insertions, identifiers, company conflicts, or a
+    recognition score below 75% remain manual-review cases.
+    """
+    expected = normalize_text(requirement)
+    specific_types = (
+        "售后业务专用章",
+        "手机售后专用章",
+        "售后服务专用章",
+        "业务受理专用章",
+        "检测专用章",
+        "业务专用章",
+        "维修专用章",
+        "服务专用章",
+        "收货专用章",
+    )
+    stamp_type = next(
+        (value for value in specific_types if expected.endswith(value)), ""
+    )
+    if not stamp_type:
+        return ""
+    organization = expected[: -len(stamp_type)]
+    if not organization.endswith(("有限公司", "有限责任公司", "分公司")):
+        return ""
+    normalized_existing = [
+        normalize_text(text)
+        for text in existing_region_texts
+        if normalize_text(text)
+    ]
+    organization_seen = any(
+        text == organization
+        or (
+            text.startswith(organization)
+            and re.fullmatch(r"\d{6,16}", text[len(organization):])
+        )
+        for text in normalized_existing
+    )
+    complete_organizations = {
+        match.group("organization")
+        for text in normalized_existing
+        if len(text) >= len(organization) - 2
+        and len(text) <= len(organization) + 16
+        and (
+            match := re.fullmatch(
+                r"(?P<organization>.+?(?:有限责任公司|有限公司|分公司))"
+                r"(?:\d{6,16})?",
+                text,
+            )
+        ) is not None
+    }
+    if (
+        not organization_seen
+        or complete_organizations - {organization}
+        or compare_seal_text(
+        requirement, normalized_existing
+        ).get("company_conflict")
+    ):
+        return ""
+    for row in type_band_rows:
+        observed = normalize_text(row.text)
+        if (
+            float(row.confidence) >= 0.75
+            and observed.endswith("专用章")
+            and len(observed) == len(stamp_type)
+            and sum(
+                expected_char != observed_char
+                for expected_char, observed_char in zip(stamp_type, observed)
+            ) == 1
+        ):
+            return organization + stamp_type
+    return ""
 
 
 def _reconstruct_business_acceptance_from_mobile_bands(
@@ -2288,6 +2372,8 @@ class ReceiptAnalyzer:
                     ranked_candidates[:audit_limit]
                 ):
                     audit_texts: list[str] = []
+                    round_type_band: Path | None = None
+                    round_type_band_rows: list[TextObservation] = []
                     robust_unwrapped: Path | None = None
                     robust_band_paths: list[Path] = []
                     robust_mobile_texts: list[str] = []
@@ -2302,6 +2388,30 @@ class ReceiptAnalyzer:
                         ("保留章色白底图", candidate["color_isolated"]),
                         ("圆章/矩形校正图", candidate["unwrapped"]),
                     ]
+                    if (
+                        artifact_dir
+                        and audit_position == 0
+                        and not candidate["rectangular"]
+                        and explicit_stamp_type
+                        and not preliminary_company_conflict
+                        and float(preliminary.get("score", 0)) >= 0.72
+                        and float(preliminary.get("company_score", 0)) >= 0.70
+                    ):
+                        round_type_band = Path(
+                            candidate["color_isolated"]
+                        ).with_name(
+                            f"seal-{candidate['index']}-round-type-band.png"
+                        )
+                        try:
+                            save_round_seal_type_band(
+                                candidate["color_isolated"], round_type_band
+                            )
+                        except Exception:
+                            round_type_band = None
+                        if round_type_band is not None:
+                            audit_paths.append((
+                                "圆章章类型横向分带", round_type_band
+                            ))
                     if (
                         artifact_dir
                         and audit_position == 0
@@ -2458,7 +2568,9 @@ class ReceiptAnalyzer:
                         if not audit_path or not Path(audit_path).is_file():
                             continue
                         try:
-                            if audit_label == "矩形编号章数字行":
+                            if audit_label in {
+                                "矩形编号章数字行", "圆章章类型横向分带"
+                            }:
                                 from .paddle_ocr import recognize_line
 
                                 audit_rows = recognize_line(
@@ -2473,12 +2585,17 @@ class ReceiptAnalyzer:
                             current_audit_texts = [
                                 row.text for row in audit_rows if row.text
                             ]
+                            if audit_label == "圆章章类型横向分带":
+                                round_type_band_rows = list(audit_rows)
                             # The robust-bound bands are a cross-model route.
                             # Keep Server-only readings visible for audit but
                             # do not let them enter matching until Mobile has
                             # independently read the same long suffix below.
-                            if not audit_label.startswith(
-                                "稳健圆心展开 Server 分带"
+                            if (
+                                not audit_label.startswith(
+                                    "稳健圆心展开 Server 分带"
+                                )
+                                and audit_label != "圆章章类型横向分带"
                             ):
                                 audit_texts.extend(current_audit_texts)
                             audit_variant_texts[audit_label] = current_audit_texts
@@ -2523,6 +2640,19 @@ class ReceiptAnalyzer:
                         audit_variant_texts[
                             "同章区完整公司与章型重组（无字符补写）"
                         ] = [reconstructed_exact_company_stamp]
+                    reconstructed_one_error_type = (
+                        _reconstruct_one_error_round_type_band(
+                            requirement,
+                            candidate["evidence"],
+                            round_type_band_rows,
+                        )
+                        if not preliminary_company_conflict else ""
+                    )
+                    if reconstructed_one_error_type:
+                        audit_texts.append(reconstructed_one_error_type)
+                        audit_variant_texts[
+                            "完整公司 + 圆章章型单字纠错"
+                        ] = [reconstructed_one_error_type]
                     combined_audit = combine_region_texts(audit_texts)
                     server_audit_used_for_matching = bool(
                         not preliminary_company_conflict
@@ -2575,6 +2705,31 @@ class ReceiptAnalyzer:
                                 for path in unwrapped_band_paths
                                 if path.is_file()
                             ],
+                            round_type_band_url=(
+                                f"{artifact_url_prefix.rstrip('/')}/seals/"
+                                f"{round_type_band.name}"
+                                if round_type_band is not None
+                                and round_type_band.is_file() else ""
+                            ),
+                            round_type_band_text=" | ".join(
+                                row.text for row in round_type_band_rows
+                                if row.text
+                            ),
+                            round_type_band_confidences=[
+                                round(float(row.confidence), 3)
+                                for row in round_type_band_rows if row.text
+                            ],
+                            round_type_band_reconstructed_text=(
+                                reconstructed_one_error_type
+                            ),
+                            round_type_band_acceptance_note=(
+                                "同章区已有完整公司；Server 横向分带以至少"
+                                "75% 置信度读到等长章型，仅一个汉字替换且完整"
+                                "保留‘专用章’，允许透明纠错"
+                                if reconstructed_one_error_type else
+                                "未同时满足完整公司、无冲突、等长单字差异及"
+                                "75% 置信度，保持待复核"
+                            ),
                         )
                         if robust_unwrapped is not None:
                             artifacts[candidate["index"]].update(

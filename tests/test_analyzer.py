@@ -47,6 +47,7 @@ from receipt_ocr.analyzer import (
     _strong_unread_colored_stamp_route,
     _reconstruct_business_acceptance_from_audit,
     _reconstruct_exact_company_stamp_from_region,
+    _reconstruct_one_error_round_type_band,
     _reconstruct_overlapping_repair_stamp,
     _reconstruct_business_acceptance_from_mobile_bands,
     _shared_long_organization_suffix,
@@ -1276,6 +1277,90 @@ def test_exact_company_stamp_reconstruction_rejects_missing_or_extra_parts(
     assert _reconstruct_exact_company_stamp_from_region(
         requirement, audit_texts
     ) == ""
+
+
+def test_round_type_band_repairs_one_high_confidence_glyph_with_exact_company():
+    requirement = "合肥佳元电子第一分公司手机售后专用章"
+
+    assert _reconstruct_one_error_round_type_band(
+        requirement,
+        ["合肥佳元电子第一分公司"],
+        [TextObservation("手批售后专用章", .831, 0, 0, 1, 1)],
+    ) == requirement
+
+
+@pytest.mark.parametrize(
+    ("company_rows", "type_text", "confidence"),
+    [
+        (["合肥佳元电子第分公司"], "手批售后专用章", .90),
+        (["合肥佳元电子第一分公司"], "手批售前专用章", .90),
+        (["合肥佳元电子第一分公司"], "手批售后专用章", .74),
+        (
+            ["合肥佳元电子第一分公司", "合肥佳开电子第一分公司"],
+            "手批售后专用章",
+            .90,
+        ),
+    ],
+)
+def test_round_type_band_rejects_missing_company_multiple_errors_low_score_or_conflict(
+    company_rows, type_text, confidence
+):
+    assert _reconstruct_one_error_round_type_band(
+        "合肥佳元电子第一分公司手机售后专用章",
+        company_rows,
+        [TextObservation(type_text, confidence, 0, 0, 1, 1)],
+    ) == ""
+
+
+def test_round_type_band_raw_text_stays_audit_only_when_repair_is_rejected(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+    from receipt_ocr.image_processing import SealRegion
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (400, 600), "white").save(source)
+
+    def fake_save(_source, destination, *_args, **_kwargs):
+        Image.new("RGB", (240, 180), "white").save(destination)
+
+    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_round_seal_type_band", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+
+    company = "合肥佳元电子第一分公司"
+
+    def fake_ocr(path, *, backend, **_kwargs):
+        if path.name == "seal-0-unwrapped.png":
+            return [TextObservation(company, .96, 0, 0, 1, 1)]
+        return []
+
+    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    monkeypatch.setattr(
+        "receipt_ocr.paddle_ocr.recognize_line",
+        lambda *_a, **_kwargs: [
+            TextObservation("手抗售后专用章", .70, 0, 0, 1, 1)
+        ],
+    )
+    requirement = f"{company}手机售后专用章"
+    texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
+        source,
+        [],
+        [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
+        tmp_path / "artifacts",
+        "/artifacts",
+        "vision",
+        "paddle",
+        requirement=requirement,
+    )
+
+    assert "手抗售后专用章" not in texts
+    assert artifacts[0]["round_type_band_text"] == "手抗售后专用章"
+    assert artifacts[0]["round_type_band_reconstructed_text"] == ""
+    assert compare_seal_text(requirement, texts)["reliable"] is False
 
 
 def test_overlapping_repair_stamp_reconstructs_only_exact_cross_region_parts():
