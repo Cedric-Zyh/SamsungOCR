@@ -24,6 +24,7 @@ from receipt_ocr.analyzer import (
     _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
     _needs_low_confidence_date_audit,
+    _select_display_only_date_audit_rows,
     _day_slot_confirms_value,
     _max_channel_truncated_mismatch_candidate,
     _missing_year_separator_consensus_from_artifacts,
@@ -4393,6 +4394,36 @@ def test_low_confidence_component_audit_allows_only_one_required_date():
     assert not _needs_low_confidence_date_audit(
         [row("202年2月10日")], "2025-02-11"
     )
+
+
+def test_display_only_date_audit_rows_do_not_accumulate_required_match():
+    from receipt_ocr.ocr_types import TextObservation
+
+    def row(text: str, confidence: float = 0.97) -> TextObservation:
+        return TextObservation(text, confidence, 0.8, 0.6, 0.1, 0.03)
+
+    required_derivatives = [
+        row("2025年2月11日"),
+        row("2025年2月11日", 0.94),
+        row("202年2月11日", 0.91),
+    ]
+    assert _select_display_only_date_audit_rows(
+        required_derivatives, "2025-02-11", base_date=date(2025, 2, 11)
+    ) == []
+
+    visible = _select_display_only_date_audit_rows(
+        required_derivatives, "2025-02-11", base_date=None
+    )
+    assert len(visible) == 1
+    assert visible[0].confidence == 0.25
+
+    cross_year = _select_display_only_date_audit_rows(
+        [row("2024年4月26日"), row("2024年4月26日", 0.93)],
+        "2025-04-26",
+        base_date=None,
+    )
+    assert len(cross_year) == 2
+    assert all(item.confidence == 0.35 for item in cross_year)
 
 
 def test_page_bottom_handwritten_date_is_visible_but_never_auto_reliable(tmp_path, monkeypatch):

@@ -1428,6 +1428,28 @@ def test_product_table_uses_verified_ean_for_missing_ceramic_color_word():
     assert detail["sources"]["物料编号"] == "EAN 校验商品目录校正"
 
 
+def test_product_table_uses_verified_ean_for_missing_xuanyao_color_word():
+    rows = [
+        TextObservation("行号", 1, .05, .40, .04, .01),
+        TextObservation("10", 1, .06, .42, .02, .01),
+        TextObservation("G1", 1, .16, .42, .02, .01),
+        TextObservation("SM-W9026AKDCHC玄曜512G", .99, .23, .42, .21, .01),
+        TextObservation("A", 1, .45, .42, .01, .01),
+        TextObservation("W002", 1, .50, .42, .04, .01),
+        TextObservation("1", 1, .61, .42, .01, .01),
+        TextObservation("1.326", 1, .69, .42, .05, .01),
+        TextObservation("0.002", 1, .76, .42, .04, .01),
+        TextObservation("8806097727347", 1, .84, .42, .11, .01),
+        TextObservation("合计：", 1, .49, .44, .05, .01),
+    ]
+
+    detail = parse_product_table(rows)["rows"][0]
+
+    assert detail["values"]["物料编号"] == "SM-W9026AKDCHC玄曜黑512G"
+    assert detail["original_values"]["物料编号"] == "SM-W9026AKDCHC玄曜512G"
+    assert detail["sources"]["物料编号"] == "EAN 校验商品目录校正"
+
+
 def test_product_table_backfills_missing_ean_only_for_exact_verified_material():
     rows = [
         TextObservation("行号", 1, .05, .40, .04, .01),

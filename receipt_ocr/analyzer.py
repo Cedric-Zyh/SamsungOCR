@@ -5228,33 +5228,11 @@ class ReceiptAnalyzer:
                 base_date, _ = find_receipt_date(
                     low_confidence_audit_base_rows, required_text
                 )
-                if base_date is None:
-                    required_for_audit = parse_date(required_text)
-                    grouped_audit_rows: dict[date, list[TextObservation]] = {}
-                    for row in added_audit_rows:
-                        parsed = parse_receipt_date(
-                            row.text, required_for_audit
-                        )
-                        if parsed is not None:
-                            grouped_audit_rows.setdefault(parsed, []).append(
-                                row
-                            )
-                    if len(grouped_audit_rows) == 1:
-                        rows_for_candidate = next(
-                            iter(grouped_audit_rows.values())
-                        )
-                        best_audit_row = max(
-                            rows_for_candidate,
-                            key=lambda row: row.confidence,
-                        )
-                        output.append(TextObservation(
-                            text=best_audit_row.text,
-                            confidence=min(0.25, best_audit_row.confidence),
-                            x=best_audit_row.x,
-                            y=best_audit_row.y,
-                            width=best_audit_row.width,
-                            height=best_audit_row.height,
-                        ))
+                output.extend(_select_display_only_date_audit_rows(
+                    added_audit_rows,
+                    required_text,
+                    base_date=base_date,
+                ))
             # A missing printed ``年`` can leave a fully self-contained Mobile
             # reading such as ``20256月16日``.  Use it only when Server exposes
             # the same strict date and every other parsed date is the matching
@@ -5995,6 +5973,64 @@ def _needs_low_confidence_date_audit(
         if (parsed := parse_receipt_date(row.text, required)) is not None
     }
     return bool(observed and observed <= {required})
+
+
+def _select_display_only_date_audit_rows(
+    rows: list[TextObservation],
+    required_text: str,
+    *,
+    base_date: date | None,
+) -> list[TextObservation]:
+    """Keep human-review candidates without inflating decision evidence.
+
+    Several preprocessings of one physical date line are not independent
+    observations.  A same-year candidate therefore contributes at most one
+    25% display row, and only when the original decision rows had no date.
+    The established cross-year audit is different: two geometric crops may
+    remain visible at the 35% audit cap so ``_find_low_confidence_date_audit``
+    can show the anomalous year, but that selector is explicitly review-only.
+    """
+    required = parse_date(required_text)
+    strict_cross_year: dict[date, list[TextObservation]] = {}
+    if required is not None:
+        for row in rows:
+            parsed = parse_date(row.text)
+            if parsed is not None and parsed.year != required.year:
+                strict_cross_year.setdefault(parsed, []).append(row)
+    if len(strict_cross_year) == 1:
+        evidence = next(iter(strict_cross_year.values()))
+        if len(evidence) >= 2:
+            return [
+                TextObservation(
+                    text=row.text,
+                    confidence=min(0.35, row.confidence),
+                    x=row.x,
+                    y=row.y,
+                    width=row.width,
+                    height=row.height,
+                )
+                for row in sorted(
+                    evidence, key=lambda item: item.confidence, reverse=True
+                )[:2]
+            ]
+    if base_date is not None:
+        return []
+    grouped: dict[date, list[TextObservation]] = {}
+    for row in rows:
+        parsed = parse_receipt_date(row.text, required)
+        if parsed is not None:
+            grouped.setdefault(parsed, []).append(row)
+    if len(grouped) != 1:
+        return []
+    best = max(next(iter(grouped.values())), key=lambda row: row.confidence)
+    return [TextObservation(
+        text=best.text,
+        confidence=min(0.25, best.confidence),
+        x=best.x,
+        y=best.y,
+        width=best.width,
+        height=best.height,
+    )]
 
 
 def _cross_model_max_channel_mismatch_date(

@@ -46,6 +46,9 @@ VERIFIED_MATERIAL_BY_EAN = {
     "8806095299389": "SM-S9260ZKDCHC水墨黑256G",
     # Independently printed on reviewed receipts 7303351778/7303624019.
     "8806097433736": "SM-F9660ZKGCHC秘影黑512G",
+    # Independently printed on reviewed receipt 7320775545. OCR may drop the
+    # final colour glyph because ``黑`` touches the following 512G text.
+    "8806097727347": "SM-W9026AKDCHC玄曜黑512G",
 }
 VERIFIED_EAN_BY_MATERIAL = {
     material: ean for ean, material in VERIFIED_MATERIAL_BY_EAN.items()
