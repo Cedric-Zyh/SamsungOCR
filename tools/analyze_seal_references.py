@@ -100,6 +100,42 @@ from receipt_ocr.seal_reference import (
 )
 
 
+def build_safe_rerun_plan(samples: list[dict]) -> dict:
+    """Return deterministic rerun candidates only when negatives stay rejected."""
+    false_accepts = sorted({
+        str(sample.get("filename") or "")
+        for sample in samples
+        if sample.get("accepted") is True
+        and sample.get("truth_should_match") is False
+        and sample.get("filename")
+    })
+    candidates = sorted({
+        str(sample.get("filename") or "")
+        for sample in samples
+        if sample.get("accepted") is True
+        and sample.get("truth_should_match") is True
+        and sample.get("source") == "当前剩余样本矩阵"
+        and sample.get("filename")
+    })
+    safe = not false_accepts
+    return {
+        "safe": safe,
+        "candidate_count": len(candidates) if safe else 0,
+        "filenames": candidates if safe else [],
+        "sample_arguments": [
+            item
+            for filename in (candidates if safe else [])
+            for item in ("--sample", filename)
+        ],
+        "blocked_by_false_accepts": false_accepts,
+        "note": (
+            "已知负例全部拒绝，可对候选执行完整 OCR 重跑"
+            if safe else
+            "检测到已知负例被参考矩阵接受，禁止生成重跑计划"
+        ),
+    }
+
+
 def build_report(
     database: Database,
     truth_path: str | Path,
@@ -203,6 +239,14 @@ def build_report(
             ),
             "consensus_matches": evidence.get("consensus_matches", []),
         })
+    sorted_samples = sorted(
+        samples,
+        key=lambda item: (
+            not bool(item.get("accepted")),
+            -int(item.get("homography_inliers", 0)),
+            str(item.get("filename", "")),
+        ),
+    )
     return {
         "backend": backend,
         "truth_samples": len(truth),
@@ -422,14 +466,8 @@ def build_report(
                 if entry.get("seal_should_match") is False
             ),
         },
-        "samples": sorted(
-            samples,
-            key=lambda item: (
-                not bool(item.get("accepted")),
-                -int(item.get("homography_inliers", 0)),
-                str(item.get("filename", "")),
-            ),
-        ),
+        "safe_rerun_plan": build_safe_rerun_plan(sorted_samples),
+        "samples": sorted_samples,
     }
 
 
