@@ -144,6 +144,25 @@ COMPANY_CONFLICT_REFERENCE_MIN_CHROMATIC_SURFACE_COVERAGE = 0.50
 COMPANY_CONFLICT_REFERENCE_MIN_COMPANY_SCORE = 0.82
 COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT = 6
 
+# A 收货专用章 can be obscured by the signature/table intersection so that
+# OCR reads one wrong company glyph while independently retaining the exact
+# stamp type.  This route is deliberately narrower than the generic company
+# conflict fallback: the observed legal company must have exactly one
+# same-position glyph substitution, the stamp type must be independently
+# present, and regular/chromatic SIFT must both cover most of the same
+# human-confirmed reference.  In the complete 301-image matrix the sole true
+# candidate is 130/106 regular and 133/102 chromatic with 64%+ bidirectional
+# coverage.  Known wrong-stamp controls peak at 68/56 and 63/51.
+RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE = 0.87
+RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES = 125
+RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS = 100
+RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO = 0.80
+RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE = 0.60
+RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES = 125
+RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS = 100
+RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO = 0.75
+RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE = 0.60
+
 # A bare legal-company requirement can be clipped at the beginning by a table
 # line while retaining an exact long suffix (for example OCR reads
 # ``齐贵迪电子有限公司`` for ``乌鲁木齐贵迪电子有限公司``). This is distinct
@@ -408,6 +427,9 @@ class SealReferenceMatcher:
         company_conflict_reference_accepted = (
             _passes_company_conflict_reference_gate(best, seal_check)
         )
+        receiving_one_glyph_reference_accepted = (
+            _passes_receiving_one_glyph_reference_gate(best, seal_check)
+        )
         clipped_company_reference_accepted = (
             _passes_clipped_company_reference_gate(best, seal_check)
         )
@@ -487,6 +509,7 @@ class SealReferenceMatcher:
         )
         accepted = (
             company_conflict_reference_accepted
+            or receiving_one_glyph_reference_accepted
             or clipped_company_reference_accepted
         ) or (
             generic_routes_allowed and (
@@ -502,6 +525,8 @@ class SealReferenceMatcher:
         route = (
             "company_conflict_ultra_reference"
             if company_conflict_reference_accepted
+            else "receiving_one_glyph_reference"
+            if receiving_one_glyph_reference_accepted
             else "clipped_prefix_company_ultra_reference"
             if clipped_company_reference_accepted
             else "rejected" if not generic_routes_allowed
@@ -627,6 +652,31 @@ class SealReferenceMatcher:
                 ),
                 "specific_stamp_type": "售后专用章",
             },
+            "receiving_one_glyph_reference": {
+                "company_score": RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+                "company_glyph_substitutions": 1,
+                "specific_stamp_type": "收货专用章",
+                "good_matches": RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
+            },
             "clipped_prefix_company_ultra_reference": {
                 "recognized_length": (
                     CLIPPED_COMPANY_REFERENCE_MIN_RECOGNIZED_LENGTH
@@ -735,6 +785,8 @@ class SealReferenceMatcher:
             (
                 "当前章保留售后专用章和公司片段，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
                 if company_conflict_reference_accepted else
+                "当前章只出现一个公司字冲突，且收货专用章文字与同要求人工真值阳性章的双表示大面积几何一致"
+                if receiving_one_glyph_reference_accepted else
                 "当前章公司全称仅缺前缀，并与同要求人工真值阳性章形成双表示超高支持度几何一致"
                 if clipped_company_reference_accepted else
                 "与同签章要求的人工真值阳性章形成大面积几何一致"
@@ -1421,6 +1473,65 @@ def _passes_company_conflict_reference_gate(
     )
 
 
+def _passes_receiving_one_glyph_reference_gate(
+    evidence: dict, seal_check: dict,
+) -> bool:
+    """Recover one substituted company glyph only with dual strong geometry."""
+    if seal_check.get("company_conflict") is not True:
+        return False
+    specific_type = "收货专用章"
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    if not requirement.endswith(specific_type):
+        return False
+    required_company = requirement[: -len(specific_type)]
+    if not required_company.endswith(("有限公司", "有限责任公司")):
+        return False
+    fragments = [
+        normalize_text(str(seal_check.get("recognized") or "")),
+        *[
+            normalize_text(str(value))
+            for value in (seal_check.get("all_recognized") or [])
+        ],
+    ]
+    if not any(specific_type in fragment for fragment in fragments):
+        return False
+    one_glyph_company = any(
+        len(fragment) == len(required_company)
+        and fragment.endswith(("有限公司", "有限责任公司"))
+        and sum(
+            left != right
+            for left, right in zip(required_company, fragment, strict=True)
+        ) == 1
+        for fragment in fragments
+    )
+    if not one_glyph_company:
+        return False
+    return bool(
+        float(seal_check.get("company_score", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE
+        and int(evidence.get("good_matches", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE
+        and int(evidence.get("chromatic_good_matches", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+        and int(evidence.get("chromatic_homography_inliers", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        and float(evidence.get("chromatic_inlier_ratio", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+        and float(evidence.get("chromatic_candidate_coverage", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        and float(evidence.get("chromatic_reference_coverage", 0))
+        >= RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+    )
+
+
 def _passes_clipped_company_reference_gate(
     evidence: dict, seal_check: dict,
 ) -> bool:
@@ -1705,6 +1816,31 @@ def _reference_confidence(
                     float(evidence["inlier_ratio"])
                     - COMPANY_CONFLICT_REFERENCE_MIN_INLIER_RATIO,
                 ) / 0.15,
+            ),
+        )
+    elif route == "receiving_one_glyph_reference":
+        # A confirmed same-requirement reference and two broad geometric
+        # representations outweigh exactly one OCR glyph substitution.  Keep
+        # confidence below clean-text strict matches because the text conflict
+        # remains visible for audit.
+        confidence = min(
+            0.96,
+            0.94
+            + 0.01 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence["homography_inliers"])
+                    - RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+                ) / 30,
+            )
+            + 0.01 * min(
+                1.0,
+                max(
+                    0,
+                    int(evidence.get("chromatic_homography_inliers", 0))
+                    - RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+                ) / 30,
             ),
         )
     elif route == "clipped_prefix_company_ultra_reference":

@@ -71,6 +71,15 @@ from receipt_ocr.seal_reference import (
     MIN_HOMOGRAPHY_INLIERS,
     MIN_INLIER_RATIO,
     MIN_SURFACE_COVERAGE,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE,
+    RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+    RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES,
+    RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+    RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO,
+    RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE,
     SealReferenceMatcher,
     ULTRA_SUPPORT_MIN_GOOD_MATCHES,
     ULTRA_SUPPORT_MIN_HOMOGRAPHY_INLIERS,
@@ -246,6 +255,31 @@ def build_report(
                     COMPANY_CONFLICT_REFERENCE_MIN_SHARED_FRAGMENT
                 ),
                 "specific_stamp_type": "售后专用章",
+            },
+            "receiving_one_glyph_reference": {
+                "company_score": RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+                "company_glyph_substitutions": 1,
+                "specific_stamp_type": "收货专用章",
+                "good_matches": RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO,
+                "surface_coverage": (
+                    RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE
+                ),
+                "chromatic_good_matches": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+                ),
+                "chromatic_homography_inliers": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+                ),
+                "chromatic_inlier_ratio": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+                ),
+                "chromatic_surface_coverage": (
+                    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+                ),
             },
             "clipped_prefix_company_ultra_reference": {
                 "recognized_length": (

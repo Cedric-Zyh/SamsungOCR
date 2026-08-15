@@ -74,6 +74,15 @@ from receipt_ocr.seal_reference import (
     MIN_HOMOGRAPHY_INLIERS,
     MIN_INLIER_RATIO,
     MIN_SURFACE_COVERAGE,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
+    RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE,
+    RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+    RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES,
+    RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+    RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO,
+    RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE,
     SealReference,
     SealReferenceMatcher,
     TRIMMED_CHROMATIC_MIN_GOOD_MATCHES,
@@ -92,6 +101,7 @@ from receipt_ocr.seal_reference import (
     _passes_branded_station_gate,
     _passes_clipped_company_reference_gate,
     _passes_company_conflict_reference_gate,
+    _passes_receiving_one_glyph_reference_gate,
     _passes_trimmed_chromatic_gate,
     _passes_ultra_support_gate,
     _passes_color_mask_gate,
@@ -327,6 +337,109 @@ def test_match_reports_company_conflict_ultra_reference_route(
     assert accepted["reference_filename"] == "confirmed.jpg"
     assert "双表示" in accepted["reason"]
     assert accepted["confidence"] == 0.93
+
+
+def _receiving_one_glyph_evidence() -> dict:
+    return {
+        "good_matches": RECEIVING_ONE_GLYPH_MIN_GOOD_MATCHES,
+        "homography_inliers": RECEIVING_ONE_GLYPH_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": RECEIVING_ONE_GLYPH_MIN_INLIER_RATIO,
+        "candidate_coverage": RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE,
+        "reference_coverage": RECEIVING_ONE_GLYPH_MIN_SURFACE_COVERAGE,
+        "chromatic_good_matches": (
+            RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES
+        ),
+        "chromatic_homography_inliers": (
+            RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS
+        ),
+        "chromatic_inlier_ratio": (
+            RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO
+        ),
+        "chromatic_candidate_coverage": (
+            RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+        "chromatic_reference_coverage": (
+            RECEIVING_ONE_GLYPH_MIN_CHROMATIC_SURFACE_COVERAGE
+        ),
+    }
+
+
+def test_receiving_one_glyph_gate_requires_exact_semantics_and_all_boundaries():
+    seal_check = {
+        "requirement": "上海凝鹏通讯科技有限公司收货专用章",
+        "recognized": "上海海鹏通讯科技有限公司",
+        "all_recognized": ["通讯科技有限公司", "收货专用章"],
+        "company_conflict": True,
+        "company_score": RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+    }
+    evidence = _receiving_one_glyph_evidence()
+    assert _passes_receiving_one_glyph_reference_gate(evidence, seal_check)
+    for key, value in evidence.items():
+        reduced = dict(evidence)
+        reduced[key] = value - (
+            1 if key.endswith(("good_matches", "homography_inliers"))
+            else 0.001
+        )
+        assert not _passes_receiving_one_glyph_reference_gate(
+            reduced, seal_check
+        )
+    unsafe_checks = (
+        {**seal_check, "company_conflict": False},
+        {**seal_check, "company_score": RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE - 0.001},
+        {**seal_check, "recognized": "上海凝鹏通讯科技有限公司"},
+        {**seal_check, "recognized": "上海海鸥通讯科技有限公司"},
+        {**seal_check, "recognized": "上海凝海鹏通讯科技有限公司"},
+        {**seal_check, "all_recognized": ["通讯科技有限公司"]},
+        {**seal_check, "requirement": "上海凝鹏通讯科技有限公司售后专用章"},
+    )
+    for unsafe in unsafe_checks:
+        assert not _passes_receiving_one_glyph_reference_gate(
+            evidence, unsafe
+        )
+
+
+def test_match_reports_receiving_one_glyph_reference_route(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference = artifact_root / "reference" / "seal.png"
+    for path in (candidate, reference):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "上海凝鹏通讯科技有限公司收货专用章"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [SealReference(
+        filename="confirmed.jpg",
+        requirement=requirement,
+        artifact_url="/files/artifacts/reference/seal.png",
+        path=reference,
+    )]}
+    evidence = _receiving_one_glyph_evidence()
+    monkeypatch.setattr(matcher, "_compare", lambda *_args: {
+        key: value for key, value in evidence.items()
+        if not key.startswith("chromatic_")
+    })
+    monkeypatch.setattr(matcher, "_compare_chromatic_crop", lambda *_args: {
+        key.removeprefix("chromatic_"): value
+        for key, value in evidence.items()
+        if key.startswith("chromatic_")
+    })
+    result = _result(
+        "/files/artifacts/candidate/seal.png", conflict=True
+    )
+    result["seal_check"].update({
+        "requirement": requirement,
+        "recognized": "上海海鹏通讯科技有限公司",
+        "all_recognized": ["收货专用章", "通讯科技有限公司"],
+        "company_score": RECEIVING_ONE_GLYPH_MIN_COMPANY_SCORE,
+    })
+    accepted = matcher.match(result)
+    assert accepted["accepted"] is True
+    assert accepted["route"] == "receiving_one_glyph_reference"
+    assert accepted["reference_filename"] == "confirmed.jpg"
+    assert "一个公司字冲突" in accepted["reason"]
+    assert accepted["confidence"] == 0.94
 
 
 def _clipped_company_reference_evidence() -> dict:
