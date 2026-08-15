@@ -1133,6 +1133,33 @@ class ReceiptAnalyzer:
             ]
             if matching_rows:
                 date_row = max(matching_rows, key=lambda row: row.confidence)
+        missing_month_consensus = (
+            _same_geometry_missing_month_consensus_from_artifacts(
+                date_artifacts, fields.get("要求到货", "")
+            )
+        )
+        missing_month_markers = {
+            str(item.get("date_missing_month_consensus_candidate") or "")
+            for item in date_artifacts
+            if item.get("date_missing_month_consensus_candidate")
+        }
+        if (
+            missing_month_consensus is not None
+            and missing_month_markers
+            != {missing_month_consensus["date"].isoformat()}
+        ):
+            # Saved artifacts are useful for the full-corpus audit, but only
+            # a live Hybrid run that generated the month-slot cells may
+            # promote this narrowly reconstructed date.
+            missing_month_consensus = None
+        if missing_month_consensus is not None:
+            actual_date = missing_month_consensus["date"]
+            matching_rows = [
+                row for row in date_rows
+                if parse_date(row.text) == actual_date
+            ]
+            if matching_rows:
+                date_row = max(matching_rows, key=lambda row: row.confidence)
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1487,6 +1514,29 @@ class ReceiptAnalyzer:
             date_check["message"] += (
                 "（Mobile/Server 跨几何完整要求日期一致；唯一去线冲突"
                 "仅改变月份，月份数字窄槽经双模型、双预处理确认）"
+            )
+        if (
+            actual_date is not None
+            and missing_month_consensus is not None
+            and missing_month_consensus["date"] == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.84, date_confidence)
+            date_check["missing_month_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "geometry": missing_month_consensus["geometry"],
+                "supporting_month_cells": missing_month_consensus[
+                    "supporting_month_cells"
+                ],
+                "discarded_conflicts": [
+                    value.isoformat()
+                    for value in missing_month_consensus["conflicts"]
+                ],
+            }
+            date_check["message"] += (
+                "（Server 读取完整日期；同裁剪 Mobile 保留完整年份与"
+                "两位日但漏月份，月份窄槽由双模型三单元确认；唯一"
+                "干扰是两位日的单字截断）"
             )
         otsu_manual_candidate = bool(
             actual_date
@@ -5103,6 +5153,7 @@ class ReceiptAnalyzer:
                             reliable_slot_date = None
                             server_component_date = None
                             white_day_audit_date = None
+                            same_geometry_missing_month_date = None
                             if (
                                 ocr_backend == "vision"
                                 and secondary_ocr_backend == "paddle"
@@ -5133,12 +5184,31 @@ class ReceiptAnalyzer:
                                         white_day_component_variants,
                                     )
                                 )
+                                same_geometry_missing_month = (
+                                    _same_geometry_missing_month_consensus_from_artifacts(
+                                        artifacts,
+                                        required_text,
+                                        slot_variants,
+                                    )
+                                )
+                                if same_geometry_missing_month is not None:
+                                    same_geometry_missing_month_date = (
+                                        same_geometry_missing_month["date"]
+                                    )
+                                    if reliable_slot_date is None:
+                                        reliable_slot_date = (
+                                            same_geometry_missing_month_date
+                                        )
                             if reliable_slot_date is not None:
                                 accepted_slot_date = reliable_slot_date
                                 slot_candidate_source = (
                                     "Server 双几何完整日期 + Paddle 双模型"
                                     "固定年月日上下文槽位一致"
                                     if server_component_date is not None
+                                    else
+                                    "Server 完整日期 + Mobile 漏月份日期 + "
+                                    "Paddle 双模型月份窄槽三单元一致"
+                                    if same_geometry_missing_month_date is not None
                                     else
                                     "Paddle Mobile/Server 双预处理槽位严格一致"
                                 )
@@ -5399,6 +5469,11 @@ class ReceiptAnalyzer:
                                             "上下文槽位一致；可自动核验"
                                             if server_component_date is not None
                                             else
+                                            "Server 完整日期与同裁剪 Mobile 完整"
+                                            "年份、两位日一致；Mobile 只漏月份，"
+                                            "月份窄槽由双模型三个单元确认；可自动核验"
+                                            if same_geometry_missing_month_date is not None
+                                            else
                                             "Mobile/Server 在去彩色及去横线槽位"
                                             "独立组成要求日期，且无其他日期冲突；"
                                             "可自动核验"
@@ -5436,6 +5511,17 @@ class ReceiptAnalyzer:
                                         "上下文槽位逐组件一致，其他残缺候选仅"
                                         "改变月份"
                                         if server_component_date else ""
+                                    ),
+                                    "date_missing_month_consensus_candidate": (
+                                        same_geometry_missing_month_date.isoformat()
+                                        if same_geometry_missing_month_date else ""
+                                    ),
+                                    "date_missing_month_consensus_note": (
+                                        "Server 完整日期与同裁剪 Mobile 漏月份"
+                                        "日期一致；月份数字窄槽由 Mobile/Server"
+                                        " 至少三个单元确认，唯一干扰为两位日"
+                                        "的单字截断"
+                                        if same_geometry_missing_month_date else ""
                                     ),
                                     "date_white_day_audit_candidate": (
                                         white_day_audit_date.isoformat()
@@ -7738,6 +7824,172 @@ def _required_month_slot_conflict_consensus_from_artifacts(
     ):
         return None
     return {**prefilter, "month": required.month}
+
+
+def _parse_full_year_missing_month_day(text: str) -> tuple[int, int] | None:
+    """Parse ``2025年月11日`` without borrowing the missing month."""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    match = re.search(r"(?<!\d)(20\d{2})年?月(\d{1,2})日?(?!\d)", compact)
+    if not match:
+        return None
+    year, day = (int(value) for value in match.groups())
+    if not 1 <= day <= 31:
+        return None
+    return year, day
+
+
+def _same_geometry_missing_month_consensus_from_artifacts(
+    artifacts: list[dict],
+    required_text: str,
+    slot_variants: list[dict] | None = None,
+) -> dict | None:
+    """Confirm a required date whose Mobile row omits only the month digit.
+
+    Server supplies a literal full date. Mobile must independently preserve
+    the same four-digit year and two-digit day on the same maximum-channel
+    crop while showing an empty month position (for example
+    ``2025年月11日``). The missing month then comes from the fixed month-digit
+    crop: both models must read it, at least three of the four
+    model/preprocessing cells must agree, and no cell may contain another
+    value. Any remaining whole-line date may only be the same two-digit day
+    truncated to one of its printed digits.
+    """
+    required = parse_date(required_text)
+    if required is None or required.day < 10:
+        return None
+    primary = [
+        item for item in artifacts
+        if item.get("variant") in {"紧凑区域", "宽区域"}
+    ]
+    tight = next(
+        (item for item in primary if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if tight is None or (
+        "vision" not in str(tight.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            tight.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+
+    server_dates: dict[str, set[date]] = {}
+    mobile_year_days: dict[str, set[tuple[int, int]]] = {}
+    all_texts: list[str] = []
+    strict_dates: set[date] = set()
+    expected_prefix = "日期行最大通道去彩色三倍放大 "
+    for artifact in primary:
+        geometry = str(artifact.get("variant", ""))
+        for key in (
+            "ocr_variants", "secondary_ocr_variants",
+            "date_line_ocr_variants",
+        ):
+            for variant in artifact.get(key) or []:
+                preprocessing = str(variant.get("preprocessing", ""))
+                texts = [
+                    str(value) for value in variant.get("ocr_texts") or []
+                ]
+                if not _is_date_audit_only_preprocessing(preprocessing):
+                    all_texts.extend(texts)
+                    strict_dates.update(
+                        parsed for text in texts
+                        if (parsed := parse_date(text)) is not None
+                    )
+                if key != "date_line_ocr_variants" or not preprocessing.startswith(
+                    expected_prefix
+                ):
+                    continue
+                if "Server 跨几何复核" in preprocessing:
+                    server_dates.setdefault(geometry, set()).update(
+                        parsed for text in texts
+                        if (parsed := parse_date(text)) is not None
+                    )
+                elif "Mobile 跨几何复核" in preprocessing:
+                    mobile_year_days.setdefault(geometry, set()).update(
+                        parsed for text in texts
+                        if (
+                            parsed := _parse_full_year_missing_month_day(text)
+                        ) is not None
+                    )
+
+    candidates = []
+    for geometry in {"紧凑区域", "宽区域"}:
+        if server_dates.get(geometry) != {required}:
+            continue
+        if mobile_year_days.get(geometry) != {
+            (required.year, required.day)
+        }:
+            continue
+        candidates.append(geometry)
+    if len(candidates) != 1 or strict_dates != {required}:
+        return None
+
+    variants = slot_variants
+    if variants is None:
+        variants = list(tight.get("date_slot_ocr_variants") or [])
+    month_cells: dict[tuple[str, str], set[int]] = {}
+    for variant in variants:
+        if str(variant.get("slot", "")) != "月份数字窄槽":
+            continue
+        model = str(variant.get("model", ""))
+        preprocessing = str(variant.get("preprocessing", ""))
+        if model not in {"mobile", "server"} or preprocessing not in {
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        }:
+            continue
+        month_cells[(model, preprocessing)] = {
+            parsed for text in variant.get("ocr_texts") or []
+            if (
+                parsed := _parse_date_slot_digit(str(text), maximum=12)
+            ) is not None
+        }
+    expected_cells = {
+        (model, preprocessing)
+        for model in ("mobile", "server")
+        for preprocessing in (
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        )
+    }
+    if set(month_cells) != expected_cells:
+        return None
+    if any(values - {required.month} for values in month_cells.values()):
+        return None
+    supporting_cells = [
+        cell for cell, values in month_cells.items()
+        if values == {required.month}
+    ]
+    if (
+        len(supporting_cells) < 3
+        or {cell[0] for cell in supporting_cells} != {"mobile", "server"}
+        or not all(
+            month_cells[(model, "最大通道去彩色")] == {required.month}
+            for model in ("mobile", "server")
+        )
+    ):
+        return None
+
+    parsed_dates = {
+        parsed for text in all_texts
+        if (parsed := parse_receipt_date(text, required)) is not None
+    }
+    allowed_days = {required.day, required.day // 10, required.day % 10}
+    if any(
+        value.year != required.year
+        or value.month != required.month
+        or value.day not in allowed_days
+        for value in parsed_dates
+    ):
+        return None
+    conflicts = sorted(parsed_dates - {required})
+    return {
+        "date": required,
+        "geometry": candidates[0],
+        "supporting_month_cells": [
+            {"model": model, "preprocessing": preprocessing}
+            for model, preprocessing in sorted(supporting_cells)
+        ],
+        "conflicts": conflicts,
+    }
 
 
 def _date_component_consensus_from_artifacts(

@@ -42,6 +42,8 @@ from receipt_ocr.analyzer import (
     _server_cross_geometry_strict_date_from_artifacts,
     _server_strict_component_consensus_from_artifacts,
     _required_month_slot_conflict_consensus_from_artifacts,
+    _same_geometry_missing_month_consensus_from_artifacts,
+    _parse_full_year_missing_month_day,
     _parse_date_slot_digit,
     _has_shared_specific_stamp_type,
     _strong_unread_colored_stamp_route,
@@ -3098,6 +3100,116 @@ def test_required_month_slot_keeps_conflicts_review_only(mutation):
 
     assert _required_month_slot_conflict_consensus_from_artifacts(
         artifacts, "2025-07-01"
+    ) is None
+
+
+def _same_geometry_missing_month_artifacts():
+    month_slots = [
+        {
+            "slot": "月份数字窄槽",
+            "model": model,
+            "preprocessing": preprocessing,
+            "ocr_texts": (["C"] if model == "mobile" and "去横线" in preprocessing else ["5"]),
+        }
+        for model in ("mobile", "server")
+        for preprocessing in (
+            "最大通道去彩色", "最大通道去彩色并去横线"
+        )
+    ]
+    return [
+        {
+            "variant": "紧凑区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["205年上月1日"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年5月日"],
+                },
+            ],
+            "date_slot_ocr_variants": month_slots,
+        },
+        {
+            "variant": "宽区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年月11日"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年5月11日"],
+                },
+            ],
+        },
+    ]
+
+
+def test_same_geometry_missing_month_uses_ocr_owned_month_and_two_digit_day():
+    evidence = _same_geometry_missing_month_consensus_from_artifacts(
+        _same_geometry_missing_month_artifacts(), "2025-05-11"
+    )
+
+    assert _parse_full_year_missing_month_day("2025年月11日") == (2025, 11)
+    assert evidence is not None
+    assert evidence["date"] == date(2025, 5, 11)
+    assert evidence["geometry"] == "宽区域"
+    assert len(evidence["supporting_month_cells"]) == 3
+    assert evidence["conflicts"] == [date(2025, 5, 1)]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "single_digit_day",
+        "wrong_month_cell",
+        "one_model_month",
+        "strict_conflict",
+        "different_year",
+        "windows_single_backend",
+    ],
+)
+def test_same_geometry_missing_month_rejects_unsafe_evidence(mutation):
+    artifacts = _same_geometry_missing_month_artifacts()
+    if mutation == "single_digit_day":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [
+            "2025年月1日"
+        ]
+    elif mutation == "wrong_month_cell":
+        artifacts[0]["date_slot_ocr_variants"][-1]["ocr_texts"] = ["6"]
+    elif mutation == "one_model_month":
+        for variant in artifacts[0]["date_slot_ocr_variants"]:
+            if variant["model"] == "mobile":
+                variant["ocr_texts"] = ["C"]
+    elif mutation == "strict_conflict":
+        artifacts[0]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行原图",
+            "ocr_texts": ["2025年5月10日"],
+        })
+    elif mutation == "different_year":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [
+            "2024年月11日"
+        ]
+    else:
+        artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+        artifacts[0]["secondary_ocr_backend"] = ""
+
+    assert _same_geometry_missing_month_consensus_from_artifacts(
+        artifacts, "2025-05-11"
     ) is None
 
 
