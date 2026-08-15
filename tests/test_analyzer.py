@@ -23,6 +23,7 @@ from receipt_ocr.analyzer import (
     _server_mobile_dominant_date_from_artifacts,
     _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
+    _needs_low_confidence_date_audit,
     _day_slot_confirms_value,
     _max_channel_truncated_mismatch_candidate,
     _missing_year_separator_consensus_from_artifacts,
@@ -4371,6 +4372,27 @@ def test_far_lower_cross_model_helper_rejects_one_view_or_conflict():
     assert _cross_model_far_lower_strict_date(
         mobile, server, ["2025.8.12", "2035.8.12"]
     ) is None
+
+
+def test_low_confidence_component_audit_allows_only_one_required_date():
+    from receipt_ocr.ocr_types import TextObservation
+
+    def row(text: str, confidence: float = 0.68) -> TextObservation:
+        return TextObservation(text, confidence, 0.8, 0.6, 0.1, 0.03)
+
+    assert _needs_low_confidence_date_audit([], "2025-02-11")
+    assert _needs_low_confidence_date_audit(
+        [row("202年2月11日")], "2025-02-11"
+    )
+    assert not _needs_low_confidence_date_audit(
+        [row("2025年2月11日", 0.90)], "2025-02-11"
+    )
+    assert not _needs_low_confidence_date_audit(
+        [row("202年2月11日"), row("2025年2月2日")], "2025-02-11"
+    )
+    assert not _needs_low_confidence_date_audit(
+        [row("202年2月10日")], "2025-02-11"
+    )
 
 
 def test_page_bottom_handwritten_date_is_visible_but_never_auto_reliable(tmp_path, monkeypatch):

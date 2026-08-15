@@ -4175,10 +4175,15 @@ class ReceiptAnalyzer:
             # different year is capped at 0.35 and only becomes a displayed
             # audit candidate when the helper below sees it in at least two
             # geometric crops. Neither path can become an automatic verdict.
-            if (
+            low_confidence_audit_base_rows = list(output)
+            run_low_confidence_date_audit = bool(
                 secondary_ocr_backend == "paddle"
-                and find_receipt_date(output, required_text)[0] is None
-            ):
+                and _needs_low_confidence_date_audit(
+                    low_confidence_audit_base_rows, required_text
+                )
+            )
+            low_confidence_audit_output_start = len(output)
+            if run_low_confidence_date_audit:
                 required = parse_date(required_text)
                 if required is not None:
                     from .paddle_ocr import recognize_line
@@ -4447,11 +4452,13 @@ class ReceiptAnalyzer:
                     # Server recover every component from both approved
                     # color-suppressed variants and no other date exists.
                     current_slot_date, _ = find_receipt_date(
-                        output, required_text
+                        low_confidence_audit_base_rows, required_text
                     )
                     required_for_slot = parse_date(required_text)
                     slot_confidence = estimate_date_confidence(
-                        output, required_text, current_slot_date
+                        low_confidence_audit_base_rows,
+                        required_text,
+                        current_slot_date,
                     )
                     month_conflict_prefilter = (
                         _required_month_slot_conflict_prefilter_from_artifacts(
@@ -5203,6 +5210,51 @@ class ReceiptAnalyzer:
                                                     ].isoformat()
                                                 ),
                                             })
+            if run_low_confidence_date_audit and not any(
+                artifact.get("date_slot_reliable")
+                for artifact in artifacts
+            ):
+                # Server/Otsu/autocontrast variants above are audit evidence,
+                # not independent physical observations. Keep every OCR text
+                # in the artifact history, but do not let several derivatives
+                # of one line accumulate into an automatic verdict. If the
+                # decision-grade rows had no date at all, retain only one
+                # capped observation so the candidate remains visible for a
+                # human reviewer.
+                added_audit_rows = output[
+                    low_confidence_audit_output_start:
+                ]
+                del output[low_confidence_audit_output_start:]
+                base_date, _ = find_receipt_date(
+                    low_confidence_audit_base_rows, required_text
+                )
+                if base_date is None:
+                    required_for_audit = parse_date(required_text)
+                    grouped_audit_rows: dict[date, list[TextObservation]] = {}
+                    for row in added_audit_rows:
+                        parsed = parse_receipt_date(
+                            row.text, required_for_audit
+                        )
+                        if parsed is not None:
+                            grouped_audit_rows.setdefault(parsed, []).append(
+                                row
+                            )
+                    if len(grouped_audit_rows) == 1:
+                        rows_for_candidate = next(
+                            iter(grouped_audit_rows.values())
+                        )
+                        best_audit_row = max(
+                            rows_for_candidate,
+                            key=lambda row: row.confidence,
+                        )
+                        output.append(TextObservation(
+                            text=best_audit_row.text,
+                            confidence=min(0.25, best_audit_row.confidence),
+                            x=best_audit_row.x,
+                            y=best_audit_row.y,
+                            width=best_audit_row.width,
+                            height=best_audit_row.height,
+                        ))
             # A missing printed ``年`` can leave a fully self-contained Mobile
             # reading such as ``20256月16日``.  Use it only when Server exposes
             # the same strict date and every other parsed date is the matching
@@ -5915,6 +5967,34 @@ def _cross_model_far_lower_strict_date(
         if (parsed := parse_date(str(text))) is not None
     }
     return mobile if not (existing - {mobile}) else None
+
+
+def _needs_low_confidence_date_audit(
+    rows: list[TextObservation], required_text: str,
+) -> bool:
+    """Run strict component audits for empty or sole low-confidence matches.
+
+    A partial date can already make ``find_receipt_date`` return the printed
+    requirement, which previously skipped all fixed-slot verification.  Admit
+    that case only when the result is still below the reliable threshold and
+    no OCR-owned interpretation points to any other date.  The requirement is
+    comparison-only; it never supplies a missing component to the later slot
+    recognizers.
+    """
+    required = parse_date(required_text)
+    actual, _ = find_receipt_date(rows, required_text)
+    if actual is None:
+        return True
+    if required is None or actual != required:
+        return False
+    if estimate_date_confidence(rows, required_text, actual) >= 0.72:
+        return False
+    observed = {
+        parsed
+        for row in rows
+        if (parsed := parse_receipt_date(row.text, required)) is not None
+    }
+    return bool(observed and observed <= {required})
 
 
 def _cross_model_max_channel_mismatch_date(
