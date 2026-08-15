@@ -48,6 +48,7 @@ from receipt_ocr.analyzer import (
     _reconstruct_business_acceptance_from_audit,
     _reconstruct_exact_company_stamp_from_region,
     _reconstruct_one_error_round_type_band,
+    _reconstruct_partitioned_service_organization,
     _reconstruct_overlapping_repair_stamp,
     _reconstruct_business_acceptance_from_mobile_bands,
     _shared_long_organization_suffix,
@@ -482,6 +483,73 @@ def test_shallow_company_round_seal_uses_server_unwrapped_bands(
     assert [row["ocr_texts"] for row in band_variants] == [
         ["湖南和联电子科技"], ["公司"], []
     ]
+
+
+def test_dense_service_center_reconstructs_only_cross_band_exact_fragments(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+    from receipt_ocr.image_processing import SealRegion
+
+    requirement = "蚌埠天马电子技术服务中心"
+    assert _reconstruct_partitioned_service_organization(
+        requirement,
+        {
+            "圆章展开分带 1": ["蚌埠天马"],
+            "保留章色旋转对照图": ["电子"],
+            "圆章展开分带 2": ["技术服务中心"],
+        },
+    ) == requirement
+    assert _reconstruct_partitioned_service_organization(
+        requirement,
+        {"圆章展开分带 1": ["蚌埠天马", "技术服务中心"]},
+    ) == ""
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (400, 600), "white").save(source)
+
+    def fake_save(_source, destination, *_args, **_kwargs):
+        size = (2160, 792) if destination.name.endswith("-unwrapped.png") else (240, 240)
+        Image.new("RGB", size, "white").save(destination)
+
+    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
+    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
+    )
+    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+
+    def fake_ocr(path, *, backend, **_kwargs):
+        if backend == "vision":
+            return [TextObservation("中", .80, 0, 0, 1, 1)]
+        if backend == "paddle_server":
+            if path.name == "seal-0-unwrapped.png":
+                return [TextObservation("蚌棒天", .90, 0, 0, 1, 1)]
+            if path.name == "seal-0-unwrapped-band-1.png":
+                return [TextObservation("蚌埠天马", .95, 0, 0, 1, 1)]
+            if path.name == "seal-0-unwrapped-band-2.png":
+                return [TextObservation("技术服务中心", .95, 0, 0, 1, 1)]
+            if path.name == "seal-0-color-isolated-rotations.png":
+                return [TextObservation("电子", .95, 0, 0, 1, 1)]
+        return []
+
+    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
+        source,
+        [],
+        [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .262)],
+        tmp_path / "artifacts",
+        "/artifacts",
+        "vision",
+        "paddle",
+        requirement=requirement,
+    )
+
+    assert compare_seal_text(requirement, texts)["reliable"] is True
+    assert artifacts[0]["partitioned_service_reconstructed_text"] == requirement
+    assert len(artifacts[0]["unwrapped_band_urls"]) == 3
 
 
 @pytest.mark.parametrize(
@@ -1080,6 +1148,15 @@ def test_strong_unread_colored_stamp_route_requires_visual_and_org_evidence():
     ) is False
     assert _strong_unread_colored_stamp_route(
         "三星电子青岛维修中心", 0.0, 0.059
+    ) is False
+    assert _strong_unread_colored_stamp_route(
+        "蚌埠天马电子技术服务中心", 0.154, 0.262
+    ) is True
+    assert _strong_unread_colored_stamp_route(
+        "蚌埠天马电子技术服务中心", 0.201, 0.262
+    ) is False
+    assert _strong_unread_colored_stamp_route(
+        "蚌埠天马电子技术服务中心", 0.154, 0.199
     ) is False
     assert _strong_unread_colored_stamp_route(
         "普通收货章", 0.0, 0.20

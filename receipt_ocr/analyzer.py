@@ -224,8 +224,15 @@ def _strong_unread_colored_stamp_route(
     """
     normalized = normalize_text(requirement)
     unread_organization = bool(
-        preliminary_score == 0
-        and max_pixel_ratio >= 0.06
+        (
+            (preliminary_score == 0 and max_pixel_ratio >= 0.06)
+            # A dense, clean circular stamp can leave one accidental glyph
+            # after black grid-line interference.  Treat that near-empty
+            # result like the fully unread case only at a much stronger color
+            # density.  This is still routing-only: Server must independently
+            # satisfy the unchanged final organization matcher.
+            or (preliminary_score <= 0.20 and max_pixel_ratio >= 0.20)
+        )
         and len(normalized) >= 8
         and any(
             token in requirement
@@ -254,6 +261,66 @@ def _strong_unread_colored_stamp_route(
         and max_pixel_ratio >= 0.08
     )
     return unread_organization or fragmented_local_service_center
+
+
+def _reconstruct_partitioned_service_organization(
+    requirement: str,
+    band_variants: dict[str, list[str]],
+) -> str:
+    """Join 2–3 exact ordered rows from distinct safe seal derivatives.
+
+    No OCR glyph is corrected or copied from the printed requirement: every
+    character must occur in exact, non-overlapping OCR fragments. At least one
+    fragment must come from an unwrapped band and at least two safe derivative
+    labels must contribute.
+    """
+    expected = normalize_text(requirement)
+    if (
+        len(expected) < 10
+        or not re.fullmatch(r"[\u4e00-\u9fff]+", expected)
+        or not expected.endswith("服务中心")
+    ):
+        return ""
+    allowed_prefixes = (
+        "圆章展开分带",
+        "保留章色旋转对照图",
+        "圆章/矩形校正图",
+    )
+    normalized_by_band = {
+        label: {
+            normalize_text(text)
+            for text in texts
+            if len(normalize_text(text)) >= 2
+        }
+        for label, texts in band_variants.items()
+        if label.startswith(allowed_prefixes)
+    }
+
+    def covers(
+        position: int,
+        pieces: list[tuple[str, str]],
+    ) -> bool:
+        if position == len(expected):
+            labels = {label for label, _text in pieces}
+            return bool(
+                2 <= len(pieces) <= 3
+                and len(labels) >= 2
+                and any(label.startswith("圆章展开分带") for label in labels)
+                and any(len(text) >= 4 for _label, text in pieces)
+            )
+        if len(pieces) >= 3:
+            return False
+        for label, texts in normalized_by_band.items():
+            for text in texts:
+                if expected.startswith(text, position) and covers(
+                    position + len(text), pieces + [(label, text)]
+                ):
+                    return True
+        return False
+
+    if covers(0, []):
+        return expected
+    return ""
 
 
 def _reconstruct_business_acceptance_from_audit(
@@ -2251,6 +2318,22 @@ class ReceiptAnalyzer:
                 and len(normalize_text(requirement)) >= 10
                 and float(preliminary.get("score", 0)) >= 0.50
             )
+            dense_partitioned_service_organization = bool(
+                re.fullmatch(
+                    r"[\u4e00-\u9fff]+",
+                    normalize_text(requirement),
+                )
+                and len(normalize_text(requirement)) >= 10
+                and normalize_text(requirement).endswith("服务中心")
+                and float(preliminary.get("score", 0)) <= 0.20
+                and max(
+                    (
+                        float(candidate.get("pixel_ratio", 0))
+                        for candidate in server_candidates
+                    ),
+                    default=0.0,
+                ) >= 0.20
+            )
             strong_unread_colored_stamp = _strong_unread_colored_stamp_route(
                 requirement,
                 float(preliminary.get("score", 0)),
@@ -2371,6 +2454,10 @@ class ReceiptAnalyzer:
                 for audit_position, candidate in enumerate(
                     ranked_candidates[:audit_limit]
                 ):
+                    dense_partitioned_candidate = bool(
+                        dense_partitioned_service_organization
+                        and float(candidate.get("pixel_ratio", 0)) >= 0.20
+                    )
                     audit_texts: list[str] = []
                     round_type_band: Path | None = None
                     round_type_band_rows: list[TextObservation] = []
@@ -2490,11 +2577,20 @@ class ReceiptAnalyzer:
                     should_audit_unwrapped_bands = bool(
                         artifact_dir
                         and audit_position == 0
-                        and company_only_requirement
                         and not candidate["rectangular"]
                         and not preliminary_company_conflict
-                        and 0.72 <= float(preliminary.get("score", 0)) < 0.80
-                        and float(preliminary.get("company_score", 0)) >= 0.90
+                        and (
+                            (
+                                company_only_requirement
+                                and 0.72 <= float(
+                                    preliminary.get("score", 0)
+                                ) < 0.80
+                                and float(
+                                    preliminary.get("company_score", 0)
+                                ) >= 0.90
+                            )
+                            or dense_partitioned_candidate
+                        )
                     )
                     if should_audit_unwrapped_bands:
                         try:
@@ -2526,10 +2622,14 @@ class ReceiptAnalyzer:
                     if (
                         not candidate["rectangular"]
                         and candidate.get("unwrapped_rotated") is not None
-                        and explicit_stamp_type
+                        and (
+                            explicit_stamp_type
+                            or dense_partitioned_candidate
+                        )
                         and (
                             overlapping_repair_route
                             or branch_stamp_rotation_route
+                            or dense_partitioned_candidate
                             or (
                                 float(preliminary.get("score", 0)) >= 0.72
                                 and float(preliminary.get("company_score", 0))
@@ -2653,6 +2753,17 @@ class ReceiptAnalyzer:
                         audit_variant_texts[
                             "完整公司 + 圆章章型单字纠错"
                         ] = [reconstructed_one_error_type]
+                    reconstructed_partitioned_service = (
+                        _reconstruct_partitioned_service_organization(
+                            requirement, audit_variant_texts
+                        )
+                        if dense_partitioned_candidate else ""
+                    )
+                    if reconstructed_partitioned_service:
+                        audit_texts.append(reconstructed_partitioned_service)
+                        audit_variant_texts[
+                            "圆章不同分带精确互补重组（无字符补写）"
+                        ] = [reconstructed_partitioned_service]
                     combined_audit = combine_region_texts(audit_texts)
                     server_audit_used_for_matching = bool(
                         not preliminary_company_conflict
@@ -2705,6 +2816,16 @@ class ReceiptAnalyzer:
                                 for path in unwrapped_band_paths
                                 if path.is_file()
                             ],
+                            partitioned_service_reconstructed_text=(
+                                reconstructed_partitioned_service
+                            ),
+                            partitioned_service_acceptance_note=(
+                                "不同颜色安全圆章分带分别逐字读到互补组织片段，"
+                                "无字符补写，允许参与匹配"
+                                if reconstructed_partitioned_service else
+                                "未在不同圆章分带中读到两个精确互补片段，"
+                                "保持待复核"
+                            ) if dense_partitioned_candidate else "",
                             round_type_band_url=(
                                 f"{artifact_url_prefix.rstrip('/')}/seals/"
                                 f"{round_type_band.name}"
