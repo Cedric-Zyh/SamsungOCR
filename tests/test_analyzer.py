@@ -21,6 +21,7 @@ from receipt_ocr.analyzer import (
     _company_conflict_allows_clipped_prefix_server_recheck,
     _conflicting_receipt_dates,
     _server_mobile_dominant_date_from_artifacts,
+    _server_cross_geometry_date_with_mobile_components_from_artifacts,
     _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
     _cross_model_far_lower_complementary_date,
@@ -144,6 +145,92 @@ def test_server_mobile_dominant_date_rejects_repeated_or_strict_conflict():
     })
     assert _server_mobile_dominant_date_from_artifacts(
         artifacts, "2025-05-11"
+    ) is None
+
+
+def _server_mobile_component_artifacts() -> list[dict]:
+    return [
+        {
+            "variant": "紧凑区域",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [{
+                "preprocessing": "去印章色",
+                "ocr_texts": ["202年1月23"],
+            }],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年1月23日"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["2028年1月25日"],
+                },
+            ],
+        },
+        {
+            "variant": "宽区域",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [{
+                "preprocessing": "去印章色",
+                "ocr_texts": ["20251月23日"],
+            }],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年1月23日"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["2025年1月25日"],
+                },
+            ],
+        },
+    ]
+
+
+def test_server_cross_geometry_date_accepts_mobile_component_consensus():
+    assert _server_cross_geometry_date_with_mobile_components_from_artifacts(
+        _server_mobile_component_artifacts()
+    ) == date(2025, 1, 23)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("server", "2025年1月24日"),
+        ("component", "202年1月22日"),
+        ("mobile_conflict", "2028年1月24日"),
+        ("extra_strict", "2025年1月22日"),
+    ],
+)
+def test_server_cross_geometry_date_rejects_missing_or_conflicting_evidence(
+    mutation, value,
+):
+    artifacts = _server_mobile_component_artifacts()
+    if mutation == "server":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [value]
+    elif mutation == "component":
+        artifacts[0]["secondary_ocr_variants"][0]["ocr_texts"] = [value]
+    elif mutation == "mobile_conflict":
+        artifacts[1]["date_line_ocr_variants"][1]["ocr_texts"] = [value]
+    else:
+        artifacts[0]["secondary_ocr_variants"].append({
+            "preprocessing": "原始裁剪",
+            "ocr_texts": [value],
+        })
+    assert _server_cross_geometry_date_with_mobile_components_from_artifacts(
+        artifacts
     ) is None
 
 

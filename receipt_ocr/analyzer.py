@@ -1035,6 +1035,16 @@ class ReceiptAnalyzer:
         )
         if actual_date is None and repeated_server_date is not None:
             actual_date = repeated_server_date
+        server_mobile_component_date = (
+            _server_cross_geometry_date_with_mobile_components_from_artifacts(
+                date_artifacts
+            )
+        )
+        if (
+            actual_date is None
+            and server_mobile_component_date is not None
+        ):
+            actual_date = server_mobile_component_date
         cross_year_consensus = _cross_year_strict_consensus_from_artifacts(
             date_artifacts, fields.get("要求到货", "")
         )
@@ -1355,6 +1365,28 @@ class ReceiptAnalyzer:
                             "唯一可解析日期等于要求到货日期；Server 在同一"
                             "几何区域的原始、最大通道或自动对比等至少三种"
                             "预处理上严格重复"
+                        ),
+                    })
+        if (
+            actual_date is not None
+            and server_mobile_component_date == actual_date
+        ):
+            date_confidence = max(0.82, date_confidence)
+            date_check["message"] += (
+                "（Server 紧裁/宽裁重复完整日期；Mobile 两个区域均保留"
+                "同年月日组件，Mobile 最大通道冲突自身不一致，已保留供复核）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_server_mobile_component_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_server_mobile_component_note": (
+                            "Server 最大通道在紧裁、宽裁只重复同一完整日期；"
+                            "Mobile 两个区域的非完整原文都独立保留同年月日；"
+                            "Mobile 最大通道的两个完整冲突值月日相同但年份"
+                            "互不一致，不能否决跨模型组件共识"
                         ),
                     })
         day_slot_candidates = {
@@ -6193,6 +6225,146 @@ def _conflicting_receipt_dates(rows: list[TextObservation], required) -> set[dat
         if (parsed := parse_receipt_date(row.text, required)) is not None
         and parsed != required
     }
+
+
+def _mobile_component_supports_date(text: str, candidate: date) -> bool:
+    """Match OCR-owned year/month/day components without requirement repair."""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    if parse_date(compact) is not None:
+        return False
+    patterns = (
+        r"(?<!\d)(\d{3})年(\d{1,2})月(\d{1,2})日?(?!\d)",
+        r"(?<!\d)(20\d{2})(\d{1,2})月(\d{1,2})日?(?!\d)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, compact):
+            observed_year, raw_month, raw_day = match.groups()
+            month, day = int(raw_month), int(raw_day)
+            try:
+                date(candidate.year, month, day)
+            except ValueError:
+                continue
+            if (month, day) != (candidate.month, candidate.day):
+                continue
+            if len(observed_year) == 4:
+                if int(observed_year) == candidate.year:
+                    return True
+                continue
+            position = 0
+            for char in observed_year:
+                offset = str(candidate.year).find(char, position)
+                if offset < 0:
+                    break
+                position = offset + 1
+            else:
+                return True
+    return False
+
+
+def _server_cross_geometry_date_with_mobile_components_from_artifacts(
+    artifacts: list[dict],
+) -> date | None:
+    """Resolve one narrow Mobile conflict using Server and raw components.
+
+    Server must read one and only one strict date from the max-channel line in
+    both tight and wide crops. Mobile must preserve that date's OCR-owned
+    year/month/day components in both geometries, while its own max-channel
+    strict results must be two different dates that share one month/day. This
+    identifies an unstable Mobile digit interpretation; no printed required
+    date is passed to or used by this selector.
+    """
+    primary_variants = {"紧凑区域", "宽区域"}
+    records: list[dict] = []
+    for artifact in artifacts:
+        variant = str(artifact.get("variant", ""))
+        if variant not in primary_variants:
+            continue
+        for key, default_backend in (
+            ("ocr_variants", str(artifact.get("ocr_backend", ""))),
+            (
+                "secondary_ocr_variants",
+                str(artifact.get("secondary_ocr_backend", "")),
+            ),
+            (
+                "date_line_ocr_variants",
+                str(artifact.get("date_line_ocr_backend", "")),
+            ),
+        ):
+            for evidence in artifact.get(key) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                label = f"{default_backend} {preprocessing}".lower()
+                if "server" in label or "大模型" in label:
+                    engine = "server"
+                elif "paddle" in label or "mobile" in label:
+                    engine = "mobile"
+                else:
+                    continue
+                for raw_text in evidence.get("ocr_texts") or []:
+                    text = str(raw_text).strip()
+                    if text:
+                        records.append({
+                            "text": text,
+                            "date": parse_date(text),
+                            "engine": engine,
+                            "variant": variant,
+                            "max_channel": "最大通道" in preprocessing,
+                        })
+    server_by_variant = {
+        variant: {
+            item["date"] for item in records
+            if item["engine"] == "server"
+            and item["variant"] == variant
+            and item["max_channel"]
+            and item["date"] is not None
+        }
+        for variant in primary_variants
+    }
+    if any(len(values) != 1 for values in server_by_variant.values()):
+        return None
+    candidates = set().union(*server_by_variant.values())
+    if len(candidates) != 1:
+        return None
+    candidate = next(iter(candidates))
+    mobile_conflicts_by_variant = {
+        variant: {
+            item["date"] for item in records
+            if item["engine"] == "mobile"
+            and item["variant"] == variant
+            and item["max_channel"]
+            and item["date"] is not None
+            and item["date"] != candidate
+        }
+        for variant in primary_variants
+    }
+    if any(
+        len(values) != 1
+        for values in mobile_conflicts_by_variant.values()
+    ):
+        return None
+    mobile_conflicts = set().union(
+        *mobile_conflicts_by_variant.values()
+    )
+    if (
+        len(mobile_conflicts) != 2
+        or len({(value.month, value.day) for value in mobile_conflicts}) != 1
+        or (candidate.month, candidate.day)
+        in {(value.month, value.day) for value in mobile_conflicts}
+    ):
+        return None
+    for variant in primary_variants:
+        if not any(
+            item["engine"] == "mobile"
+            and item["variant"] == variant
+            and _mobile_component_supports_date(item["text"], candidate)
+            for item in records
+        ):
+            return None
+    all_strict_dates = {
+        item["date"] for item in records if item["date"] is not None
+    }
+    if all_strict_dates != {candidate, *mobile_conflicts}:
+        return None
+    return candidate
 
 
 def _server_mobile_dominant_date_from_artifacts(
