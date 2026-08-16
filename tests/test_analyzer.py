@@ -43,6 +43,7 @@ from receipt_ocr.analyzer import (
     _parse_full_year_month_day_audit,
     _parse_partial_year_month_day_audit,
     _same_geometry_partial_year_required_consensus_from_artifacts,
+    _unanimous_month_day_business_year_consensus_from_artifacts,
     _partial_year_day_before_audit_from_artifacts,
     _white_day_conflict_prefilter_from_artifacts,
     _white_day_conflict_audit_candidate,
@@ -4167,6 +4168,103 @@ def test_partial_year_required_consensus_rejects_unsafe_variants(mutation):
         creation = "2025-02-01"
 
     assert _same_geometry_partial_year_required_consensus_from_artifacts(
+        artifacts, required, creation, tracking
+    ) is None
+
+
+def _unanimous_month_day_business_year_artifacts():
+    return [
+        {
+            "variant": "紧凑区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": "日期行 Server 大模型低置信度候选",
+                    "ocr_texts": ["2021年10月3日"],
+                },
+            ],
+        },
+        {
+            "variant": "宽区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+                    ),
+                    "ocr_texts": ["207年10月3日"],
+                },
+                {
+                    "preprocessing": (
+                        "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+                    ),
+                    "ocr_texts": ["202年10月3日"],
+                },
+            ],
+        },
+    ]
+
+
+def test_unanimous_month_day_business_year_consensus_repairs_stale_year():
+    selected = _unanimous_month_day_business_year_consensus_from_artifacts(
+        _unanimous_month_day_business_year_artifacts(),
+        "2025-10-03", "2025-09-30", "W20250930-008097",
+    )
+    assert selected is not None
+    assert selected["date"] == date(2025, 10, 3)
+    assert selected["discarded_strict"] == date(2021, 10, 3)
+    assert {item["model"] for item in selected["support"]} == {
+        "mobile", "server",
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "month_day_conflict", "vision_conflict", "one_model", "one_geometry",
+        "multiple_strict", "business_year_conflict", "not_stale",
+        "outside_window", "non_hybrid",
+    ],
+)
+def test_unanimous_month_day_business_year_rejects_unsafe_variants(mutation):
+    artifacts = _unanimous_month_day_business_year_artifacts()
+    required = "2025-10-03"
+    creation = "2025-09-30"
+    tracking = "W20250930-008097"
+    if mutation == "month_day_conflict":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [
+            "207年10月2日"
+        ]
+    elif mutation == "vision_conflict":
+        artifacts[0]["ocr_variants"] = [{
+            "preprocessing": "原始裁剪",
+            "ocr_texts": ["2021年10月2日"],
+        }]
+    elif mutation == "one_model":
+        artifacts[1]["date_line_ocr_variants"] = artifacts[1][
+            "date_line_ocr_variants"
+        ][1:]
+    elif mutation == "one_geometry":
+        artifacts = artifacts[:1]
+    elif mutation == "multiple_strict":
+        artifacts[1]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行 Server 大模型低置信度候选",
+            "ocr_texts": ["2022年10月3日"],
+        })
+    elif mutation == "business_year_conflict":
+        tracking = "W20240930-008097"
+    elif mutation == "not_stale":
+        artifacts[0]["date_line_ocr_variants"][0]["ocr_texts"] = [
+            "2024年10月3日"
+        ]
+    elif mutation == "outside_window":
+        creation = "2025-09-20"
+        tracking = "W20250920-008097"
+    elif mutation == "non_hybrid":
+        artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    assert _unanimous_month_day_business_year_consensus_from_artifacts(
         artifacts, required, creation, tracking
     ) is None
 

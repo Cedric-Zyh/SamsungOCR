@@ -1186,6 +1186,22 @@ class ReceiptAnalyzer:
                 actual_date = partial_year_date
             else:
                 partial_year_required_consensus = None
+        unanimous_month_day_business_year_consensus = (
+            _unanimous_month_day_business_year_consensus_from_artifacts(
+                date_artifacts,
+                fields.get("要求到货", ""),
+                fields.get("制单日期", ""),
+                fields.get("运单号", ""),
+            )
+        )
+        if unanimous_month_day_business_year_consensus is not None:
+            consensus_date = unanimous_month_day_business_year_consensus[
+                "date"
+            ]
+            if actual_date in {None, consensus_date}:
+                actual_date = consensus_date
+            else:
+                unanimous_month_day_business_year_consensus = None
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1640,6 +1656,46 @@ class ReceiptAnalyzer:
                             "Mobile 宽裁去表格线与 Server 宽裁至少两种增强"
                             "读到相同 20x 年/月/日；制单日期、运单号和要求"
                             "到货年份一致，仅补年份末位，无其他合法日期冲突"
+                        ),
+                    })
+        if (
+            actual_date is not None
+            and unanimous_month_day_business_year_consensus is not None
+            and unanimous_month_day_business_year_consensus["date"]
+            == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.82, date_confidence)
+            discarded = unanimous_month_day_business_year_consensus[
+                "discarded_strict"
+            ]
+            date_check["unanimous_month_day_business_year_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "discarded_strict": discarded.isoformat(),
+                "models": ["mobile", "server"],
+                "geometries": ["紧凑区域", "宽区域"],
+                "year_sources": ["制单日期", "运单号", "要求到货"],
+                "support": unanimous_month_day_business_year_consensus[
+                    "support"
+                ],
+            }
+            date_check["message"] += (
+                "（Mobile/Server 与紧裁/宽裁的显式月日均为同一值；"
+                "唯一完整年份候选早于制单日期一年以上，制单日期、"
+                "运单号和要求到货三项独立业务日期一致确认年份）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_unanimous_month_day_business_year_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_unanimous_month_day_business_year_discarded": (
+                            discarded.isoformat()
+                        ),
+                        "date_unanimous_month_day_business_year_note": (
+                            "跨模型、跨几何显式月日无冲突；唯一完整日期的"
+                            "年份违反业务时间，三项独立业务日期仅修正年份"
                         ),
                     })
         otsu_manual_candidate = bool(
@@ -7967,6 +8023,129 @@ def _same_geometry_partial_year_required_consensus_from_artifacts(
             "mobile": mobile_support,
             "server": server_support,
         },
+    }
+
+
+def _unanimous_month_day_business_year_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str, creation_text: str,
+    tracking_text: str,
+) -> dict | None:
+    """Replace one demonstrably stale OCR year while preserving OCR month/day.
+
+    Every explicit handwritten month/day must be identical, and that value
+    must be observed across both Paddle models and both tight/wide geometries.
+    Exactly one literal full date may exist; its year must be at least one year
+    before document creation while keeping the unanimous month/day. The new
+    year is admitted only when the printed requirement, creation date, and
+    waybill-encoded date independently agree and the resulting receipt date
+    falls inside their seven-day business window. This route is macOS Hybrid
+    only and never borrows a missing month or day from a printed field.
+    """
+    required = parse_date(required_text)
+    creation = parse_date(creation_text)
+    tracking_match = re.search(r"W(20\d{2})(\d{2})(\d{2})", tracking_text)
+    tracking = parse_date(
+        "-".join(tracking_match.groups()) if tracking_match else ""
+    )
+    if (
+        required is None
+        or creation is None
+        or tracking is None
+        or len({required.year, creation.year, tracking.year}) != 1
+    ):
+        return None
+    primary = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if primary is None or (
+        "vision" not in str(primary.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            primary.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+
+    def explicit_month_day(raw: str) -> tuple[int, int] | None:
+        compact = re.sub(
+            r"\s+", "", str(raw).replace("O", "0").replace("o", "0")
+        )
+        match = re.search(
+            r"\d{2,6}年(\d{1,2})月(\d{1,2})日(?!\d)", compact
+        )
+        if match is None:
+            return None
+        month, day = (int(value) for value in match.groups())
+        try:
+            date(required.year, month, day)
+        except ValueError:
+            return None
+        return month, day
+
+    observations: list[dict] = []
+    all_month_days: set[tuple[int, int]] = set()
+    strict_dates: set[date] = set()
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant", ""))
+        if geometry not in {"紧凑区域", "宽区域"}:
+            continue
+        for group_name in (
+            "ocr_variants", "secondary_ocr_variants",
+            "date_line_ocr_variants",
+        ):
+            for evidence in artifact.get(group_name) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                if "Server" in preprocessing:
+                    model = "server"
+                elif (
+                    "Mobile" in preprocessing
+                    or group_name == "secondary_ocr_variants"
+                ):
+                    model = "mobile"
+                else:
+                    model = ""
+                for raw in evidence.get("ocr_texts") or []:
+                    text = str(raw)
+                    month_day = explicit_month_day(text)
+                    if month_day is not None:
+                        all_month_days.add(month_day)
+                        if model:
+                            observations.append({
+                                "model": model,
+                                "geometry": geometry,
+                                "preprocessing": preprocessing,
+                                "text": text,
+                                "month": month_day[0],
+                                "day": month_day[1],
+                            })
+                    strict = _parse_full_year_month_day_audit(text)
+                    if strict is not None:
+                        strict_dates.add(strict)
+    if (
+        len(all_month_days) != 1
+        or {item["model"] for item in observations} != {"mobile", "server"}
+        or {item["geometry"] for item in observations}
+        != {"紧凑区域", "宽区域"}
+        or len(strict_dates) != 1
+    ):
+        return None
+    month, day = next(iter(all_month_days))
+    discarded = next(iter(strict_dates))
+    candidate = date(required.year, month, day)
+    business_start = max(creation, tracking)
+    if not (
+        (discarded.month, discarded.day) == (month, day)
+        and discarded.year != candidate.year
+        and (creation - discarded).days >= 365
+        and business_start <= candidate <= required
+        and (candidate - creation).days <= 7
+        and (candidate - tracking).days <= 7
+    ):
+        return None
+    return {
+        "date": candidate,
+        "discarded_strict": discarded,
+        "support": observations,
     }
 
 
