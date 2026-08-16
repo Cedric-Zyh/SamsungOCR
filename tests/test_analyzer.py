@@ -23,6 +23,9 @@ from receipt_ocr.analyzer import (
     _server_mobile_dominant_date_from_artifacts,
     _repeated_server_required_date_from_artifacts,
     _cross_model_far_lower_strict_date,
+    _cross_model_far_lower_complementary_date,
+    _partial_year_month_day,
+    _year_month_prefix,
     _needs_low_confidence_date_audit,
     _select_display_only_date_audit_rows,
     _day_slot_confirms_value,
@@ -4825,6 +4828,101 @@ def test_far_lower_cross_model_helper_rejects_one_view_or_conflict():
     assert _cross_model_far_lower_strict_date(
         mobile, server, ["2025.8.12", "2035.8.12"]
     ) is None
+
+
+def test_far_lower_complementary_helper_requires_all_independent_components():
+    mobile = [
+        {"preprocessing": "原始裁剪", "ocr_texts": ["2025.8.5"]},
+        {"preprocessing": "去印章色", "ocr_texts": ["2025.8.5"]},
+    ]
+    server = [
+        {"preprocessing": "窄日期行原图", "ocr_texts": ["2025.8."]},
+        {"preprocessing": "窄日期行去印章色", "ocr_texts": ["22.8."]},
+    ]
+    assert _year_month_prefix("2025.8.") == (2025, 8)
+    assert _partial_year_month_day("225.8.5", date(2025, 8, 5)) == (8, 5)
+    assert _cross_model_far_lower_complementary_date(
+        mobile, server, ["2025.8.5"], ["225.8.5"], ["2025.8.5"]
+    ) == date(2025, 8, 5)
+
+    assert _cross_model_far_lower_complementary_date(
+        mobile[:1], server, ["2025.8.5"], ["225.8.5"], []
+    ) is None
+    assert _cross_model_far_lower_complementary_date(
+        mobile, server, ["2025.8.3"], ["225.8.5"], []
+    ) is None
+    assert _cross_model_far_lower_complementary_date(
+        mobile, server, ["2025.8.5"], ["225.8.3"], []
+    ) is None
+    assert _cross_model_far_lower_complementary_date(
+        mobile, server, ["2025.8.5"], ["235.8.5"], []
+    ) is None
+    assert _cross_model_far_lower_complementary_date(
+        mobile, server, ["2025.8.5"], ["225.8.5"], ["2025.8.3"]
+    ) is None
+
+
+def test_far_lower_padding_complementary_route_is_visible_and_reliable(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (1000, 1600), "white").save(source)
+
+    def fake_save_crop(
+        _source, destination, _anchor_y, *, tight, raw_destination,
+        color_clean_destination, left=None
+    ):
+        for path in (destination, raw_destination, color_clean_destination):
+            Image.new("RGB", (500, 150), "white").save(path)
+        return (.48, .70, .515, .08)
+
+    def fake_recognize_text(path, *, backend, **_kwargs):
+        name = path.name
+        if backend == "paddle" and name in {
+            "date-far_lower-original.jpg",
+            "date-far_lower-color-clean.png",
+        }:
+            return [TextObservation("2025.8.5", .94, 0, 0, 1, 1)]
+        if backend == "paddle_server" and name == (
+            "date-far_lower-line-original.jpg"
+        ):
+            return [TextObservation("2025.8.", .90, 0, 0, 1, 1)]
+        if name == "date-far_lower-line-right-padded.png":
+            text = "2025.8.5" if backend == "paddle" else "225.8.5"
+            return [TextObservation(text, .88, 0, 0, 1, 1)]
+        return []
+
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop
+    )
+    monkeypatch.setattr(
+        "receipt_ocr.analyzer.recognize_text", fake_recognize_text
+    )
+    monkeypatch.setattr(
+        "receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: []
+    )
+
+    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
+        source, .47, "2025-08-05", tmp_path / "artifacts", "/x",
+        "vision", secondary_ocr_backend="paddle",
+    )
+    actual, _ = _find_confirmed_far_lower_date(rows, artifacts)
+    assert actual == date(2025, 8, 5)
+    far = next(
+        item for item in artifacts
+        if item["variant"] == "远下方手写日期复核区域"
+    )
+    assert far["far_lower_cross_model_mode"] == (
+        "right_padding_complementary"
+    )
+    assert far["far_lower_padded_line_url"].endswith(
+        "date-far_lower-line-right-padded.png"
+    )
+    assert [
+        row["ocr_texts"] for row in far["far_lower_padded_variants"]
+    ] == [["2025.8.5"], ["225.8.5"]]
 
 
 def test_low_confidence_component_audit_allows_only_one_required_date():

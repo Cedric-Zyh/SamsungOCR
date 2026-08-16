@@ -150,6 +150,9 @@ def _date_artifact_metadata(result: dict) -> dict:
             "slot_month_day_vision_url": str(
                 artifact.get("date_slot_month_day_vision_url", "") or ""
             ),
+            "far_lower_padded_line_url": str(
+                artifact.get("far_lower_padded_line_url", "") or ""
+            ),
         }
         if item["table_clean_url"]:
             has_table_clean = True

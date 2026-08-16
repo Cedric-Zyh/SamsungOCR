@@ -3599,6 +3599,9 @@ class ReceiptAnalyzer:
                         })
                 far_lower_cross_model_date = None
                 far_lower_server_variants: list[dict] = []
+                far_lower_padded_line: Path | None = None
+                far_lower_padded_variants: list[dict] = []
+                far_lower_cross_model_mode = ""
                 far_lower_confirmed_rows: list[TextObservation] = []
                 if (
                     crop_key == "far_lower"
@@ -3646,6 +3649,65 @@ class ReceiptAnalyzer:
                         )
                     )
                     if far_lower_cross_model_date is not None:
+                        far_lower_cross_model_mode = "strict_full_date"
+                    if far_lower_cross_model_date is None:
+                        far_lower_padded_line = (
+                            Path(temp_dir)
+                            / "date-far_lower-line-right-padded.png"
+                        )
+                        _save_right_padded_date_line(
+                            line_raw, far_lower_padded_line
+                        )
+                        padded_rows_by_backend: dict[str, list[TextObservation]] = {}
+                        for padded_backend in ("paddle", "paddle_server"):
+                            try:
+                                padded_rows = recognize_text(
+                                    far_lower_padded_line,
+                                    backend=padded_backend,
+                                    min_text_height=0.012,
+                                )
+                            except Exception:
+                                padded_rows = []
+                            padded_rows_by_backend[padded_backend] = padded_rows
+                            far_lower_padded_variants.append({
+                                "preprocessing": (
+                                    "右侧补白日期行 "
+                                    + backend_label(padded_backend)
+                                ),
+                                "ocr_texts": [row.text for row in padded_rows],
+                            })
+                        complementary = (
+                            _cross_model_far_lower_complementary_date(
+                                secondary_ocr_variants,
+                                far_lower_server_variants,
+                                [
+                                    row.text for row in
+                                    padded_rows_by_backend.get("paddle", [])
+                                ],
+                                [
+                                    row.text for row in
+                                    padded_rows_by_backend.get(
+                                        "paddle_server", []
+                                    )
+                                ],
+                                [
+                                    row.text
+                                    for row in (
+                                        output
+                                        + variant_rows
+                                        + secondary_raw_rows
+                                        + line_rows
+                                        + far_lower_server_rows
+                                    )
+                                ],
+                            )
+                        )
+                        if complementary is not None:
+                            far_lower_cross_model_date = complementary
+                            far_lower_cross_model_mode = (
+                                "right_padding_complementary"
+                            )
+                    if far_lower_cross_model_date is not None:
                         normalized = (
                             f"{far_lower_cross_model_date.year}年"
                             f"{far_lower_cross_model_date.month}月"
@@ -3686,7 +3748,10 @@ class ReceiptAnalyzer:
                         ),
                         "ocr_texts": [
                             text
-                            for item in far_lower_server_variants
+                            for item in (
+                                far_lower_server_variants
+                                + far_lower_padded_variants
+                            )
                             for text in item["ocr_texts"]
                         ],
                         "accepted_texts": (
@@ -3695,6 +3760,10 @@ class ReceiptAnalyzer:
                             ] if far_lower_cross_model_date else []
                         ),
                         "acceptance_note": (
+                            "Mobile 完整区域与补白日期行读到同一严格日期；"
+                            "Server 原日期行确认年月、补白日期行确认月日"
+                            if far_lower_cross_model_mode
+                            == "right_padding_complementary" else
                             "Mobile 与 Server 在不同几何、各两种预处理上"
                             "读到同一严格四位日期"
                             if far_lower_cross_model_date else
@@ -3848,6 +3917,18 @@ class ReceiptAnalyzer:
                         ),
                         "far_lower_server_variants": (
                             far_lower_server_variants
+                        ),
+                        "far_lower_padded_line_url": (
+                            f"{prefix}/date/{far_lower_padded_line.name}"
+                            if far_lower_padded_line is not None
+                            and far_lower_padded_line.is_file()
+                            else ""
+                        ),
+                        "far_lower_padded_variants": (
+                            far_lower_padded_variants
+                        ),
+                        "far_lower_cross_model_mode": (
+                            far_lower_cross_model_mode
                         ),
                     })
             # Recognition-only line OCR may safely corroborate itself across
@@ -6461,6 +6542,99 @@ def _cross_model_far_lower_strict_date(
     return mobile if not (existing - {mobile}) else None
 
 
+def _year_month_prefix(text: str) -> tuple[int, int] | None:
+    """Parse an explicit four-digit year/month prefix with a missing day."""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    match = re.search(
+        r"(?<!\d)(20\d{2})(?:年|[./-])(\d{1,2})(?:月|[./-])(?!\d)",
+        compact,
+    )
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    return (year, month) if 1 <= month <= 12 else None
+
+
+def _partial_year_month_day(
+    text: str, candidate: date,
+) -> tuple[int, int] | None:
+    """Parse M/D when a three-digit OCR year is a subsequence of the truth."""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    match = re.search(
+        r"(?<!\d)(\d{3})(?:年|[./-])(\d{1,2})(?:月|[./-])"
+        r"(\d{1,2})日?(?!\d)",
+        compact,
+    )
+    if not match:
+        return None
+    observed_year = match.group(1)
+    expected_year = str(candidate.year)
+    position = 0
+    for char in observed_year:
+        offset = expected_year.find(char, position)
+        if offset < 0:
+            return None
+        position = offset + 1
+    month, day = int(match.group(2)), int(match.group(3))
+    try:
+        date(candidate.year, month, day)
+    except ValueError:
+        return None
+    return month, day
+
+
+def _cross_model_far_lower_complementary_date(
+    mobile_region_variants: list[dict],
+    server_line_variants: list[dict],
+    padded_mobile_texts: list[str],
+    padded_server_texts: list[str],
+    existing_texts: list[str],
+) -> date | None:
+    """Confirm a border-clipped date through complementary OCR components.
+
+    Mobile must repeat one literal full date in two whole-region views and in
+    the independently cropped, right-padded line. Server must expose the same
+    year/month before padding and the same month/day after padding. No printed
+    required-date component is used to construct the candidate.
+    """
+    candidate = _repeated_strict_date_across_variants(
+        mobile_region_variants
+    )
+    if candidate is None or not any(
+        parse_date(str(text)) == candidate for text in padded_mobile_texts
+    ):
+        return None
+    server_prefixes = {
+        parsed
+        for variant in server_line_variants
+        for text in (variant.get("ocr_texts") or [])
+        if (parsed := _year_month_prefix(str(text))) is not None
+    }
+    if (candidate.year, candidate.month) not in server_prefixes:
+        return None
+    server_suffixes = set()
+    for text in padded_server_texts:
+        parsed = parse_date(str(text))
+        if parsed == candidate:
+            server_suffixes.add((candidate.month, candidate.day))
+            continue
+        partial = _partial_year_month_day(str(text), candidate)
+        if partial is not None:
+            server_suffixes.add(partial)
+    if (candidate.month, candidate.day) not in server_suffixes:
+        return None
+    existing = {
+        parsed
+        for text in (
+            list(existing_texts)
+            + list(padded_mobile_texts)
+            + list(padded_server_texts)
+        )
+        if (parsed := parse_date(str(text))) is not None
+    }
+    return candidate if not (existing - {candidate}) else None
+
+
 def _needs_low_confidence_date_audit(
     rows: list[TextObservation], required_text: str,
 ) -> bool:
@@ -7179,6 +7353,27 @@ def _save_date_line_crop(
         else:
             cropped.save(destination)
     return left, top, right - left, bottom - top
+
+
+def _save_right_padded_date_line(
+    source: str | Path, destination: str | Path,
+) -> None:
+    """Add white OCR context around a line clipped against the page edge."""
+    with Image.open(source) as image:
+        rgb = image.convert("RGB")
+        padded = ImageOps.expand(
+            rgb,
+            border=(
+                round(rgb.width * 0.03),
+                round(rgb.height * 0.08),
+                round(rgb.width * 0.10),
+                round(rgb.height * 0.08),
+            ),
+            fill="white",
+        )
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        padded.save(destination)
 
 
 def _save_date_slot_views(
