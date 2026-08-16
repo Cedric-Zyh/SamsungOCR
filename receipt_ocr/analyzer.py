@@ -1202,6 +1202,22 @@ class ReceiptAnalyzer:
                 actual_date = consensus_date
             else:
                 unanimous_month_day_business_year_consensus = None
+        partial_year_missing_month_business_consensus = (
+            _partial_year_missing_month_business_consensus_from_artifacts(
+                date_artifacts,
+                fields.get("要求到货", ""),
+                fields.get("制单日期", ""),
+                fields.get("运单号", ""),
+            )
+        )
+        if partial_year_missing_month_business_consensus is not None:
+            component_date = partial_year_missing_month_business_consensus[
+                "date"
+            ]
+            if actual_date in {None, component_date}:
+                actual_date = component_date
+            else:
+                partial_year_missing_month_business_consensus = None
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1696,6 +1712,46 @@ class ReceiptAnalyzer:
                         "date_unanimous_month_day_business_year_note": (
                             "跨模型、跨几何显式月日无冲突；唯一完整日期的"
                             "年份违反业务时间，三项独立业务日期仅修正年份"
+                        ),
+                    })
+        if (
+            actual_date is not None
+            and partial_year_missing_month_business_consensus is not None
+            and partial_year_missing_month_business_consensus["date"]
+            == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.84, date_confidence)
+            date_check["partial_year_missing_month_business_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "models": ["mobile", "server"],
+                "geometries": ["紧凑区域", "宽区域"],
+                "year_sources": ["制单日期", "运单号", "要求到货"],
+                "day_support": (
+                    partial_year_missing_month_business_consensus[
+                        "day_support"
+                    ]
+                ),
+                "month_support": (
+                    partial_year_missing_month_business_consensus[
+                        "month_support"
+                    ]
+                ),
+            }
+            date_check["message"] += (
+                "（Mobile/Server 跨紧宽裁日期行一致保留日数字；"
+                "Mobile 月份上下文与 Server 月份窄槽各两种预处理一致；"
+                "残缺年份由制单日期、运单号和要求到货三项确认）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") in {"紧凑区域", "宽区域"}:
+                    artifact.update({
+                        "date_partial_year_missing_month_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_partial_year_missing_month_note": (
+                            "跨模型、跨几何日数字一致；Mobile 宽月份上下文"
+                            "与 Server 窄月份槽双预处理一致；三业务日期仅补年份"
                         ),
                     })
         otsu_manual_candidate = bool(
@@ -5116,6 +5172,11 @@ class ReceiptAnalyzer:
                                 else []
                             )
                             slot_variants.extend(adaptive_day_variants)
+                            missing_month_component_prefilter = (
+                                _missing_month_day_component_prefilter_from_artifacts(
+                                    artifacts
+                                )
+                            )
                             for preprocessing, safe_month_digit_path in (
                                 ("最大通道去彩色", month_digit_path),
                                 (
@@ -5158,6 +5219,43 @@ class ReceiptAnalyzer:
                                             str(value)
                                             for value in sorted(digit_values)
                                         ],
+                                    })
+                            if (
+                                missing_month_component_prefilter is not None
+                                and ocr_backend == "vision"
+                                and secondary_ocr_backend == "paddle"
+                            ):
+                                for preprocessing, context_path in (
+                                    (
+                                        "最大通道去彩色",
+                                        month_context_view.get("processed"),
+                                    ),
+                                    (
+                                        "最大通道去彩色并去横线",
+                                        month_context_view.get("line_clean"),
+                                    ),
+                                ):
+                                    if context_path is None:
+                                        continue
+                                    try:
+                                        month_context_rows = recognize_line(
+                                            context_path,
+                                            model_variant="mobile",
+                                        )
+                                    except Exception:
+                                        month_context_rows = []
+                                    slot_variants.append({
+                                        "slot": "月份上下文槽位",
+                                        "method": (
+                                            f"Mobile {preprocessing}整行识别"
+                                        ),
+                                        "model": "mobile",
+                                        "preprocessing": preprocessing,
+                                        "ocr_texts": [
+                                            row.text
+                                            for row in month_context_rows
+                                        ],
+                                        "parsed_components": [],
                                     })
                             month_day_by_model: dict[str, set[tuple[int, int]]] = {}
                             for preprocessing, safe_month_day_path in (
@@ -8146,6 +8244,203 @@ def _unanimous_month_day_business_year_consensus_from_artifacts(
         "date": candidate,
         "discarded_strict": discarded,
         "support": observations,
+    }
+
+
+def _missing_month_day_component_prefilter_from_artifacts(
+    artifacts: list[dict],
+) -> dict | None:
+    """Find one OCR-owned day with a partial year but no usable month.
+
+    This is only a probe gate. It never creates a date and deliberately does
+    not receive the printed required date. Mobile and Server must both expose
+    the same explicit day after the printed ``月`` unit, and the evidence must
+    span tight and wide geometries. Complete literal dates are rejected.
+    """
+    primary = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if primary is None or (
+        "vision" not in str(primary.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            primary.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+    day_support: list[dict] = []
+    partial_year_models: set[str] = set()
+    strict_dates: set[date] = set()
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant", ""))
+        if geometry not in {"紧凑区域", "宽区域"}:
+            continue
+        date_line_backend = str(artifact.get("date_line_ocr_backend", ""))
+        for group_name in (
+            "ocr_variants", "secondary_ocr_variants",
+            "date_line_ocr_variants",
+        ):
+            for evidence in artifact.get(group_name) or []:
+                preprocessing = str(evidence.get("preprocessing", ""))
+                if "Server" in preprocessing:
+                    model = "server"
+                elif (
+                    "Mobile" in preprocessing
+                    or group_name == "secondary_ocr_variants"
+                    or (
+                        group_name == "date_line_ocr_variants"
+                        and "mobile" in date_line_backend.lower()
+                    )
+                ):
+                    model = "mobile"
+                else:
+                    model = ""
+                for raw in evidence.get("ocr_texts") or []:
+                    text = re.sub(r"\s+", "", str(raw))
+                    strict = _parse_full_year_month_day_audit(text)
+                    if strict is not None:
+                        strict_dates.add(strict)
+                    partial_year = re.search(r"(?<!\d)(20\d?)年", text)
+                    if partial_year is not None and model:
+                        partial_year_models.add(model)
+                    day_match = re.search(r"月(\d{1,2})日(?!\d)", text)
+                    if day_match is None or not model:
+                        continue
+                    day = int(day_match.group(1))
+                    if 1 <= day <= 31:
+                        day_support.append({
+                            "model": model,
+                            "geometry": geometry,
+                            "preprocessing": preprocessing,
+                            "text": str(raw),
+                            "day": day,
+                        })
+    days = {item["day"] for item in day_support}
+    if (
+        strict_dates
+        or len(days) != 1
+        or {item["model"] for item in day_support} != {"mobile", "server"}
+        or {item["geometry"] for item in day_support}
+        != {"紧凑区域", "宽区域"}
+        or partial_year_models != {"mobile", "server"}
+        or len(day_support) < 3
+    ):
+        return None
+    return {"day": next(iter(days)), "support": day_support}
+
+
+def _partial_year_missing_month_business_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str, creation_text: str,
+    tracking_text: str, slot_variants: list[dict] | None = None,
+) -> dict | None:
+    """Compose a missing-month date from independent OCR component slots.
+
+    The day comes from cross-model/cross-geometry whole-line evidence. Paddle
+    Mobile must repeat ``N月`` in the wider month context before and after line
+    removal, while Paddle Server repeats the same digit in the narrow month
+    slot. Only the year is supplied by three agreeing business dates. The OCR
+    components must reconstruct the printed required date inside a three-day
+    outbound window; no complete OCR date may coexist with this route.
+    """
+    prefilter = _missing_month_day_component_prefilter_from_artifacts(artifacts)
+    required = parse_date(required_text)
+    creation = parse_date(creation_text)
+    tracking_match = re.search(r"W(20\d{2})(\d{2})(\d{2})", tracking_text)
+    tracking = parse_date(
+        "-".join(tracking_match.groups()) if tracking_match else ""
+    )
+    if (
+        prefilter is None
+        or required is None
+        or creation is None
+        or tracking is None
+        or len({required.year, creation.year, tracking.year}) != 1
+    ):
+        return None
+    tight = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    if tight is None:
+        return None
+    variants = list(
+        slot_variants
+        if slot_variants is not None
+        else tight.get("date_slot_ocr_variants") or []
+    )
+    expected_preprocessings = {
+        "最大通道去彩色", "最大通道去彩色并去横线",
+    }
+    server_month_cells: dict[str, set[int]] = {}
+    mobile_month_cells: dict[str, set[int]] = {}
+    for variant in variants:
+        slot = str(variant.get("slot", ""))
+        model = str(variant.get("model", ""))
+        preprocessing = str(variant.get("preprocessing", ""))
+        if preprocessing not in expected_preprocessings:
+            continue
+        if slot == "月份数字窄槽" and model == "server":
+            values = {
+                parsed for text in variant.get("ocr_texts") or []
+                if (
+                    parsed := _parse_date_slot_digit(
+                        str(text), maximum=12
+                    )
+                ) is not None
+            }
+            server_month_cells[preprocessing] = values
+        elif slot == "月份上下文槽位" and model == "mobile":
+            values: set[int] = set()
+            for raw in variant.get("ocr_texts") or []:
+                match = re.search(
+                    r"(?<!\d)(\d{1,2})月", re.sub(r"\s+", "", str(raw))
+                )
+                if match is not None and 1 <= int(match.group(1)) <= 12:
+                    values.add(int(match.group(1)))
+            mobile_month_cells[preprocessing] = values
+    if (
+        set(server_month_cells) != expected_preprocessings
+        or set(mobile_month_cells) != expected_preprocessings
+        or any(len(values) != 1 for values in server_month_cells.values())
+        or any(len(values) != 1 for values in mobile_month_cells.values())
+    ):
+        return None
+    months = {
+        value
+        for values in (
+            *server_month_cells.values(), *mobile_month_cells.values()
+        )
+        for value in values
+    }
+    if len(months) != 1:
+        return None
+    month = next(iter(months))
+    try:
+        candidate = date(required.year, month, prefilter["day"])
+    except ValueError:
+        return None
+    business_start = max(creation, tracking)
+    if not (
+        candidate == required
+        and business_start <= candidate
+        and (candidate - creation).days <= 3
+        and (candidate - tracking).days <= 3
+    ):
+        return None
+    return {
+        "date": candidate,
+        "day_support": prefilter["support"],
+        "month": month,
+        "month_support": {
+            "mobile_context": {
+                key: sorted(values)
+                for key, values in mobile_month_cells.items()
+            },
+            "server_digits": {
+                key: sorted(values)
+                for key, values in server_month_cells.items()
+            },
+        },
     }
 
 

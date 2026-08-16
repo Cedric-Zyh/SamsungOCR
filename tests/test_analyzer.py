@@ -44,6 +44,8 @@ from receipt_ocr.analyzer import (
     _parse_partial_year_month_day_audit,
     _same_geometry_partial_year_required_consensus_from_artifacts,
     _unanimous_month_day_business_year_consensus_from_artifacts,
+    _missing_month_day_component_prefilter_from_artifacts,
+    _partial_year_missing_month_business_consensus_from_artifacts,
     _partial_year_day_before_audit_from_artifacts,
     _white_day_conflict_prefilter_from_artifacts,
     _white_day_conflict_audit_candidate,
@@ -4265,6 +4267,119 @@ def test_unanimous_month_day_business_year_rejects_unsafe_variants(mutation):
     elif mutation == "non_hybrid":
         artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
     assert _unanimous_month_day_business_year_consensus_from_artifacts(
+        artifacts, required, creation, tracking
+    ) is None
+
+
+def _partial_year_missing_month_artifacts():
+    return [
+        {
+            "variant": "紧凑区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": "日期行去印章色",
+                    "ocr_texts": ["20年月1日"],
+                },
+                {
+                    "preprocessing": "日期行去表格线三倍放大 Server 人工候选",
+                    "ocr_texts": ["201年月1日"],
+                },
+            ],
+            "date_slot_ocr_variants": [
+                {
+                    "slot": "月份数字窄槽",
+                    "model": "server",
+                    "preprocessing": preprocessing,
+                    "ocr_texts": ["5"],
+                }
+                for preprocessing in (
+                    "最大通道去彩色", "最大通道去彩色并去横线"
+                )
+            ] + [
+                {
+                    "slot": "月份上下文槽位",
+                    "model": "mobile",
+                    "preprocessing": preprocessing,
+                    "ocr_texts": ["5月"],
+                }
+                for preprocessing in (
+                    "最大通道去彩色", "最大通道去彩色并去横线"
+                )
+            ],
+        },
+        {
+            "variant": "宽区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "date_line_ocr_variants": [{
+                "preprocessing": "日期行去印章色",
+                "ocr_texts": ["20年月1日"],
+            }],
+        },
+    ]
+
+
+def test_partial_year_missing_month_business_consensus_uses_ocr_components():
+    artifacts = _partial_year_missing_month_artifacts()
+    prefilter = _missing_month_day_component_prefilter_from_artifacts(artifacts)
+    assert prefilter is not None
+    assert prefilter["day"] == 1
+    selected = _partial_year_missing_month_business_consensus_from_artifacts(
+        artifacts,
+        "2025-05-01", "2025-04-30", "W20250430-009080",
+    )
+    assert selected is not None
+    assert selected["date"] == date(2025, 5, 1)
+    assert selected["month"] == 5
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "day_conflict", "missing_server_day", "missing_geometry",
+        "strict_date", "mobile_month_conflict", "server_month_conflict",
+        "business_year_conflict", "outside_window", "not_required",
+        "non_hybrid",
+    ],
+)
+def test_partial_year_missing_month_business_rejects_unsafe_variants(mutation):
+    artifacts = _partial_year_missing_month_artifacts()
+    required = "2025-05-01"
+    creation = "2025-04-30"
+    tracking = "W20250430-009080"
+    if mutation == "day_conflict":
+        artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [
+            "20年月2日"
+        ]
+    elif mutation == "missing_server_day":
+        artifacts[0]["date_line_ocr_variants"] = artifacts[0][
+            "date_line_ocr_variants"
+        ][:1]
+    elif mutation == "missing_geometry":
+        artifacts = artifacts[:1]
+    elif mutation == "strict_date":
+        artifacts[1]["date_line_ocr_variants"].append({
+            "preprocessing": "日期行原图",
+            "ocr_texts": ["2025年5月1日"],
+        })
+    elif mutation == "mobile_month_conflict":
+        artifacts[0]["date_slot_ocr_variants"][-1]["ocr_texts"] = ["4月"]
+    elif mutation == "server_month_conflict":
+        artifacts[0]["date_slot_ocr_variants"][1]["ocr_texts"] = ["4"]
+    elif mutation == "business_year_conflict":
+        tracking = "W20240430-009080"
+    elif mutation == "outside_window":
+        creation = "2025-04-20"
+        tracking = "W20250420-009080"
+    elif mutation == "not_required":
+        required = "2025-05-02"
+    elif mutation == "non_hybrid":
+        artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    assert _partial_year_missing_month_business_consensus_from_artifacts(
         artifacts, required, creation, tracking
     ) is None
 
