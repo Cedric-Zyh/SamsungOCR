@@ -246,6 +246,24 @@ COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE = 0.20
 COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE = 0.15
 COLOR_MASK_CONSENSUS_MIN_RECOGNIZED_CHARS = 2
 
+# A non-legal-name organization seal may lose its trailing text to a table
+# line while OCR still reads a long, exact requirement prefix.  Promote only
+# when that independent semantic prefix and two distinct confirmed files all
+# agree on the same detected region.  The 301-image audit isolates one pending
+# positive (0.6791/0.6480); the strongest known wrong-stamp control is 0.4337.
+PREFIX_COLOR_CONSENSUS_MIN_DISTINCT_REFERENCES = 2
+PREFIX_COLOR_CONSENSUS_MIN_TOP_SCORE = 0.67
+PREFIX_COLOR_CONSENSUS_MIN_SCORE = 0.64
+PREFIX_COLOR_CONSENSUS_MIN_CORRELATION = 0.66
+PREFIX_COLOR_CONSENSUS_MIN_DICE = 0.59
+PREFIX_COLOR_CONSENSUS_MIN_GOOD_MATCHES = 28
+PREFIX_COLOR_CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 15
+PREFIX_COLOR_CONSENSUS_MIN_INLIER_RATIO = 0.53
+PREFIX_COLOR_CONSENSUS_MIN_CANDIDATE_COVERAGE = 0.19
+PREFIX_COLOR_CONSENSUS_MIN_REFERENCE_COVERAGE = 0.21
+PREFIX_COLOR_CONSENSUS_MIN_COMPANY_SCORE = 0.70
+PREFIX_COLOR_CONSENSUS_MIN_PREFIX_CHARS = 7
+
 
 @dataclass(frozen=True)
 class SealReference:
@@ -495,6 +513,12 @@ class SealReferenceMatcher:
         color_mask_consensus_accepted = bool(
             color_mask_consensus.get("accepted")
         )
+        prefix_color_consensus = _best_prefix_color_mask_consensus(
+            all_evidence, seal_check
+        )
+        prefix_color_consensus_accepted = bool(
+            prefix_color_consensus.get("accepted")
+        )
         color_mask_accepted = bool(
             best_color is not None and _passes_color_mask_gate(best_color)
         )
@@ -509,11 +533,14 @@ class SealReferenceMatcher:
             if chromatic_consensus_accepted
             else color_mask_consensus
             if color_mask_consensus_accepted
+            else prefix_color_consensus
+            if prefix_color_consensus_accepted
             else consensus
         )
         if (
             consensus_accepted or high_purity_consensus_accepted
             or chromatic_consensus_accepted or color_mask_consensus_accepted
+            or prefix_color_consensus_accepted
         ) and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
             or ultra_support_accepted or branded_station_accepted
@@ -533,7 +560,10 @@ class SealReferenceMatcher:
                 ),
                 key=(
                     _color_evidence_rank
-                    if color_mask_consensus_accepted
+                    if (
+                        color_mask_consensus_accepted
+                        or prefix_color_consensus_accepted
+                    )
                     else _evidence_rank
                 ),
             )
@@ -556,6 +586,7 @@ class SealReferenceMatcher:
                 or consensus_accepted or high_purity_consensus_accepted
                 or chromatic_consensus_accepted
                 or color_mask_consensus_accepted
+                or prefix_color_consensus_accepted
             )
         ):
             best = best_color
@@ -576,6 +607,7 @@ class SealReferenceMatcher:
                 or consensus_accepted or high_purity_consensus_accepted
                 or chromatic_consensus_accepted
                 or color_mask_consensus_accepted
+                or prefix_color_consensus_accepted
                 or color_mask_accepted or color_sift_accepted
             )
         )
@@ -604,6 +636,8 @@ class SealReferenceMatcher:
             if chromatic_consensus_accepted
             else "color_mask_multi_reference_consensus"
             if color_mask_consensus_accepted
+            else "strong_prefix_color_mask_multi_reference_consensus"
+            if prefix_color_consensus_accepted
             else "color_mask_geometry" if color_mask_accepted
             else "color_mask_sift_geometry" if color_sift_accepted
             else "rejected"
@@ -890,6 +924,31 @@ class SealReferenceMatcher:
                     COLOR_MASK_CONSENSUS_MIN_RECOGNIZED_CHARS
                 ),
             },
+            "strong_prefix_color_mask_consensus": {
+                "distinct_references": (
+                    PREFIX_COLOR_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "top_score": PREFIX_COLOR_CONSENSUS_MIN_TOP_SCORE,
+                "score": PREFIX_COLOR_CONSENSUS_MIN_SCORE,
+                "correlation": PREFIX_COLOR_CONSENSUS_MIN_CORRELATION,
+                "dice": PREFIX_COLOR_CONSENSUS_MIN_DICE,
+                "good_matches": PREFIX_COLOR_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    PREFIX_COLOR_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": PREFIX_COLOR_CONSENSUS_MIN_INLIER_RATIO,
+                "candidate_coverage": (
+                    PREFIX_COLOR_CONSENSUS_MIN_CANDIDATE_COVERAGE
+                ),
+                "reference_coverage": (
+                    PREFIX_COLOR_CONSENSUS_MIN_REFERENCE_COVERAGE
+                ),
+                "company_score": PREFIX_COLOR_CONSENSUS_MIN_COMPANY_SCORE,
+                "recognized_prefix_chars": (
+                    PREFIX_COLOR_CONSENSUS_MIN_PREFIX_CHARS
+                ),
+                "requirement_structure": "非纯法定公司名的连续文字要求",
+            },
         }
         best["confidence"] = (
             _reference_confidence(best, route, active_consensus)
@@ -925,6 +984,8 @@ class SealReferenceMatcher:
                 if chromatic_consensus_accepted else
                 "同一纯公司章区域与两份独立人工真值阳性章形成整体彩色墨迹共识"
                 if color_mask_consensus_accepted else
+                "当前章保留签章要求的强连续前缀，且同一章区与两份独立人工真值阳性章形成章色和局部几何共识"
+                if prefix_color_consensus_accepted else
                 "与人工真值阳性章的彩色墨迹形成整体几何一致"
                 if color_mask_accepted else
                 "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
@@ -1854,6 +1915,49 @@ def _passes_color_mask_consensus_vote(evidence: dict) -> bool:
     )
 
 
+def _recognized_requirement_prefix_length(
+    seal_check: dict, requirement: str,
+) -> int:
+    """Return the longest independently OCR-read exact requirement prefix."""
+    fragments = [
+        normalize_text(str(seal_check.get("recognized") or "")),
+        *[
+            normalize_text(str(value))
+            for value in (seal_check.get("all_recognized") or [])
+        ],
+    ]
+    return max(
+        (
+            len(fragment)
+            for fragment in fragments
+            if re.fullmatch(r"[\u4e00-\u9fff]+", fragment)
+            and requirement.startswith(fragment)
+        ),
+        default=0,
+    )
+
+
+def _passes_prefix_color_mask_consensus_vote(evidence: dict) -> bool:
+    return bool(
+        float(evidence.get("color_mask_score", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_SCORE
+        and float(evidence.get("color_mask_correlation", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_CORRELATION
+        and float(evidence.get("color_mask_dice", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_DICE
+        and int(evidence.get("good_matches", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("inlier_ratio", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_INLIER_RATIO
+        and float(evidence.get("candidate_coverage", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_CANDIDATE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= PREFIX_COLOR_CONSENSUS_MIN_REFERENCE_COVERAGE
+    )
+
+
 def _passes_consensus_vote(evidence: dict) -> bool:
     return bool(
         evidence["good_matches"] >= CONSENSUS_MIN_GOOD_MATCHES
@@ -2001,6 +2105,96 @@ def _best_color_mask_consensus(
             "candidate_index": -1,
             "reference_count": 0,
             "top_score": 0.0,
+            "matches": [],
+        }
+    return max(
+        groups,
+        key=lambda item: (
+            bool(item["accepted"]),
+            int(item["reference_count"]),
+            float(item["top_score"]),
+            sum(float(row["color_mask_score"]) for row in item["matches"]),
+        ),
+    )
+
+
+def _best_prefix_color_mask_consensus(
+    all_evidence: list[dict], seal_check: dict,
+) -> dict:
+    """Find two-file whole-ink consensus backed by a long exact OCR prefix."""
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    prefix_length = _recognized_requirement_prefix_length(
+        seal_check, requirement
+    )
+    if (
+        seal_check.get("company_conflict") is True
+        or not re.fullmatch(r"[\u4e00-\u9fff]{8,20}", requirement)
+        or _is_bare_company_requirement(requirement)
+        or float(seal_check.get("company_score", 0))
+        < PREFIX_COLOR_CONSENSUS_MIN_COMPANY_SCORE
+        or prefix_length < PREFIX_COLOR_CONSENSUS_MIN_PREFIX_CHARS
+    ):
+        return {
+            "accepted": False,
+            "candidate_index": -1,
+            "reference_count": 0,
+            "top_score": 0.0,
+            "recognized_prefix_length": prefix_length,
+            "matches": [],
+        }
+
+    by_candidate: dict[int, dict[str, dict]] = defaultdict(dict)
+    for evidence in all_evidence:
+        if not _passes_prefix_color_mask_consensus_vote(evidence):
+            continue
+        candidate_index = int(evidence.get("candidate_index", -1))
+        reference_filename = str(evidence.get("reference_filename") or "")
+        if candidate_index < 0 or not reference_filename:
+            continue
+        previous = by_candidate[candidate_index].get(reference_filename)
+        if (
+            previous is None
+            or _color_evidence_rank(evidence) > _color_evidence_rank(previous)
+        ):
+            by_candidate[candidate_index][reference_filename] = evidence
+
+    groups = []
+    for candidate_index, distinct in by_candidate.items():
+        matches = sorted(
+            distinct.values(), key=_color_evidence_rank, reverse=True
+        )
+        top_score = float(matches[0].get("color_mask_score", 0)) if matches else 0
+        groups.append({
+            "candidate_index": candidate_index,
+            "reference_count": len(matches),
+            "top_score": top_score,
+            "recognized_prefix_length": prefix_length,
+            "accepted": bool(
+                len(matches)
+                >= PREFIX_COLOR_CONSENSUS_MIN_DISTINCT_REFERENCES
+                and top_score >= PREFIX_COLOR_CONSENSUS_MIN_TOP_SCORE
+            ),
+            "matches": [
+                {
+                    key: item.get(key, 0)
+                    for key in (
+                        "reference_filename", "reference_url",
+                        "color_mask_score", "color_mask_correlation",
+                        "color_mask_dice", "good_matches",
+                        "homography_inliers", "inlier_ratio",
+                        "candidate_coverage", "reference_coverage",
+                    )
+                }
+                for item in matches
+            ],
+        })
+    if not groups:
+        return {
+            "accepted": False,
+            "candidate_index": -1,
+            "reference_count": 0,
+            "top_score": 0.0,
+            "recognized_prefix_length": prefix_length,
             "matches": [],
         }
     return max(
@@ -2364,6 +2558,21 @@ def _reference_confidence(
             0.94,
             0.92 + 0.20 * max(
                 0.0, second_score - COLOR_MASK_CONSENSUS_MIN_SCORE
+            ),
+        )
+    elif route == "strong_prefix_color_mask_multi_reference_consensus":
+        # A seven-character exact OCR prefix provides stronger semantics than
+        # the short-fragment company route, while the visual threshold remains
+        # deliberately modest. Keep the result at 92% unless both votes clear
+        # their floor by a meaningful margin.
+        matches = (consensus or {}).get("matches") or []
+        second_score = float(matches[1].get(
+            "color_mask_score", PREFIX_COLOR_CONSENSUS_MIN_SCORE
+        )) if len(matches) >= 2 else 0.0
+        confidence = min(
+            0.94,
+            0.92 + 0.20 * max(
+                0.0, second_score - PREFIX_COLOR_CONSENSUS_MIN_SCORE
             ),
         )
     elif route == "color_mask_geometry":

@@ -17,6 +17,7 @@ CONSENSUS_REFERENCE_ROUTES = {
     "high_purity_multi_reference_consensus",
     "chromatic_crop_multi_reference_consensus",
     "color_mask_multi_reference_consensus",
+    "strong_prefix_color_mask_multi_reference_consensus",
 }
 
 
@@ -52,6 +53,8 @@ def _apply_visual_reference(result: dict, matcher: SealReferenceMatcher) -> dict
         "match_basis": (
             "人工真值参考章 + 整体彩色墨迹多参考一致"
             if route == "color_mask_multi_reference_consensus"
+            else "人工真值参考章 + 强文字前缀/章色多参考一致"
+            if route == "strong_prefix_color_mask_multi_reference_consensus"
             else "人工真值参考章 + 本地严格视觉一致"
         ),
         "backend": str(seal_check.get("backend") or "本地 OCR")

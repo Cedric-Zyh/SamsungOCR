@@ -289,8 +289,8 @@ function renderArtifacts() {
     target.innerHTML = artifacts.map(item => {
       const reference = item.visual_reference_match;
       const consensus = reference?.consensus_matches || [];
-      const consensusInfo = ['multi_reference_consensus', 'high_purity_multi_reference_consensus', 'chromatic_crop_multi_reference_consensus', 'color_mask_multi_reference_consensus'].includes(reference?.route)
-        ? ` · 多参考一致 ${reference.consensus_reference_count || consensus.length} 份（${consensus.map(row => `${escapeHtml(row.reference_filename || '')} ${reference?.route === 'color_mask_multi_reference_consensus' ? `墨迹 ${percent(row.color_mask_score || 0)}` : `${row.homography_inliers || 0}内点`}`).join('、')}）`
+      const consensusInfo = ['multi_reference_consensus', 'high_purity_multi_reference_consensus', 'chromatic_crop_multi_reference_consensus', 'color_mask_multi_reference_consensus', 'strong_prefix_color_mask_multi_reference_consensus'].includes(reference?.route)
+        ? ` · 多参考一致 ${reference.consensus_reference_count || consensus.length} 份（${consensus.map(row => `${escapeHtml(row.reference_filename || '')} ${['color_mask_multi_reference_consensus', 'strong_prefix_color_mask_multi_reference_consensus'].includes(reference?.route) ? `墨迹 ${percent(row.color_mask_score || 0)}` : `${row.homography_inliers || 0}内点`}`).join('、')}）`
         : '';
       const regularGeometry = reference?.regular_geometry;
       const regularGeometryInfo = regularGeometry
@@ -304,6 +304,7 @@ function renderArtifacts() {
         high_purity_multi_reference_consensus: '多参考高纯度一致通过',
         chromatic_crop_multi_reference_consensus: '章色稳健裁剪多参考一致通过',
         color_mask_multi_reference_consensus: '整体彩色墨迹多参考一致通过',
+        strong_prefix_color_mask_multi_reference_consensus: '强文字前缀与章色多参考一致通过',
         trimmed_chromatic_single_reference: '稀疏章色噪点裁剪高纯度通过',
         color_mask_geometry: '彩色墨迹整体一致通过',
         color_mask_sift_geometry: '彩色墨迹与 SIFT 联合一致通过',

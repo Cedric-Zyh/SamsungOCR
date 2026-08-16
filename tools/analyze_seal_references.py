@@ -83,6 +83,18 @@ from receipt_ocr.seal_reference import (
     MIN_HOMOGRAPHY_INLIERS,
     MIN_INLIER_RATIO,
     MIN_SURFACE_COVERAGE,
+    PREFIX_COLOR_CONSENSUS_MIN_CANDIDATE_COVERAGE,
+    PREFIX_COLOR_CONSENSUS_MIN_COMPANY_SCORE,
+    PREFIX_COLOR_CONSENSUS_MIN_CORRELATION,
+    PREFIX_COLOR_CONSENSUS_MIN_DICE,
+    PREFIX_COLOR_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    PREFIX_COLOR_CONSENSUS_MIN_GOOD_MATCHES,
+    PREFIX_COLOR_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    PREFIX_COLOR_CONSENSUS_MIN_INLIER_RATIO,
+    PREFIX_COLOR_CONSENSUS_MIN_PREFIX_CHARS,
+    PREFIX_COLOR_CONSENSUS_MIN_REFERENCE_COVERAGE,
+    PREFIX_COLOR_CONSENSUS_MIN_SCORE,
+    PREFIX_COLOR_CONSENSUS_MIN_TOP_SCORE,
     RECEIVING_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
     RECEIVING_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
     RECEIVING_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
@@ -454,6 +466,30 @@ def build_report(
                 "homography_inliers": COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS,
                 "inlier_ratio": COLOR_SIFT_MIN_INLIER_RATIO,
                 "surface_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
+            },
+            "strong_prefix_color_mask_consensus": {
+                "distinct_references": (
+                    PREFIX_COLOR_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "top_score": PREFIX_COLOR_CONSENSUS_MIN_TOP_SCORE,
+                "score": PREFIX_COLOR_CONSENSUS_MIN_SCORE,
+                "correlation": PREFIX_COLOR_CONSENSUS_MIN_CORRELATION,
+                "dice": PREFIX_COLOR_CONSENSUS_MIN_DICE,
+                "good_matches": PREFIX_COLOR_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    PREFIX_COLOR_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "inlier_ratio": PREFIX_COLOR_CONSENSUS_MIN_INLIER_RATIO,
+                "candidate_coverage": (
+                    PREFIX_COLOR_CONSENSUS_MIN_CANDIDATE_COVERAGE
+                ),
+                "reference_coverage": (
+                    PREFIX_COLOR_CONSENSUS_MIN_REFERENCE_COVERAGE
+                ),
+                "company_score": PREFIX_COLOR_CONSENSUS_MIN_COMPANY_SCORE,
+                "recognized_prefix_chars": (
+                    PREFIX_COLOR_CONSENSUS_MIN_PREFIX_CHARS
+                ),
             },
         },
         "summary": {
