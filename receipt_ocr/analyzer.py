@@ -1162,6 +1162,20 @@ class ReceiptAnalyzer:
             ]
             if matching_rows:
                 date_row = max(matching_rows, key=lambda row: row.confidence)
+        partial_year_required_consensus = (
+            _same_geometry_partial_year_required_consensus_from_artifacts(
+                date_artifacts,
+                fields.get("要求到货", ""),
+                fields.get("制单日期", ""),
+                fields.get("运单号", ""),
+            )
+        )
+        if partial_year_required_consensus is not None:
+            partial_year_date = partial_year_required_consensus["date"]
+            if actual_date in {None, partial_year_date}:
+                actual_date = partial_year_date
+            else:
+                partial_year_required_consensus = None
         audit_date_candidate = False
         audit_date_note = ""
         if actual_date is None:
@@ -1540,6 +1554,37 @@ class ReceiptAnalyzer:
                 "两位日但漏月份，月份窄槽由双模型三单元确认；唯一"
                 "干扰是两位日的单字截断）"
             )
+        if (
+            actual_date is not None
+            and partial_year_required_consensus is not None
+            and partial_year_required_consensus["date"] == actual_date
+            and rejected_date is None
+        ):
+            date_confidence = max(0.78, date_confidence)
+            date_check["partial_year_required_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "geometry": "宽区域",
+                "models": ["mobile", "server"],
+                "year_sources": ["制单日期", "运单号", "要求到货"],
+                "support": partial_year_required_consensus["support"],
+            }
+            date_check["message"] += (
+                "（Mobile 去表格线与 Server 多种增强均读到相同月日及"
+                "三位年份；缺失的年份末位由制单日期、运单号和要求到货"
+                "三项独立业务日期一致确认）"
+            )
+            for artifact in date_artifacts:
+                if artifact.get("variant") == "宽区域":
+                    artifact.update({
+                        "date_partial_year_required_candidate": (
+                            actual_date.isoformat()
+                        ),
+                        "date_partial_year_required_note": (
+                            "Mobile 宽裁去表格线与 Server 宽裁至少两种增强"
+                            "读到相同 20x 年/月/日；制单日期、运单号和要求"
+                            "到货年份一致，仅补年份末位，无其他合法日期冲突"
+                        ),
+                    })
         otsu_manual_candidate = bool(
             actual_date
             and any(
@@ -7274,6 +7319,121 @@ def _parse_partial_year_month_day_audit(
         return date(required.year, int(match.group(2)), int(match.group(3)))
     except ValueError:
         return None
+
+
+def _same_geometry_partial_year_required_consensus_from_artifacts(
+    artifacts: list[dict], required_text: str, creation_text: str,
+    tracking_text: str,
+) -> dict | None:
+    """Recover one missing year suffix from three independent business dates.
+
+    The handwritten row must still own the three-digit ``20x`` prefix and the
+    complete month/day.  On the wide geometry, Paddle Mobile must read that
+    structure from the table-line-cleaned region while Paddle Server repeats
+    it in at least two separately labelled enhanced line passes.  The printed
+    required date, creation date, and the date encoded in the tracking number
+    must all independently agree on the missing four-digit year.  Any other
+    valid literal or repaired date keeps the sample in manual review.
+    """
+    required = parse_date(required_text)
+    creation = parse_date(creation_text)
+    tracking_match = re.search(r"W(20\d{2})(\d{2})(\d{2})", tracking_text)
+    tracking = parse_date(
+        "-".join(tracking_match.groups()) if tracking_match else ""
+    )
+    if (
+        required is None
+        or creation is None
+        or tracking is None
+        or len({required.year, creation.year, tracking.year}) != 1
+        or not (creation <= required and tracking <= required)
+        or (required - creation).days > 7
+        or (required - tracking).days > 7
+        or required.day < 10
+    ):
+        return None
+    primary = next(
+        (item for item in artifacts if item.get("variant") == "紧凑区域"),
+        None,
+    )
+    wide = next(
+        (item for item in artifacts if item.get("variant") == "宽区域"),
+        None,
+    )
+    if primary is None or wide is None or (
+        "vision" not in str(primary.get("ocr_backend", "")).lower()
+        or "paddle" not in str(
+            primary.get("secondary_ocr_backend", "")
+        ).lower()
+    ):
+        return None
+
+    def parse_partial(raw: str) -> date | None:
+        compact = re.sub(
+            r"\s+", "", str(raw).replace("O", "0").replace("o", "0")
+        )
+        match = re.fullmatch(r"(20\d)年(\d{1,2})月(\d{2})(?:日)?", compact)
+        if match is None or match.group(1) != str(required.year)[:3]:
+            return None
+        try:
+            return date(required.year, int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return None
+
+    mobile_support = [
+        {
+            "preprocessing": str(evidence.get("preprocessing", "")),
+            "text": str(text),
+        }
+        for evidence in wide.get("secondary_ocr_variants") or []
+        if str(evidence.get("preprocessing", "")) == "去表格线"
+        for text in evidence.get("ocr_texts") or []
+        if parse_partial(str(text)) == required
+    ]
+    server_support = [
+        {
+            "preprocessing": str(evidence.get("preprocessing", "")),
+            "text": str(text),
+        }
+        for evidence in wide.get("date_line_ocr_variants") or []
+        if "Server" in str(evidence.get("preprocessing", ""))
+        for text in evidence.get("ocr_texts") or []
+        if parse_partial(str(text)) == required
+    ]
+    if not mobile_support or len({
+        item["preprocessing"] for item in server_support
+    }) < 2:
+        return None
+
+    observed_dates: set[date] = set()
+    for artifact in artifacts:
+        if artifact.get("variant") not in {"紧凑区域", "宽区域"}:
+            continue
+        for group in (
+            artifact.get("ocr_variants") or [],
+            artifact.get("secondary_ocr_variants") or [],
+            artifact.get("date_line_ocr_variants") or [],
+        ):
+            for evidence in group:
+                for raw in evidence.get("ocr_texts") or []:
+                    text = str(raw)
+                    parsed = (
+                        parse_date(text)
+                        or _parse_compact_full_date_audit_candidate(text)
+                        or parse_partial(text)
+                        or parse_receipt_date(text, required)
+                    )
+                    if parsed is not None:
+                        observed_dates.add(parsed)
+    if observed_dates != {required}:
+        return None
+    return {
+        "date": required,
+        "support": {
+            "mobile": mobile_support,
+            "server": server_support,
+        },
+    }
 
 
 def _partial_year_day_before_audit_from_artifacts(

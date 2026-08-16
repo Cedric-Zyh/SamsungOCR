@@ -35,6 +35,7 @@ from receipt_ocr.analyzer import (
     _cross_model_server_strict_component_date,
     _parse_full_year_month_day_audit,
     _parse_partial_year_month_day_audit,
+    _same_geometry_partial_year_required_consensus_from_artifacts,
     _partial_year_day_before_audit_from_artifacts,
     _white_day_conflict_prefilter_from_artifacts,
     _white_day_conflict_audit_candidate,
@@ -3903,6 +3904,104 @@ def test_partial_year_day_before_audit_rejects_unsafe_variants(
                 variant["ocr_texts"] = ["20年8月9日"]
     assert _partial_year_day_before_audit_from_artifacts(
         artifacts, required, creation
+    ) is None
+
+
+def _partial_year_required_artifacts():
+    return [
+        {
+            "variant": "紧凑区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [],
+            "date_line_ocr_variants": [],
+        },
+        {
+            "variant": "宽区域",
+            "ocr_backend": "macOS Vision",
+            "secondary_ocr_backend": "PaddleOCR PP-OCRv5 Mobile",
+            "secondary_ocr_variants": [
+                {
+                    "preprocessing": "去表格线",
+                    "ocr_texts": ["盖", "202年2月11", "="],
+                },
+            ],
+            "date_line_ocr_variants": [
+                {
+                    "preprocessing": "日期行最大通道去彩色三倍放大 Server 跨几何复核",
+                    "ocr_texts": ["202年2月11日"],
+                },
+                {
+                    "preprocessing": "日期行灰度自动对比三倍放大 Server 人工候选",
+                    "ocr_texts": ["202年2月11日"],
+                },
+            ],
+        },
+    ]
+
+
+def test_partial_year_required_consensus_uses_three_business_year_sources():
+    selected = _same_geometry_partial_year_required_consensus_from_artifacts(
+        _partial_year_required_artifacts(),
+        "2025-02-11", "2025-02-08", "W20250208-007244",
+    )
+
+    assert selected is not None
+    assert selected["date"] == date(2025, 2, 11)
+    assert len(selected["support"]["mobile"]) == 1
+    assert len(selected["support"]["server"]) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "mobile_conflict",
+        "single_server_pass",
+        "literal_date_conflict",
+        "creation_year_conflict",
+        "tracking_year_conflict",
+        "single_digit_day",
+        "non_hybrid",
+        "outside_seven_days",
+    ],
+)
+def test_partial_year_required_consensus_rejects_unsafe_variants(mutation):
+    artifacts = _partial_year_required_artifacts()
+    required = "2025-02-11"
+    creation = "2025-02-08"
+    tracking = "W20250208-007244"
+    if mutation == "mobile_conflict":
+        artifacts[1]["secondary_ocr_variants"][0]["ocr_texts"] = [
+            "202年2月10"
+        ]
+    elif mutation == "single_server_pass":
+        artifacts[1]["date_line_ocr_variants"] = artifacts[1][
+            "date_line_ocr_variants"
+        ][:1]
+    elif mutation == "literal_date_conflict":
+        artifacts[0]["date_line_ocr_variants"] = [{
+            "preprocessing": "日期行原图",
+            "ocr_texts": ["2025年2月10日"],
+        }]
+    elif mutation == "creation_year_conflict":
+        creation = "2024-12-31"
+    elif mutation == "tracking_year_conflict":
+        tracking = "W20240208-007244"
+    elif mutation == "single_digit_day":
+        required = "2025-02-09"
+        for group in (
+            artifacts[1]["secondary_ocr_variants"],
+            artifacts[1]["date_line_ocr_variants"],
+        ):
+            for evidence in group:
+                evidence["ocr_texts"] = ["202年2月9日"]
+    elif mutation == "non_hybrid":
+        artifacts[0]["ocr_backend"] = "PaddleOCR PP-OCRv5 Mobile"
+    elif mutation == "outside_seven_days":
+        creation = "2025-02-01"
+
+    assert _same_geometry_partial_year_required_consensus_from_artifacts(
+        artifacts, required, creation, tracking
     ) is None
 
 
