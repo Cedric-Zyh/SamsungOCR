@@ -1,11 +1,12 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = {records: [], selected: new Set(), current: null, artifactTab: 'date', taskId: '', ocrBackend: ''};
+const state = {records: [], selected: new Set(), current: null, artifactTab: 'date', taskId: '', ocrBackend: '', sealRecognitionMode: 'local'};
 
 const fileInput = $('#file-input');
 const folderInput = $('#folder-input');
 const dropZone = $('#drop-zone');
 const ocrBackendSelect = $('#ocr-backend');
+const sealRecognitionSelect = $('#seal-recognition-mode');
 state.ocrBackend = ocrBackendSelect.value;
 ocrBackendSelect.addEventListener('change', () => {
   state.ocrBackend = ocrBackendSelect.value;
@@ -13,6 +14,12 @@ ocrBackendSelect.addEventListener('change', () => {
   Promise.all([loadRecords(), loadReport()]).catch(error => toast(error.message, 'danger'));
 });
 updateBackendDetail();
+state.sealRecognitionMode = sealRecognitionSelect.value;
+sealRecognitionSelect.addEventListener('change', () => {
+  state.sealRecognitionMode = sealRecognitionSelect.value;
+  $('#seal-recognition-detail').textContent = sealRecognitionSelect.selectedOptions[0]?.dataset.description || '';
+});
+sealRecognitionSelect.dispatchEvent(new Event('change'));
 $('#choose-file').addEventListener('click', (event) => { event.stopPropagation(); fileInput.click(); });
 $('#choose-folder').addEventListener('click', (event) => { event.stopPropagation(); folderInput.click(); });
 dropZone.addEventListener('click', () => fileInput.click());
@@ -46,7 +53,8 @@ async function startBatch(files, samples, name) {
   const items = [...files.map(file => ({name: file.webkitRelativePath || file.name, file})), ...samples.map(sample => ({name: sample, sample}))];
   fileInput.value = ''; folderInput.value = '';
   if (!items.length) return toast('没有找到支持的图片', 'warning');
-  const task = await api('/api/tasks', {method: 'POST', json: {total: items.length, name, ocr_backend: state.ocrBackend}});
+  if (state.sealRecognitionMode === 'qingtong' && !window.confirm(`本批次会将 ${items.length} 张完整回单上传至清瞳印章 API。是否继续？`)) return;
+  const task = await api('/api/tasks', {method: 'POST', json: {total: items.length, name, ocr_backend: state.ocrBackend, seal_recognition_mode: state.sealRecognitionMode}});
   state.taskId = task.id;
   $('#task-section').classList.remove('hidden');
   $('#task-name').textContent = name;
@@ -77,6 +85,7 @@ async function processItem(item, row, taskId) {
   row.querySelector('b').textContent = '处理中'; row.querySelector('small').textContent = '字段、日期、印章与中间证据生成中…';
   const form = new FormData(); form.append('task_id', taskId);
   form.append('ocr_backend', state.ocrBackend);
+  form.append('seal_recognition_mode', state.sealRecognitionMode);
   if (item.file) form.append('file', item.file); else form.append('sample', item.sample);
   try {
     const result = await api('/api/analyze', {method: 'POST', body: form});
@@ -375,8 +384,9 @@ async function submitReview(reviewStatus, finalResult) {
 }
 
 async function retryOne(id, button) {
+  if (state.sealRecognitionMode === 'qingtong' && !window.confirm('重新识别会将这张完整回单上传至清瞳印章 API。是否继续？')) return;
   if (button) button.disabled = true;
-  try { await api(`/api/results/${id}/retry`, {method: 'POST', json: {ocr_backend: state.ocrBackend}}); toast('重新识别完成，中间过程图已更新', 'success'); closeModal(); await Promise.all([loadRecords(), loadReport()]); }
+  try { await api(`/api/results/${id}/retry`, {method: 'POST', json: {ocr_backend: state.ocrBackend, seal_recognition_mode: state.sealRecognitionMode}}); toast('重新识别完成，中间过程图已更新', 'success'); closeModal(); await Promise.all([loadRecords(), loadReport()]); }
   catch (error) { toast(error.message, 'danger'); }
   finally { if (button) button.disabled = false; }
 }
@@ -400,7 +410,8 @@ async function bulkReview(reviewStatus, finalResult) {
 
 async function bulkRetry() {
   if (!state.selected.size) return toast('请先勾选回单', 'warning');
-  const output = await api('/api/results/bulk-retry', {method: 'POST', json: {ids: [...state.selected], ocr_backend: state.ocrBackend}});
+  if (state.sealRecognitionMode === 'qingtong' && !window.confirm(`批量重新识别会将 ${state.selected.size} 张完整回单上传至清瞳印章 API。是否继续？`)) return;
+  const output = await api('/api/results/bulk-retry', {method: 'POST', json: {ids: [...state.selected], ocr_backend: state.ocrBackend, seal_recognition_mode: state.sealRecognitionMode}});
   const failed = output.filter(item => !item.ok).length;
   toast(`批量重新识别完成：成功 ${output.length - failed}，失败 ${failed}`, failed ? 'warning' : 'success'); await Promise.all([loadRecords(), loadReport()]);
 }

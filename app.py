@@ -31,6 +31,10 @@ from receipt_ocr.parser import (
     product_table_text,
 )
 from receipt_ocr.seal_reference import SealReferenceMatcher
+from receipt_ocr.seal_api import (
+    SEAL_RECOGNITION_MODES,
+    resolve_seal_recognition_mode,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -215,6 +219,7 @@ def index():
         python_path=sys.executable,
         default_ocr_backend=default_backend(),
         ocr_backend_catalog=backend_catalog(),
+        seal_recognition_modes=SEAL_RECOGNITION_MODES,
     )
 
 
@@ -235,11 +240,15 @@ def create_task():
         return jsonify({"error": "批量任务数量必须在 1 至 5000 之间"}), 400
     try:
         ocr_backend = resolve_backend(str(payload.get("ocr_backend") or "auto"))
+        seal_recognition_mode = resolve_seal_recognition_mode(
+            payload.get("seal_recognition_mode")
+        )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
     task_id = uuid.uuid4().hex
     return jsonify(database.create_task(
-        task_id, str(payload.get("name") or "批量识别"), total, ocr_backend
+        task_id, str(payload.get("name") or "批量识别"), total, ocr_backend,
+        seal_recognition_mode,
     ))
 
 
@@ -279,7 +288,11 @@ def analyze_upload():
 
     if task_id:
         try:
-            ocr_backend = resolve_backend(database.get_task(task_id).get("ocr_backend") or "auto")
+            task = database.get_task(task_id)
+            ocr_backend = resolve_backend(task.get("ocr_backend") or "auto")
+            seal_recognition_mode = resolve_seal_recognition_mode(
+                task.get("seal_recognition_mode")
+            )
         except KeyError:
             return jsonify({"error": "批量任务不存在"}), 404
         except (ValueError, RuntimeError) as exc:
@@ -287,10 +300,15 @@ def analyze_upload():
     else:
         try:
             ocr_backend = resolve_backend(request.form.get("ocr_backend", "auto"))
+            seal_recognition_mode = resolve_seal_recognition_mode(
+                request.form.get("seal_recognition_mode")
+            )
         except (ValueError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 400
         task_id = uuid.uuid4().hex
-        database.create_task(task_id, original_name, 1, ocr_backend)
+        database.create_task(
+            task_id, original_name, 1, ocr_backend, seal_recognition_mode
+        )
 
     token = uuid.uuid4().hex
     preview_name = f"{token}.jpg"
@@ -302,6 +320,7 @@ def analyze_upload():
             artifact_dir=artifacts,
             artifact_url_prefix=f"/files/artifacts/{token}",
             ocr_backend=ocr_backend,
+            seal_recognition_mode=seal_recognition_mode,
         )
         result.update(
             filename=original_name,
@@ -330,6 +349,7 @@ def analyze_upload():
             "review_reasons": ["识别流程异常"],
             "ocr_backend": ocr_backend,
             "ocr_backend_label": backend_label(ocr_backend),
+            "seal_recognition_mode": seal_recognition_mode,
             "fields": {},
             "field_metadata": {},
             "date_check": {"required": "", "actual": "", "status": "未识别", "confidence": 0},
@@ -510,6 +530,11 @@ def retry_result(result_id: int):
         ocr_backend = resolve_backend(
             str(payload.get("ocr_backend") or current.get("ocr_backend") or "auto")
         )
+        seal_recognition_mode = resolve_seal_recognition_mode(
+            payload.get("seal_recognition_mode")
+            or current.get("seal_recognition_mode")
+            or (current.get("seal_check") or {}).get("recognition_mode")
+        )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
     result = analyzer.analyze(
@@ -518,6 +543,7 @@ def retry_result(result_id: int):
         artifact_dir=ARTIFACT_DIR / token,
         artifact_url_prefix=f"/files/artifacts/{token}",
         ocr_backend=ocr_backend,
+        seal_recognition_mode=seal_recognition_mode,
     )
     result.update(
         filename=current["filename"], preview_url=f"/files/previews/{preview_name}",
@@ -583,11 +609,17 @@ def bulk_retry():
             ocr_backend = resolve_backend(
                 str(payload.get("ocr_backend") or current.get("ocr_backend") or "auto")
             )
+            seal_recognition_mode = resolve_seal_recognition_mode(
+                payload.get("seal_recognition_mode")
+                or current.get("seal_recognition_mode")
+                or (current.get("seal_check") or {}).get("recognition_mode")
+            )
             result = analyzer.analyze(
                 source, PREVIEW_DIR / preview_name,
                 artifact_dir=ARTIFACT_DIR / token,
                 artifact_url_prefix=f"/files/artifacts/{token}",
                 ocr_backend=ocr_backend,
+                seal_recognition_mode=seal_recognition_mode,
             )
             result.update(filename=current["filename"], preview_url=f"/files/previews/{preview_name}")
             result = _apply_visual_seal_reference(result)

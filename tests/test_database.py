@@ -41,6 +41,17 @@ def test_review_keeps_immutable_machine_result(tmp_path: Path):
     assert database.history(result_id)[0]["action"] == "确认通过"
 
 
+def test_task_persists_seal_recognition_mode(tmp_path: Path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+
+    task = database.create_task(
+        "seal-task", "清瞳印章识别", 1, "paddle", "qingtong"
+    )
+
+    assert task["seal_recognition_mode"] == "qingtong"
+
+
 def test_retry_updates_batch_pending_review_count(tmp_path: Path):
     database = Database(tmp_path / "results.db")
     database.initialize()

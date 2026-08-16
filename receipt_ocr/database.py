@@ -137,6 +137,10 @@ class Database:
                 connection.execute(
                     "ALTER TABLE batch_tasks ADD COLUMN ocr_backend TEXT NOT NULL DEFAULT ''"
                 )
+            if "seal_recognition_mode" not in task_columns:
+                connection.execute(
+                    "ALTER TABLE batch_tasks ADD COLUMN seal_recognition_mode TEXT NOT NULL DEFAULT 'local'"
+                )
             if "error_message" not in task_columns:
                 connection.execute(
                     "ALTER TABLE batch_tasks ADD COLUMN error_message TEXT NOT NULL DEFAULT ''"
@@ -166,13 +170,20 @@ class Database:
                 END"""
             )
 
-    def create_task(self, task_id: str, name: str, total: int, ocr_backend: str = "") -> dict:
+    def create_task(
+        self, task_id: str, name: str, total: int, ocr_backend: str = "",
+        seal_recognition_mode: str = "local",
+    ) -> dict:
         timestamp = now_iso()
         with self.connect() as connection:
             connection.execute(
-                """INSERT INTO batch_tasks(id,name,created_at,updated_at,status,total,ocr_backend)
-                VALUES(?,?,?,?,?,?,?)""",
-                (task_id, name, timestamp, timestamp, "处理中", total, ocr_backend),
+                """INSERT INTO batch_tasks(
+                    id,name,created_at,updated_at,status,total,ocr_backend,seal_recognition_mode
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    task_id, name, timestamp, timestamp, "处理中", total,
+                    ocr_backend, seal_recognition_mode,
+                ),
             )
         return self.get_task(task_id)
 

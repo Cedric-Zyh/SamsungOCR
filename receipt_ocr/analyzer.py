@@ -54,7 +54,7 @@ from .parser import (
     standardize_fixed_phrases,
 )
 from .ocr_types import TextObservation
-from .seal_api import SealApiClient
+from .seal_api import SealApiClient, resolve_seal_recognition_mode
 
 
 def _is_neighboring_label_misread_as_receipt_note(value: str) -> bool:
@@ -831,10 +831,12 @@ class ReceiptAnalyzer:
         artifact_dir: str | Path | None = None,
         artifact_url_prefix: str = "",
         ocr_backend: str | None = None,
+        seal_recognition_mode: str | None = None,
     ) -> dict:
         started = time.perf_counter()
         source = Path(image_path).resolve()
         selected_backend = resolve_backend(ocr_backend)
+        selected_seal_mode = resolve_seal_recognition_mode(seal_recognition_mode)
         stage_backends = backend_route(selected_backend)
         stage_labels = backend_route_labels(selected_backend)
         rows = recognize_text(source, backend=stage_backends["page"])
@@ -844,7 +846,7 @@ class ReceiptAnalyzer:
             return self._build_nonstandard_result(
                 source, rows, qr_text, document_type, selected_backend,
                 stage_backends, stage_labels, preview_path, started,
-                artifact_dir, artifact_url_prefix,
+                artifact_dir, artifact_url_prefix, selected_seal_mode,
             )
         fields = enrich_fields(parse_fields(rows), qr_text)
         machine_note_original = fields.get("签收说明", "")
@@ -1582,7 +1584,11 @@ class ReceiptAnalyzer:
                 requirement=fields.get("签章要求", ""),
                 footer_anchor_y=signature_anchor,
             )
-            external = self.seal_api.recognize(source)
+            external = (
+                self.seal_api.recognize(source)
+                if selected_seal_mode == "qingtong"
+                else self.seal_api.skipped()
+            )
             if external.get("enabled") and external.get("ok"):
                 seal_texts.extend(_extract_strings(external.get("response", {}).get("data", {})))
             seal_texts = _dedupe(seal_texts)
@@ -1591,12 +1597,16 @@ class ReceiptAnalyzer:
                 seal_check, fields.get("签章要求", ""), seal_texts, fields
             )
             local_label = stage_labels["seal"]
-            seal_check["backend"] = f"印章 API + 本地 {local_label}" if external.get("enabled") else f"本地 {local_label}"
+            seal_check["backend"] = (
+                f"清瞳印章 API + 本地 {local_label}"
+                if external.get("ok") else f"本地 {local_label}"
+            )
+            seal_check["recognition_mode"] = selected_seal_mode
             seal_check["regions"] = [region.to_dict() for region in recipient_regions]
             seal_check["api"] = external
         else:
             regions, recipient_regions, seal_artifacts = [], [], []
-            external = {"enabled": False, "message": "首页无签收页脚，未调用印章 API"}
+            external = {"enabled": False, "requested": selected_seal_mode == "qingtong", "message": "首页无签收页脚，未调用印章 API"}
             seal_check = {
                 **compare_seal_text(fields.get("签章要求", ""), []),
                 "status": "无法判断",
@@ -1604,6 +1614,7 @@ class ReceiptAnalyzer:
                 "backend": "未执行（等待关联续页）",
                 "regions": [],
                 "api": external,
+                "recognition_mode": selected_seal_mode,
             }
 
         safety_policy = _apply_single_paddle_safety(
@@ -1645,6 +1656,7 @@ class ReceiptAnalyzer:
             "document_type": document_type,
             "ocr_backend": selected_backend,
             "ocr_backend_label": backend_label(selected_backend),
+            "seal_recognition_mode": selected_seal_mode,
             "ocr_stage_backends": {
                 stage: {"id": stage_backends[stage], "label": stage_labels[stage]}
                 for stage in stage_backends
@@ -1679,6 +1691,7 @@ class ReceiptAnalyzer:
         started: float,
         artifact_dir: str | Path | None,
         artifact_url_prefix: str,
+        selected_seal_mode: str,
     ) -> dict:
         """Keep page OCR evidence without forcing a fixed receipt decision."""
         fields = enrich_fields(parse_fields(rows), qr_text)
@@ -1759,15 +1772,20 @@ class ReceiptAnalyzer:
                 requirement=fields.get("签章要求", ""),
                 footer_anchor_y=footer_signature.y,
             )
-            external = self.seal_api.recognize(source)
+            external = (
+                self.seal_api.recognize(source)
+                if selected_seal_mode == "qingtong"
+                else self.seal_api.skipped()
+            )
             if external.get("enabled") and external.get("ok"):
                 seal_texts.extend(_extract_strings(external.get("response", {}).get("data", {})))
             seal_check = compare_seal_text(fields.get("签章要求", ""), _dedupe(seal_texts))
             local_label = stage_labels["seal"]
             seal_check["backend"] = (
-                f"印章 API + 本地 {local_label}"
-                if external.get("enabled") else f"本地 {local_label}"
+                f"清瞳印章 API + 本地 {local_label}"
+                if external.get("ok") else f"本地 {local_label}"
             )
+            seal_check["recognition_mode"] = selected_seal_mode
             seal_check["regions"] = [region.to_dict() for region in recipient_regions]
             seal_check["api"] = external
         else:
@@ -1791,6 +1809,7 @@ class ReceiptAnalyzer:
                 "backend": "未执行（文档类型分流）",
                 "regions": [],
                 "api": {"enabled": False, "message": "文档类型分流后未调用印章 API"},
+                "recognition_mode": selected_seal_mode,
             }
         safety_policy = _apply_single_paddle_safety(
             date_check, seal_check, stage_backends
@@ -1810,6 +1829,7 @@ class ReceiptAnalyzer:
             "document_type": document_type,
             "ocr_backend": selected_backend,
             "ocr_backend_label": backend_label(selected_backend),
+            "seal_recognition_mode": selected_seal_mode,
             "ocr_stage_backends": {
                 "page": {"id": stage_backends["page"], "label": stage_labels["page"]},
                 "date": {

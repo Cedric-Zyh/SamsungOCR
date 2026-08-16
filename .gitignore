@@ -5,6 +5,7 @@ __pycache__/
 .playwright-cli/
 .pytest_cache/
 .env
+config/seal_api_key
 node_modules
 
 # 本地运行产物、数据库、中间过程图和导出文件均可由源码重新生成。

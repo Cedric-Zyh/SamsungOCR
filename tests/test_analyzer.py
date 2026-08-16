@@ -1886,7 +1886,10 @@ def test_windows_hybrid_end_to_end_never_auto_passes_single_model_evidence(
         analyzer, "_recognize_local_seals",
         lambda *_a, **_k: (["测试科技有限公司"], []),
     )
-    monkeypatch.setattr(analyzer.seal_api, "recognize", lambda *_a: {"enabled": False})
+    def unexpected_remote_call(*_args):
+        raise AssertionError("默认本地模式不得调用远程印章 API")
+
+    monkeypatch.setattr(analyzer.seal_api, "recognize", unexpected_remote_call)
 
     result = analyzer.analyze(source, ocr_backend="hybrid")
 

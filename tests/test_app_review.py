@@ -20,6 +20,53 @@ def sample_result(filename="7266301052.jpg"):
     }
 
 
+def test_create_task_defaults_to_local_seal_mode(tmp_path, monkeypatch):
+    test_database = Database(tmp_path / "results.db")
+    test_database.initialize()
+    monkeypatch.setattr(app_module, "database", test_database)
+
+    response = app_module.app.test_client().post(
+        "/api/tasks",
+        json={"name": "本地批次", "total": 2, "ocr_backend": "hybrid"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["seal_recognition_mode"] == "local"
+
+
+def test_create_task_persists_qingtong_mode_and_rejects_unknown(
+    tmp_path, monkeypatch
+):
+    test_database = Database(tmp_path / "results.db")
+    test_database.initialize()
+    monkeypatch.setattr(app_module, "database", test_database)
+    client = app_module.app.test_client()
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "清瞳批次",
+            "total": 1,
+            "ocr_backend": "hybrid",
+            "seal_recognition_mode": "qingtong",
+        },
+    )
+    rejected = client.post(
+        "/api/tasks",
+        json={
+            "name": "错误模式",
+            "total": 1,
+            "ocr_backend": "hybrid",
+            "seal_recognition_mode": "unknown",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["seal_recognition_mode"] == "qingtong"
+    assert rejected.status_code == 400
+    assert "不支持的印章识别方式" in rejected.get_json()["error"]
+
+
 def test_export_accuracy_scope_follows_exact_workbook_rows_and_backend():
     machine = [
         {"id": 1, "filename": "a.jpg", "ocr_backend": "hybrid"},

@@ -25,6 +25,12 @@ def main() -> None:
         help="只验收真值文件中的前 N 张；0 表示全部。原始六张基线请使用 --limit 6。",
     )
     parser.add_argument(
+        "--seal-recognition-mode",
+        choices=("local", "qingtong"),
+        default="local",
+        help="印章识别方式；qingtong 会把样单上传到清瞳接口。",
+    )
+    parser.add_argument(
         "--sample", action="append", default=[],
         help="只验收指定样单文件名，可重复传入；优先于 --limit。",
     )
@@ -57,6 +63,7 @@ def main() -> None:
         "name": f"{len(names)} 张标注样单验收测试 · {args.backend}",
         "total": len(names),
         "ocr_backend": args.backend,
+        "seal_recognition_mode": args.seal_recognition_mode,
     })
     if task_response.status_code != 200:
         raise RuntimeError(task_response.get_data(as_text=True))
@@ -216,6 +223,7 @@ def main() -> None:
     output = {
         "task": task,
         "backend": args.backend,
+        "seal_recognition_mode": args.seal_recognition_mode,
         "samples": names,
         "accuracy": machine_accuracy,
         "records": records,
