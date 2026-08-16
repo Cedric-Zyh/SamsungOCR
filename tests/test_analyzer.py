@@ -26,7 +26,10 @@ from receipt_ocr.analyzer import (
     _needs_low_confidence_date_audit,
     _select_display_only_date_audit_rows,
     _day_slot_confirms_value,
+    _adaptive_day_slot_confirms_value,
+    _parse_adaptive_day_slot,
     _max_channel_truncated_mismatch_candidate,
+    _single_server_strict_truncated_day_candidate,
     _missing_year_separator_consensus_from_artifacts,
     _parse_missing_year_separator_full_date,
     _cross_year_nondestructive_consensus_from_artifacts,
@@ -3745,6 +3748,79 @@ def test_day_slot_requires_mobile_server_and_both_preprocessings():
     assert not _day_slot_confirms_value(strong[:3], 13)
     strong[-1]["parsed_components"] = ["3"]
     assert not _day_slot_confirms_value(strong, 13)
+
+
+def test_adaptive_day_slot_requires_both_models_and_image_views():
+    strong = [
+        {
+            "slot": "自适应日数字槽",
+            "model": model,
+            "preprocessing": preprocessing,
+            "parsed_components": ["30"],
+        }
+        for model in ("mobile", "server")
+        for preprocessing in ("原始裁剪", "最大通道去彩色")
+    ]
+
+    assert _parse_adaptive_day_slot("月30日") == 30
+    assert _parse_adaptive_day_slot("30日") == 30
+    assert _parse_adaptive_day_slot("8月30日") is None
+    assert _parse_adaptive_day_slot("B0日") is None
+    assert _adaptive_day_slot_confirms_value(strong, 30)
+    assert not _adaptive_day_slot_confirms_value(strong[:3], 30)
+    strong[-1]["parsed_components"] = ["20"]
+    assert not _adaptive_day_slot_confirms_value(strong, 30)
+
+
+def _single_server_truncated_day_artifacts():
+    server = "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+    mobile = "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+    return [
+        {
+            "variant": "紧凑区域",
+            "date_line_ocr_variants": [
+                {"preprocessing": mobile, "ocr_texts": ["2025年8月0日"]},
+                {"preprocessing": server, "ocr_texts": ["2025年8月30日"]},
+                {
+                    "preprocessing": "日期行 Server 大模型低置信度候选",
+                    "ocr_texts": ["202年8月30日"],
+                },
+                {
+                    "preprocessing": "日期行灰度自动对比三倍放大 Server 人工候选",
+                    "ocr_texts": ["202年8月30日"],
+                },
+            ],
+        },
+        {
+            "variant": "宽区域",
+            "date_line_ocr_variants": [
+                {"preprocessing": mobile, "ocr_texts": ["2025年8月0日"]},
+                {"preprocessing": server, "ocr_texts": ["2025年8月0日"]},
+            ],
+        },
+    ]
+
+
+def test_single_server_date_accepts_only_matching_truncated_day_evidence():
+    artifacts = _single_server_truncated_day_artifacts()
+    assert _single_server_strict_truncated_day_candidate(artifacts) == date(
+        2025, 8, 30
+    )
+
+    artifacts[1]["date_line_ocr_variants"][0]["ocr_texts"] = [
+        "2025年8月9日"
+    ]
+    assert _single_server_strict_truncated_day_candidate(artifacts) is None
+
+
+def test_single_server_truncated_day_rejects_literal_conflict():
+    artifacts = _single_server_truncated_day_artifacts()
+    artifacts[1]["date_line_ocr_variants"].append({
+        "preprocessing": "日期行原图",
+        "ocr_texts": ["2025年8月29日"],
+    })
+
+    assert _single_server_strict_truncated_day_candidate(artifacts) is None
 
 
 def _white_day_conflict_artifacts():

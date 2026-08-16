@@ -1384,6 +1384,31 @@ class ReceiptAnalyzer:
                 "（Mobile/Server 紧裁与宽裁四单元完整一致；"
                 "日数字窄槽双模型、双预处理确认两位日）"
             )
+        adaptive_day_candidates = {
+            parsed
+            for artifact in date_artifacts
+            if (
+                parsed := parse_date(str(
+                    artifact.get("date_adaptive_day_slot_candidate", "")
+                ))
+            ) is not None
+        }
+        if (
+            actual_date is not None
+            and adaptive_day_candidates == {actual_date}
+            and rejected_date is None
+        ):
+            date_confidence = max(0.84, date_confidence)
+            date_check["adaptive_day_slot_consensus"] = {
+                "candidate": actual_date.isoformat(),
+                "day": actual_date.day,
+                "models": ["mobile", "server"],
+                "preprocessings": ["原始裁剪", "最大通道去彩色"],
+            }
+            date_check["message"] += (
+                "（Server 唯一完整日期获紧/宽漏一位日证据支持；"
+                "自适应日位裁剪经 Mobile/Server 双图一致确认）"
+            )
         separator_candidates = {
             parsed
             for artifact in date_artifacts
@@ -4892,6 +4917,9 @@ class ReceiptAnalyzer:
                             day_context_view = slot_views.get(
                                 "day_context", {}
                             )
+                            adaptive_day_view = slot_views.get(
+                                "day_digits_adaptive", {}
+                            )
                             month_day_view = slot_views.get("month_day", {})
                             month_digit_view = slot_views.get("month_digits", {})
                             year_path = year_view.get("processed")
@@ -4906,6 +4934,19 @@ class ReceiptAnalyzer:
                                     artifacts
                                 )
                             )
+                            truncated_day_candidate = (
+                                _single_server_strict_truncated_day_candidate(
+                                    artifacts
+                                )
+                            )
+                            adaptive_day_variants = (
+                                _recognize_adaptive_day_slot_variants(
+                                    adaptive_day_view
+                                )
+                                if truncated_day_candidate is not None
+                                else []
+                            )
+                            slot_variants.extend(adaptive_day_variants)
                             for preprocessing, safe_month_digit_path in (
                                 ("最大通道去彩色", month_digit_path),
                                 (
@@ -5243,6 +5284,17 @@ class ReceiptAnalyzer:
                                     and server_component_date is not None
                                 ):
                                     reliable_slot_date = server_component_date
+                                if (
+                                    reliable_slot_date is None
+                                    and truncated_day_candidate is not None
+                                    and _adaptive_day_slot_confirms_value(
+                                        adaptive_day_variants,
+                                        truncated_day_candidate.day,
+                                    )
+                                ):
+                                    reliable_slot_date = (
+                                        truncated_day_candidate
+                                    )
                                 white_day_audit_date = (
                                     _white_day_conflict_audit_candidate(
                                         white_day_conflict_prefilter,
@@ -5267,6 +5319,13 @@ class ReceiptAnalyzer:
                             if reliable_slot_date is not None:
                                 accepted_slot_date = reliable_slot_date
                                 slot_candidate_source = (
+                                    "Server 唯一完整日期 + Mobile 紧宽区域"
+                                    "同位漏字 + Paddle 双模型自适应日位一致"
+                                    if (
+                                        truncated_day_candidate
+                                        == reliable_slot_date
+                                    )
+                                    else
                                     "Server 双几何完整日期 + Paddle 双模型"
                                     "固定年月日上下文槽位一致"
                                     if server_component_date is not None
@@ -5480,6 +5539,16 @@ class ReceiptAnalyzer:
                                         f"{prefix}/date/"
                                         f"{day_context_view['processed'].name}"
                                     ),
+                                    "date_slot_adaptive_day_original_url": (
+                                        f"{prefix}/date/"
+                                        f"{adaptive_day_view['original'].name}"
+                                        if adaptive_day_view else ""
+                                    ),
+                                    "date_slot_adaptive_day_processed_url": (
+                                        f"{prefix}/date/"
+                                        f"{adaptive_day_view['processed'].name}"
+                                        if adaptive_day_view else ""
+                                    ),
                                     "date_slot_day_context_white_url": (
                                         f"{prefix}/date/"
                                         f"{day_context_view['white_processed'].name}"
@@ -5524,11 +5593,29 @@ class ReceiptAnalyzer:
                                         slot_component_candidate.isoformat()
                                         if slot_component_candidate else ""
                                     ),
+                                    "date_adaptive_day_slot_candidate": (
+                                        truncated_day_candidate.isoformat()
+                                        if (
+                                            truncated_day_candidate is not None
+                                            and reliable_slot_date
+                                            == truncated_day_candidate
+                                        )
+                                        else ""
+                                    ),
                                     "date_slot_reliable": bool(
                                         reliable_slot_date
                                     ),
                                     "date_slot_acceptance_note": (
                                         (
+                                            "Server 唯一完整日期获紧裁/宽裁漏一位日"
+                                            "证据支持；自适应日位原图、去章色图由"
+                                            " Mobile/Server 四单元一致确认；可自动核验"
+                                            if (
+                                                truncated_day_candidate is not None
+                                                and truncated_day_candidate
+                                                == reliable_slot_date
+                                            )
+                                            else
                                             "Server 紧裁/宽裁完整日期一致，且"
                                             "Mobile/Server 最大通道年份、月日"
                                             "上下文槽位一致；可自动核验"
@@ -6612,6 +6699,81 @@ def _recognize_day_slot_variants(day_view: dict[str, Path]) -> list[dict]:
     return variants
 
 
+def _parse_adaptive_day_slot(text: str) -> int | None:
+    """Parse an isolated day while allowing the left printed month unit."""
+    compact = re.sub(r"\s+", "", str(text))
+    match = re.fullmatch(r"(?:月)?(\d{1,2})日", compact)
+    if match is None:
+        return None
+    value = int(match.group(1))
+    return value if 1 <= value <= 31 else None
+
+
+def _recognize_adaptive_day_slot_variants(
+    day_view: dict[str, Path],
+) -> list[dict]:
+    """Recognize a shifted day crop on raw and color-suppressed images."""
+    try:
+        from .paddle_ocr import recognize_line
+    except Exception:
+        return []
+    variants = []
+    for preprocessing, path in (
+        ("原始裁剪", day_view.get("original")),
+        ("最大通道去彩色", day_view.get("processed")),
+    ):
+        if path is None:
+            continue
+        for model, label in (("mobile", "Mobile"), ("server", "Server")):
+            try:
+                rows = recognize_line(path, model_variant=model)
+            except Exception:
+                rows = []
+            values = {
+                parsed
+                for row in rows
+                if (parsed := _parse_adaptive_day_slot(row.text)) is not None
+            }
+            variants.append({
+                "slot": "自适应日数字槽",
+                "method": f"{label} {preprocessing}整行识别",
+                "model": model,
+                "preprocessing": preprocessing,
+                "ocr_texts": [row.text for row in rows],
+                "parsed_components": [
+                    str(value) for value in sorted(values)
+                ],
+            })
+    return variants
+
+
+def _adaptive_day_slot_confirms_value(
+    variants: list[dict], expected: int
+) -> bool:
+    """Require raw/color-clean agreement from Mobile and Server."""
+    cells: dict[tuple[str, str], set[int]] = {}
+    for variant in variants:
+        if variant.get("slot") != "自适应日数字槽":
+            continue
+        model = str(variant.get("model") or "")
+        preprocessing = str(variant.get("preprocessing") or "")
+        if model not in {"mobile", "server"}:
+            continue
+        cells[(model, preprocessing)] = {
+            int(value)
+            for value in variant.get("parsed_components", []) or []
+            if str(value).isdigit()
+        }
+    required_cells = {
+        (model, preprocessing)
+        for model in ("mobile", "server")
+        for preprocessing in ("原始裁剪", "最大通道去彩色")
+    }
+    return set(cells) == required_cells and all(
+        cells[cell] == {expected} for cell in required_cells
+    )
+
+
 def _day_slot_confirms_value(variants: list[dict], expected: int) -> bool:
     """Require exactly one identical day in all four model/transform cells."""
     cells: dict[tuple[str, str], set[int]] = {}
@@ -7040,6 +7202,11 @@ def _save_date_slot_views(
         # mistaken for ``3`` by the overly wide generic month/day crop.
         "month_context": (0.36, 0.74),
         "day_context": (0.50, 0.985),
+        # Handwriting may start immediately after the printed ``月`` and sit
+        # farther left than the legacy digit-only slot. This view keeps the
+        # handwritten day and right-hand unit while excluding most month ink.
+        # It is used only behind a strict cross-model evidence prefilter.
+        "day_digits_adaptive": (0.50, 0.80),
         # A thin handwritten month ``1`` is easily merged with the printed
         # ``月`` and following day. Preserve a digit-only audit view between
         # the printed year/month units; the two OCR models must still agree.
@@ -7703,6 +7870,104 @@ def _server_cross_geometry_strict_date_from_artifacts(
         return None
     candidate = next(iter(tight))
     return candidate if literal_dates == {candidate} else None
+
+
+def _single_server_strict_truncated_day_candidate(
+    artifacts: list[dict],
+) -> date | None:
+    """Find one full Server date backed by matching truncated day rows.
+
+    This prefilter is intentionally independent of the requested-delivery
+    date. A literal Server date must be unique, the maximum-channel rows from
+    both geometries may differ only by losing one digit of its two-digit day,
+    and Mobile must show that same truncation in both geometries. Finally,
+    Server must preserve the full month/day in two additional partial-year
+    preprocessing observations. The caller still has to confirm the isolated
+    day with both OCR models on two image representations.
+    """
+    primary = {"紧凑区域", "宽区域"}
+    server_label = "日期行最大通道去彩色三倍放大 Server 跨几何复核"
+    mobile_label = "日期行最大通道去彩色三倍放大 Mobile 跨几何复核"
+    literal_dates: set[date] = set()
+    server_cells: dict[str, list[str]] = {}
+    mobile_cells: dict[str, list[str]] = {}
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant") or "")
+        if geometry not in primary:
+            continue
+        for key in (
+            "ocr_variants", "secondary_ocr_variants",
+            "date_line_ocr_variants",
+        ):
+            for variant in artifact.get(key) or []:
+                preprocessing = str(variant.get("preprocessing") or "")
+                texts = [str(value) for value in variant.get("ocr_texts") or []]
+                if not _is_date_audit_only_preprocessing(preprocessing):
+                    literal_dates.update(
+                        parsed
+                        for text in texts
+                        if (parsed := parse_date(text)) is not None
+                    )
+                if key != "date_line_ocr_variants":
+                    continue
+                if preprocessing == server_label:
+                    server_cells[geometry] = texts
+                elif preprocessing == mobile_label:
+                    mobile_cells[geometry] = texts
+    if len(literal_dates) != 1:
+        return None
+    candidate = next(iter(literal_dates))
+    if candidate.day < 10:
+        return None
+
+    def truncated(text: str) -> bool:
+        match = re.fullmatch(
+            r"(\d{4})年(\d{1,2})月(\d)日",
+            re.sub(r"\s+", "", text),
+        )
+        return bool(
+            match
+            and int(match.group(1)) == candidate.year
+            and int(match.group(2)) == candidate.month
+            and int(match.group(3))
+            in {candidate.day // 10, candidate.day % 10}
+        )
+
+    if set(server_cells) != primary or set(mobile_cells) != primary:
+        return None
+    if not all(
+        any(parse_date(text) == candidate or truncated(text) for text in texts)
+        for texts in server_cells.values()
+    ):
+        return None
+    if not all(
+        any(truncated(text) for text in texts)
+        for texts in mobile_cells.values()
+    ):
+        return None
+
+    partial_support: set[tuple[str, str]] = set()
+    for artifact in artifacts:
+        geometry = str(artifact.get("variant") or "")
+        if geometry not in primary:
+            continue
+        for variant in artifact.get("date_line_ocr_variants") or []:
+            preprocessing = str(variant.get("preprocessing") or "")
+            if "Server" not in preprocessing:
+                continue
+            for text in variant.get("ocr_texts") or []:
+                match = re.fullmatch(
+                    r"(\d{3})年(\d{1,2})月(\d{1,2})日",
+                    re.sub(r"\s+", "", str(text)),
+                )
+                if (
+                    match
+                    and str(candidate.year).startswith(match.group(1))
+                    and int(match.group(2)) == candidate.month
+                    and int(match.group(3)) == candidate.day
+                ):
+                    partial_support.add((geometry, preprocessing))
+    return candidate if len(partial_support) >= 2 else None
 
 
 def _is_date_audit_only_preprocessing(preprocessing: str) -> bool:
