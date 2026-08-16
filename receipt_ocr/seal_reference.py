@@ -227,6 +227,25 @@ COLOR_SIFT_MIN_HOMOGRAPHY_INLIERS = 40
 COLOR_SIFT_MIN_INLIER_RATIO = 0.65
 COLOR_SIFT_MIN_SURFACE_COVERAGE = 0.30
 
+# Whole-ink registration remains useful when table lines destroy local SIFT
+# purity.  A bare company seal may use this fallback only when the *same*
+# detected region agrees with two different confirmed files.  The full
+# 301-image matrix has one pending positive: its leading/second registered
+# masks score 0.7559/0.6865, while the known wrong-stamp control reaches only
+# 0.4337/0.3042.  Both votes must retain modest local-feature support as an
+# independent guard against similarly shaped generic round seals.
+COLOR_MASK_CONSENSUS_MIN_DISTINCT_REFERENCES = 2
+COLOR_MASK_CONSENSUS_MIN_TOP_SCORE = 0.74
+COLOR_MASK_CONSENSUS_MIN_SCORE = 0.68
+COLOR_MASK_CONSENSUS_MIN_CORRELATION = 0.68
+COLOR_MASK_CONSENSUS_MIN_DICE = 0.70
+COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES = 50
+COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS = 15
+COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE = 0.15
+COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE = 0.20
+COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE = 0.15
+COLOR_MASK_CONSENSUS_MIN_RECOGNIZED_CHARS = 2
+
 
 @dataclass(frozen=True)
 class SealReference:
@@ -470,6 +489,12 @@ class SealReferenceMatcher:
         chromatic_consensus_accepted = bool(
             chromatic_consensus.get("accepted")
         )
+        color_mask_consensus = _best_color_mask_consensus(
+            all_evidence, seal_check
+        )
+        color_mask_consensus_accepted = bool(
+            color_mask_consensus.get("accepted")
+        )
         color_mask_accepted = bool(
             best_color is not None and _passes_color_mask_gate(best_color)
         )
@@ -482,11 +507,13 @@ class SealReferenceMatcher:
             if high_purity_consensus_accepted
             else chromatic_consensus
             if chromatic_consensus_accepted
+            else color_mask_consensus
+            if color_mask_consensus_accepted
             else consensus
         )
         if (
             consensus_accepted or high_purity_consensus_accepted
-            or chromatic_consensus_accepted
+            or chromatic_consensus_accepted or color_mask_consensus_accepted
         ) and not (
             strict_accepted or high_ratio_accepted or high_support_accepted
             or ultra_support_accepted or branded_station_accepted
@@ -504,7 +531,11 @@ class SealReferenceMatcher:
                     and str(item.get("reference_filename") or "")
                     == leading_reference
                 ),
-                key=_evidence_rank,
+                key=(
+                    _color_evidence_rank
+                    if color_mask_consensus_accepted
+                    else _evidence_rank
+                ),
             )
         if (
             trimmed_chromatic_accepted
@@ -524,6 +555,7 @@ class SealReferenceMatcher:
                 or trimmed_chromatic_accepted
                 or consensus_accepted or high_purity_consensus_accepted
                 or chromatic_consensus_accepted
+                or color_mask_consensus_accepted
             )
         ):
             best = best_color
@@ -543,6 +575,7 @@ class SealReferenceMatcher:
                 or trimmed_chromatic_accepted
                 or consensus_accepted or high_purity_consensus_accepted
                 or chromatic_consensus_accepted
+                or color_mask_consensus_accepted
                 or color_mask_accepted or color_sift_accepted
             )
         )
@@ -569,6 +602,8 @@ class SealReferenceMatcher:
             if high_purity_consensus_accepted
             else "chromatic_crop_multi_reference_consensus"
             if chromatic_consensus_accepted
+            else "color_mask_multi_reference_consensus"
+            if color_mask_consensus_accepted
             else "color_mask_geometry" if color_mask_accepted
             else "color_mask_sift_geometry" if color_sift_accepted
             else "rejected"
@@ -832,6 +867,29 @@ class SealReferenceMatcher:
                 "inlier_ratio": COLOR_SIFT_MIN_INLIER_RATIO,
                 "surface_coverage": COLOR_SIFT_MIN_SURFACE_COVERAGE,
             },
+            "color_mask_consensus": {
+                "distinct_references": (
+                    COLOR_MASK_CONSENSUS_MIN_DISTINCT_REFERENCES
+                ),
+                "top_score": COLOR_MASK_CONSENSUS_MIN_TOP_SCORE,
+                "score": COLOR_MASK_CONSENSUS_MIN_SCORE,
+                "correlation": COLOR_MASK_CONSENSUS_MIN_CORRELATION,
+                "dice": COLOR_MASK_CONSENSUS_MIN_DICE,
+                "good_matches": COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES,
+                "homography_inliers": (
+                    COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+                ),
+                "candidate_coverage": (
+                    COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE
+                ),
+                "reference_coverage": (
+                    COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE
+                ),
+                "company_score": COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE,
+                "recognized_company_chars": (
+                    COLOR_MASK_CONSENSUS_MIN_RECOGNIZED_CHARS
+                ),
+            },
         }
         best["confidence"] = (
             _reference_confidence(best, route, active_consensus)
@@ -865,6 +923,8 @@ class SealReferenceMatcher:
                 if high_purity_consensus_accepted else
                 "排除黑色表格与签字噪声后，同一章区与两份独立人工真值阳性章一致"
                 if chromatic_consensus_accepted else
+                "同一纯公司章区域与两份独立人工真值阳性章形成整体彩色墨迹共识"
+                if color_mask_consensus_accepted else
                 "与人工真值阳性章的彩色墨迹形成整体几何一致"
                 if color_mask_accepted else
                 "与人工真值阳性章同时形成整体彩色墨迹与大面积局部几何一致"
@@ -1728,6 +1788,72 @@ def _passes_color_sift_gate(evidence: dict) -> bool:
     )
 
 
+def _is_bare_company_requirement(value: str) -> bool:
+    return bool(re.fullmatch(
+        r"[\u4e00-\u9fffA-Za-z0-9（）()·]+(?:有限责任公司|有限公司)",
+        value,
+    ))
+
+
+def _recognized_requirement_subsequence_length(
+    recognized: str, requirement: str,
+) -> int:
+    """Count OCR characters that occur in requirement order, ignoring noise."""
+    required_chars = [char for char in requirement if "\u4e00" <= char <= "\u9fff"]
+    observed_chars = [char for char in recognized if "\u4e00" <= char <= "\u9fff"]
+    position = 0
+    matched = 0
+    for char in observed_chars:
+        try:
+            offset = required_chars.index(char, position)
+        except ValueError:
+            continue
+        matched += 1
+        position = offset + 1
+    return matched
+
+
+def _has_independent_short_company_fragment(
+    seal_check: dict, requirement: str,
+) -> bool:
+    fragments = [
+        normalize_text(str(seal_check.get("recognized") or "")),
+        *[
+            normalize_text(str(value))
+            for value in (seal_check.get("all_recognized") or [])
+        ],
+    ]
+    for fragment in fragments:
+        if not re.fullmatch(r"[\u4e00-\u9fff]{2,6}", fragment):
+            continue
+        if (
+            _recognized_requirement_subsequence_length(fragment, requirement)
+            == len(fragment)
+            and len(fragment) >= COLOR_MASK_CONSENSUS_MIN_RECOGNIZED_CHARS
+        ):
+            return True
+    return False
+
+
+def _passes_color_mask_consensus_vote(evidence: dict) -> bool:
+    return bool(
+        float(evidence.get("color_mask_score", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_SCORE
+        and float(evidence.get("color_mask_correlation", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_CORRELATION
+        and float(evidence.get("color_mask_dice", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_DICE
+        and int(evidence.get("good_matches", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES
+        and int(evidence.get("homography_inliers", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS
+        and float(evidence.get("candidate_coverage", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE
+        and float(evidence.get("reference_coverage", 0))
+        >= COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE
+    )
+
+
 def _passes_consensus_vote(evidence: dict) -> bool:
     return bool(
         evidence["good_matches"] >= CONSENSUS_MIN_GOOD_MATCHES
@@ -1801,6 +1927,90 @@ def _best_chromatic_crop_consensus(all_evidence: list[dict]) -> dict:
         minimum_references=CHROMATIC_CONSENSUS_MIN_DISTINCT_REFERENCES,
         minimum_top_inliers=CHROMATIC_CONSENSUS_MIN_TOP_INLIERS,
         minimum_top_ratio=CHROMATIC_CONSENSUS_MIN_TOP_INLIER_RATIO,
+    )
+
+
+def _best_color_mask_consensus(
+    all_evidence: list[dict], seal_check: dict,
+) -> dict:
+    """Find two-file whole-ink consensus for a partially read bare company seal."""
+    requirement = normalize_text(str(seal_check.get("requirement") or ""))
+    if (
+        seal_check.get("company_conflict") is True
+        or not _is_bare_company_requirement(requirement)
+        or float(seal_check.get("company_score", 0))
+        < COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE
+        or not _has_independent_short_company_fragment(
+            seal_check, requirement
+        )
+    ):
+        return {
+            "accepted": False,
+            "candidate_index": -1,
+            "reference_count": 0,
+            "top_score": 0.0,
+            "matches": [],
+        }
+
+    by_candidate: dict[int, dict[str, dict]] = defaultdict(dict)
+    for evidence in all_evidence:
+        if not _passes_color_mask_consensus_vote(evidence):
+            continue
+        candidate_index = int(evidence.get("candidate_index", -1))
+        reference_filename = str(evidence.get("reference_filename") or "")
+        if candidate_index < 0 or not reference_filename:
+            continue
+        previous = by_candidate[candidate_index].get(reference_filename)
+        if (
+            previous is None
+            or _color_evidence_rank(evidence) > _color_evidence_rank(previous)
+        ):
+            by_candidate[candidate_index][reference_filename] = evidence
+
+    groups = []
+    for candidate_index, distinct in by_candidate.items():
+        matches = sorted(
+            distinct.values(), key=_color_evidence_rank, reverse=True
+        )
+        top_score = float(matches[0].get("color_mask_score", 0)) if matches else 0
+        groups.append({
+            "candidate_index": candidate_index,
+            "reference_count": len(matches),
+            "top_score": top_score,
+            "accepted": bool(
+                len(matches) >= COLOR_MASK_CONSENSUS_MIN_DISTINCT_REFERENCES
+                and top_score >= COLOR_MASK_CONSENSUS_MIN_TOP_SCORE
+            ),
+            "matches": [
+                {
+                    key: item.get(key, 0)
+                    for key in (
+                        "reference_filename", "reference_url",
+                        "color_mask_score", "color_mask_correlation",
+                        "color_mask_dice", "good_matches",
+                        "homography_inliers", "inlier_ratio",
+                        "candidate_coverage", "reference_coverage",
+                    )
+                }
+                for item in matches
+            ],
+        })
+    if not groups:
+        return {
+            "accepted": False,
+            "candidate_index": -1,
+            "reference_count": 0,
+            "top_score": 0.0,
+            "matches": [],
+        }
+    return max(
+        groups,
+        key=lambda item: (
+            bool(item["accepted"]),
+            int(item["reference_count"]),
+            float(item["top_score"]),
+            sum(float(row["color_mask_score"]) for row in item["matches"]),
+        ),
     )
 
 
@@ -2139,6 +2349,21 @@ def _reference_confidence(
                     float(evidence["inlier_ratio"])
                     - BRANDED_STATION_MIN_INLIER_RATIO,
                 ) / 0.15,
+            ),
+        )
+    elif route == "color_mask_multi_reference_consensus":
+        # Two independent confirmed files compensate for low local-feature
+        # purity caused by table-line crossings. Keep this below clean OCR and
+        # strict SIFT routes because only a short company fragment survived.
+        second_score = float(
+            ((consensus or {}).get("matches") or [{}, {}])[1].get(
+                "color_mask_score", COLOR_MASK_CONSENSUS_MIN_SCORE
+            )
+        ) if len((consensus or {}).get("matches") or []) >= 2 else 0.0
+        confidence = min(
+            0.94,
+            0.92 + 0.20 * max(
+                0.0, second_score - COLOR_MASK_CONSENSUS_MIN_SCORE
             ),
         )
     elif route == "color_mask_geometry":

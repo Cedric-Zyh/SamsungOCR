@@ -55,6 +55,16 @@ from receipt_ocr.seal_reference import (
     COLOR_MASK_MIN_CORRELATION,
     COLOR_MASK_MIN_DICE,
     COLOR_MASK_MIN_SCORE,
+    COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE,
+    COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE,
+    COLOR_MASK_CONSENSUS_MIN_CORRELATION,
+    COLOR_MASK_CONSENSUS_MIN_DICE,
+    COLOR_MASK_CONSENSUS_MIN_DISTINCT_REFERENCES,
+    COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES,
+    COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+    COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE,
+    COLOR_MASK_CONSENSUS_MIN_SCORE,
+    COLOR_MASK_CONSENSUS_MIN_TOP_SCORE,
     COLOR_SIFT_MIN_CORRELATION,
     COLOR_SIFT_MIN_DICE,
     COLOR_SIFT_MIN_GOOD_MATCHES,
@@ -107,6 +117,7 @@ from receipt_ocr.seal_reference import (
     ULTRA_SUPPORT_MIN_SURFACE_COVERAGE,
     _best_consensus,
     _best_chromatic_crop_consensus,
+    _best_color_mask_consensus,
     _best_high_purity_consensus,
     _passes_high_ratio_gate,
     _passes_high_support_gate,
@@ -842,6 +853,149 @@ def test_match_reports_high_purity_multi_reference_consensus(
     assert evidence["consensus_reference_count"] == 2
 
 
+def _color_mask_consensus_evidence(
+    reference: str,
+    *,
+    candidate_index: int = 0,
+    score: float = COLOR_MASK_CONSENSUS_MIN_SCORE,
+) -> dict:
+    return {
+        "candidate_index": candidate_index,
+        "candidate_url": f"/files/artifacts/candidate/{candidate_index}.png",
+        "reference_filename": reference,
+        "reference_url": f"/files/artifacts/reference/{reference}.png",
+        "color_mask_score": score,
+        "color_mask_correlation": COLOR_MASK_CONSENSUS_MIN_CORRELATION,
+        "color_mask_dice": COLOR_MASK_CONSENSUS_MIN_DICE,
+        "good_matches": COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES,
+        "homography_inliers": COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": 0.25,
+        "candidate_coverage": COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE,
+        "reference_coverage": COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE,
+    }
+
+
+def _bare_company_seal_check(**overrides) -> dict:
+    return {
+        "requirement": "西安网冠科技有限公司",
+        "recognized": "技有",
+        "company_score": COLOR_MASK_CONSENSUS_MIN_COMPANY_SCORE,
+        "company_conflict": False,
+        **overrides,
+    }
+
+
+def test_color_mask_consensus_requires_two_distinct_files_and_semantics():
+    first = _color_mask_consensus_evidence(
+        "confirmed-a.jpg", score=COLOR_MASK_CONSENSUS_MIN_TOP_SCORE
+    )
+    second = _color_mask_consensus_evidence("confirmed-b.jpg")
+    accepted = _best_color_mask_consensus(
+        [first, second], _bare_company_seal_check()
+    )
+    assert COLOR_MASK_CONSENSUS_MIN_DISTINCT_REFERENCES == 2
+    assert accepted["accepted"] is True
+    assert accepted["reference_count"] == 2
+
+    duplicate = [first, {**second, "reference_filename": "confirmed-a.jpg"}]
+    assert not _best_color_mask_consensus(
+        duplicate, _bare_company_seal_check()
+    )["accepted"]
+    split = [first, {**second, "candidate_index": 1}]
+    assert not _best_color_mask_consensus(
+        split, _bare_company_seal_check()
+    )["accepted"]
+    assert not _best_color_mask_consensus(
+        [first, second], _bare_company_seal_check(recognized="技")
+    )["accepted"]
+    assert not _best_color_mask_consensus(
+        [first, second], _bare_company_seal_check(company_conflict=True)
+    )["accepted"]
+    assert not _best_color_mask_consensus(
+        [first, second],
+        _bare_company_seal_check(requirement="西安网冠科技有限公司业务专用章"),
+    )["accepted"]
+
+
+def test_color_mask_consensus_enforces_every_vote_boundary_and_top_score():
+    first = _color_mask_consensus_evidence(
+        "confirmed-a.jpg", score=COLOR_MASK_CONSENSUS_MIN_TOP_SCORE
+    )
+    second = _color_mask_consensus_evidence("confirmed-b.jpg")
+    for key in (
+        "color_mask_score", "color_mask_correlation", "color_mask_dice",
+        "good_matches", "homography_inliers", "candidate_coverage",
+        "reference_coverage",
+    ):
+        reduced = dict(second)
+        reduced[key] -= 1 if key in {
+            "good_matches", "homography_inliers"
+        } else 0.001
+        assert not _best_color_mask_consensus(
+            [first, reduced], _bare_company_seal_check()
+        )["accepted"]
+    weak_top = {
+        **first, "color_mask_score": COLOR_MASK_CONSENSUS_MIN_TOP_SCORE - 0.001
+    }
+    assert not _best_color_mask_consensus(
+        [weak_top, second], _bare_company_seal_check()
+    )["accepted"]
+
+
+def test_match_reports_color_mask_multi_reference_consensus(
+    tmp_path, monkeypatch
+):
+    artifact_root = tmp_path / "artifacts"
+    candidate = artifact_root / "candidate" / "seal.png"
+    reference_paths = [
+        artifact_root / "reference-a" / "seal.png",
+        artifact_root / "reference-b" / "seal.png",
+    ]
+    for path in (candidate, *reference_paths):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.parent.name.encode())
+    requirement = "西安网冠科技有限公司"
+    matcher = SealReferenceMatcher(artifact_root)
+    matcher.references = {requirement: [
+        SealReference(
+            filename=f"confirmed-{index}.jpg",
+            requirement=requirement,
+            artifact_url=f"/files/artifacts/reference-{index}/seal.png",
+            path=path,
+        )
+        for index, path in enumerate(reference_paths)
+    ]}
+    monkeypatch.setattr(matcher, "_compare", lambda *_a: {
+        "good_matches": COLOR_MASK_CONSENSUS_MIN_GOOD_MATCHES,
+        "homography_inliers": COLOR_MASK_CONSENSUS_MIN_HOMOGRAPHY_INLIERS,
+        "inlier_ratio": 0.25,
+        "candidate_coverage": COLOR_MASK_CONSENSUS_MIN_CANDIDATE_COVERAGE,
+        "reference_coverage": COLOR_MASK_CONSENSUS_MIN_REFERENCE_COVERAGE,
+    })
+    monkeypatch.setattr(matcher, "_compare_color_mask", lambda _c, ref: {
+        "color_mask_score": (
+            COLOR_MASK_CONSENSUS_MIN_TOP_SCORE
+            if ref.parent.name == "reference-a"
+            else COLOR_MASK_CONSENSUS_MIN_SCORE
+        ),
+        "color_mask_correlation": COLOR_MASK_CONSENSUS_MIN_CORRELATION,
+        "color_mask_dice": COLOR_MASK_CONSENSUS_MIN_DICE,
+        "color_mask_angle": 0,
+        "color_mask_dx": 0,
+        "color_mask_dy": 0,
+    })
+    result = _result("/files/artifacts/candidate/seal.png")
+    result["seal_check"].update(_bare_company_seal_check(
+        recognized="备注仓库接收供应商中国外运物流发展有限公司技有",
+        all_recognized=["备注仓库接收", "技有"],
+    ))
+    evidence = matcher.match(result)
+    assert evidence["accepted"] is True
+    assert evidence["route"] == "color_mask_multi_reference_consensus"
+    assert evidence["consensus_reference_count"] == 2
+    assert evidence["confidence"] == 0.92
+
+
 def _chromatic_consensus_evidence(
     reference: str,
     *,
@@ -1536,3 +1690,38 @@ def test_app_chromatic_consensus_promotion_preserves_raw_ocr(monkeypatch):
     assert promoted["processing_artifacts"]["seals"][0][
         "visual_reference_match"
     ]["reference_filename"] == "confirmed.jpg"
+
+
+def test_app_color_mask_consensus_uses_consensus_candidate(monkeypatch):
+    import app as app_module
+
+    evidence = {
+        "accepted": True,
+        "candidate_index": 1,
+        "consensus_candidate_index": 0,
+        "consensus_reference_count": 2,
+        "route": "color_mask_multi_reference_consensus",
+        "reference_filename": "confirmed.jpg",
+        "confidence": 0.921,
+    }
+    monkeypatch.setattr(
+        app_module.seal_reference_matcher, "match", lambda _result: evidence
+    )
+    result = {
+        "date_check": {"status": "匹配", "reliable": True},
+        "seal_check": {
+            "recognized": "技有", "status": "不匹配", "score": 0.45,
+            "reliable": False, "backend": "本地 OCR",
+        },
+        "review_reasons": ["印章内容无法可靠判断"],
+        "processing_artifacts": {"seals": [{"index": 0}, {"index": 1}]},
+    }
+    promoted = app_module._apply_visual_seal_reference(result)
+    assert promoted["seal_check"]["reliable"] is True
+    assert "整体彩色墨迹多参考一致" in promoted["seal_check"]["match_basis"]
+    assert promoted["processing_artifacts"]["seals"][0][
+        "visual_reference_match"
+    ]["route"] == "color_mask_multi_reference_consensus"
+    assert "visual_reference_match" not in promoted["processing_artifacts"][
+        "seals"
+    ][1]
