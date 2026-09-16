@@ -5,69 +5,278 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>三星回单核验台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e44e2e'/%3E%3Cpath d='M18 18h28v28H18z' fill='none' stroke='white' stroke-width='4'/%3E%3Cpath d='M24 27h16M24 35h11' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20260910-review-pagination">
+  <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v=20260910-records-modal">
+  <link rel="stylesheet" href="{{ url_for('static', filename='ui_refinements.css') }}?v=20260910-review-workspace">
+  <link rel="stylesheet" href="{{ url_for('static', filename='ui_round2.css') }}?v=20260910-round2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='archive_theme.css') }}?v=20260911-import-dialog">
+  <link rel="stylesheet" href="{{ url_for('static', filename='report_refinements.css') }}?v=20260910-archive-pages">
+  <link rel="stylesheet" href="{{ url_for('static', filename='review_feedback.css') }}?v=20260910-check-summary">
+  <link rel="stylesheet" href="{{ url_for('static', filename='settings.css') }}?v=20260915-collapsible-rules">
+  <link rel="stylesheet" href="{{ url_for('static', filename='records_archive.css') }}?v=20260915-fixed-columns">
+  <link rel="stylesheet" href="{{ url_for('static', filename='workbench_tasks.css') }}?v=20260911-staged-import">
+  <link rel="stylesheet" href="{{ url_for('static', filename='process_history.css') }}?v=20260916-process-history">
 </head>
-<body>
+<body data-default-backend="{{ default_ocr_backend }}">
+  <aside class="app-sidebar"><a class="app-brand" href="#progress"><span>回</span><div>三星回单<small>核验工作台</small></div></a><p class="nav-caption">工作空间</p><nav aria-label="主导航"><a href="#progress" data-nav="progress" title="工作台" aria-label="工作台"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><path d="m14 17 3 3 5-6"/></svg><span>工作台</span></a><a href="#records" data-nav="records" title="回单记录" aria-label="回单记录"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>回单记录</span></a><a href="#quality" data-nav="quality" title="质量统计" aria-label="质量统计"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10m8 10V4m8 16v-7"/></svg><span>质量统计</span></a><a href="#settings" data-nav="settings" title="设置" aria-label="设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span>设置</span></a></nav><div class="sidebar-note"><span class="sidebar-dot"></span> 回单核验工作台<br><small>让每一张回单，有据可查</small></div></aside>
   <main class="shell app-shell">
-    <header class="hero compact-hero">
-      <div><p class="eyebrow">SAMSUNG · POD REVIEW</p><h1>三星回单核验台</h1><p class="subtitle">批量识别、证据回看、人工复核与准确率追踪。</p></div>
-      <div class="engine-card"><span class="status-dot"></span><div><strong>本地识别引擎已就绪</strong><small>Vision / PaddleOCR · 可扩展后端</small></div></div>
-    </header>
-
+    <header class="hero compact-hero"><div><p class="eyebrow">SAMSUNG / POD WORKSPACE</p><h1 id="page-title">回单记录</h1><p class="subtitle" id="page-subtitle">查询回单，优先处理需要你确认的项目。</p></div><div class="toolbar-actions"><button id="open-batch-review" type="button" class="secondary-button review-entry"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H5a2 2 0 0 0-2 2v14h16v-6M9 4v4h6V4zM15 4h2m0 5 2 2 4-5"/></svg><span>人工复核</span><span id="review-entry-count" class="review-entry-count hidden" aria-hidden="true"></span></button><a class="primary-button" href="#import">＋ 导入回单</a></div></header>
+    <section data-page="quality" class="hidden">
     <section class="dashboard-section">
       <div class="section-heading"><div><p class="eyebrow">QUALITY OVERVIEW</p><h2>质量概览</h2><small id="accuracy-scope">正在加载评测口径…</small></div><button id="refresh-report" class="text-button">刷新统计</button></div>
+      <p id="report-status" role="status" aria-live="polite"></p>
       <div id="kpi-grid" class="kpi-grid"><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div><div class="kpi-card skeleton"></div></div>
-      <div class="report-grid"><div class="report-card"><h3>错误类型统计</h3><div id="error-stats" class="stat-list"></div></div><div class="report-card"><h3>字段准确率</h3><div id="field-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>商品单元格准确率</h3><div id="product-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>OCR 后端对比</h3><div id="backend-comparison" class="backend-list"></div></div></div>
+      <div class="report-grid"><div class="report-card"><h3>错误类型统计</h3><div id="error-stats" class="stat-list"></div></div><div class="report-card"><h3>已标注字段准确率</h3><div id="field-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>商品单元格准确率</h3><div id="product-accuracy" class="accuracy-list"></div></div><div class="report-card"><h3>识别方式对比</h3><div id="backend-comparison" class="backend-list"></div></div></div>
     </section>
+
+    </section>
+    <section data-page="import" class="hidden">
 
     <section class="workspace batch-workspace">
       <div class="upload-panel">
         <div id="drop-zone" class="drop-zone small-drop" aria-label="上传回单图片">
           <input id="file-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
-          <input id="folder-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" webkitdirectory directory multiple hidden>
-          <div class="upload-icon">↥</div><h2>拖入多张回单图片</h2><p>支持一次批量上传，也可以选择整个文件夹</p>
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+          <div class="upload-icon">↥</div><h2>拖入图片或整个文件夹</h2><p>自动包含所有层级子文件夹中的 JPG、PNG、BMP、WEBP 图片</p>
           <div class="button-row"><button type="button" class="primary-button" id="choose-file">选择图片</button><button type="button" class="secondary-button" id="choose-folder">选择文件夹</button></div>
         </div>
-        <div class="ocr-engine-picker">
-          <label for="ocr-backend"><span>本次 OCR 引擎</span><select id="ocr-backend">{% for backend in ocr_backend_catalog %}<option value="{{ backend.id }}" data-model-home="{{ backend.model_home }}" data-model-name="{{ backend.model_name or '' }}" data-max-page-side="{{ backend.get('max_page_side', '') }}" data-route-page="{{ backend.get('route', {}).get('page', '') }}" data-route-date="{{ backend.get('route', {}).get('date', '') }}" data-route-seal="{{ backend.get('route', {}).get('seal', '') }}" data-safety-policy="{{ backend.get('safety_policy', '') }}" data-usage-note="{{ backend.get('usage_note', '') }}" data-reason="{{ backend.reason }}" {{ 'selected' if backend.id == default_ocr_backend else '' }} {{ 'disabled' if not backend.available else '' }}>{{ backend.label }}{{ '（推荐）' if backend.get('recommended') else '' }}{{ '' if backend.available else '（不可用）' }}</option>{% endfor %}</select></label>
-          <small id="ocr-backend-detail"></small>
-          <label for="seal-recognition-mode"><span>本次印章识别</span><select id="seal-recognition-mode">{% for mode in seal_recognition_modes %}<option value="{{ mode.id }}" data-description="{{ mode.description }}" {{ 'disabled' if mode.id == 'qingtong' and not seal_api_enabled else '' }}>{{ mode.label }}{{ '（未配置 API Key）' if mode.id == 'qingtong' and not seal_api_enabled else '' }}</option>{% endfor %}</select></label>
-          <small id="seal-recognition-detail"></small>
-        </div>
-        <div class="sample-row"><span>已标注样单</span><div class="sample-buttons"><button class="sample-button accent" id="run-all-samples">一键测试全部 {{ samples|length }} 张</button>{% for sample in samples %}<button class="sample-button" data-sample="{{ sample }}">{{ sample.split('.')[0] }}</button>{% endfor %}</div></div>
+        <p id="folder-scan-status" class="import-hint" role="status"></p><p class="import-hint">图片先保存在本地，再点击“开始识别”。上传期间请保持页面打开。<br>识别方式可在<a href="#settings">设置</a>中调整。</p><p id="import-config" class="import-hint"></p>
+
       </div>
-      <aside class="rules-panel batch-aside"><h3>安全判定规则</h3><div class="rule-item"><span>01</span><div><strong>低置信度标黄</strong><p>字段低于 72% 自动提示，不隐瞒不确定性。</p></div></div><div class="rule-item"><span>02</span><div><strong>证据不足待复核</strong><p>日期或印章不可靠时禁止自动判定通过。</p></div></div><div class="rule-item"><span>03</span><div><strong>全过程可追溯</strong><p>保留原始值、人工值、修改时间和中间处理图。</p></div></div><div class="api-note {{ 'active' if seal_api_enabled else '' }}"><b>{{ '印章 API 已启用' if seal_api_enabled else '当前使用本地印章识别' }}</b><span>{{ '远程与本地结果交叉验证' if seal_api_enabled else '配置 SEAL_API_KEY 后可自动增强' }}</span></div></aside>
+
     </section>
 
-    <section id="task-section" class="queue-section hidden">
-      <div class="section-heading"><div><p class="eyebrow">BATCH TASK</p><h2 id="task-name">批量识别任务</h2></div><span id="task-summary"></span></div>
-      <div class="progress-track"><span id="task-progress"></span></div>
-      <div class="task-metrics"><div><b id="task-total">0</b><span>总数</span></div><div><b id="task-completed">0</b><span>完成</span></div><div><b id="task-success">0</b><span>成功</span></div><div><b id="task-failed">0</b><span>失败</span></div><div><b id="task-review">0</b><span>待复核</span></div></div>
-      <div id="queue" class="queue compact-queue"></div>
+    </section>
+    <section data-page="progress" class="hidden workbench-page">
+      <div class="workbench-toolbar">
+        <div class="workbench-date"><label for="progress-calendar-toggle">导入日期</label><div class="calendar-wrap"><input id="progress-date" type="hidden"><button id="progress-calendar-toggle" type="button" class="secondary-button" aria-label="选择导入日期" aria-expanded="false" aria-controls="progress-calendar"></button><section id="progress-calendar" class="import-calendar hidden" role="dialog" aria-label="选择导入日期"><div class="calendar-header"><button id="progress-calendar-prev" type="button" aria-label="上个月">‹</button><input id="progress-calendar-month" type="month" aria-label="日历月份"><button id="progress-calendar-next" type="button" aria-label="下个月">›</button></div><div class="calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div id="progress-calendar-days" class="calendar-days"></div><p id="progress-calendar-note" aria-live="polite">右上角数字表示当天导入的回单数量</p></section></div><div class="day-navigation"><button id="progress-prev" type="button" class="mini-button" aria-label="前一天">‹</button><button id="progress-today" type="button" class="mini-button">今天</button><button id="progress-next" type="button" class="mini-button" aria-label="后一天">›</button></div></div>
+      </div>
+      <div class="workbench-processing-bar">
+        <div class="workbench-progress-summary"><span class="workbench-progress-label">当天识别</span><span id="task-summary">正在加载进度…</span><div class="progress-track" role="progressbar" aria-label="当天回单处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress"></span></div></div>
+        <div class="queue-control-actions"><span class="queue-scope-label">后台队列</span><span id="queue-control-label" role="status"></span><button id="refresh-progress" type="button" class="text-button">刷新</button></div>
+        <p id="queue-pause-notice" class="queue-pause-notice hidden" role="status"></p>
+      </div>
+      <p id="progress-note" class="progress-note" role="status">正在加载当天待办…</p>
+      <section id="task-section" class="hidden workbench-tasks" aria-labelledby="workbench-list-title">
+        <div class="workbench-taskbar">
+          <div class="workbench-filter-buttons" aria-label="切换待办类型"><button type="button" data-work-filter="review" aria-pressed="true">待复核 <span data-work-count="review">0</span></button><button type="button" data-work-filter="processing" aria-pressed="false">待开始 / 处理中 <span data-work-count="processing">0</span></button><button type="button" data-work-filter="failed" aria-pressed="false">失败 <span data-work-count="failed">0</span></button></div>
+          <div class="workbench-task-actions"><button id="queue-toggle" type="button" class="mini-button" disabled>加载中…</button><button id="workbench-cancel-all" type="button" class="mini-button row-cancel hidden" disabled>全部取消</button><button id="workbench-start-review" type="button" class="primary-button" disabled>开始复核</button></div>
+        </div>
+        <h2 id="workbench-list-title" class="sr-only">待复核回单</h2><span id="workbench-visible-count" class="sr-only" role="status"></span>
+        <div class="table-wrap workbench-table-wrap" tabindex="0" role="region" aria-label="当天待办列表，可滚动查看"><table class="workbench-table"><colgroup><col class="workbench-file-col"><col><col class="workbench-action-col"></colgroup><thead><tr><th scope="col">回单 / 客户</th><th scope="col" id="workbench-reason-heading">需要处理的问题</th><th scope="col">操作</th></tr></thead><tbody id="queue"><tr><td colspan="3" class="empty-state">正在加载待办…</td></tr></tbody></table></div>
+        <div class="workbench-list-footer"><span id="workbench-page-note" role="status"></span><button id="workbench-more" type="button" class="text-button hidden">再显示 50 张</button></div>
+      </section>
+    </section>
+    <section data-page="records" class="records-page">
+      <div id="batch-scope" class="scope-banner hidden"><span></span><button id="clear-batch" class="text-button">退出批次范围</button></div>
+      <section class="results-section records-section">
+        <form id="filters" class="record-filter-state"><input type="hidden" name="task_id"><input type="hidden" name="text_match" value="prefix"></form>
+        <div class="records-command-bar">
+          <div class="import-date-bar"><span class="date-label">导入日期</span><div class="calendar-wrap"><input id="import-date" type="hidden" name="import_date" form="filters"><button id="calendar-toggle" type="button" class="secondary-button" aria-label="选择导入日期" aria-expanded="false" aria-controls="import-calendar"></button><section id="import-calendar" class="import-calendar hidden" role="dialog" aria-label="选择导入日期"><div class="calendar-header"><button id="calendar-prev" type="button" aria-label="上个月">‹</button><input id="calendar-month" type="month" aria-label="日历月份"><button id="calendar-next" type="button" aria-label="下个月">›</button></div><div class="calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div id="calendar-days" class="calendar-days"></div><p id="calendar-note" aria-live="polite">右上角数字表示当天导入的回单数量</p></section></div><button id="import-today" type="button" class="text-button">今天</button></div>
+          <label class="record-search-label" for="record-search"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input id="record-search" type="search" form="filters" name="search" placeholder="搜索文件名、订单号或客户" aria-label="搜索文件名、订单号或客户" autocomplete="off"></label>
+          <div class="records-view-actions"><button id="records-more-filters" class="secondary-button header-filter-button" type="button" data-filter-popover="records" aria-expanded="false" aria-controls="filter-records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"></path></svg><span>更多筛选</span></button><button id="review-filtered-records" type="button" class="secondary-button">复核当前结果</button><details class="records-review-more"><summary aria-label="更多记录操作" title="更多记录操作">···</summary><div><button id="export-excel" type="button">导出 Excel</button><button id="records-density-toggle" type="button" aria-pressed="false">紧凑显示</button><button id="review-day-records" type="button">复核当天全部</button></div></details></div>
+        </div>
+        <div id="selection-toolbar" class="selection-toolbar hidden"><span id="selection-count"></span><button id="clear-record-selection" type="button" class="text-button">取消选择</button><span id="selection-readiness" role="status"></span><button id="bulk-pass" type="button" class="secondary-button">批量确认通过</button><button id="review-selected-records" type="button" class="secondary-button">复核选中</button><details class="records-review-more records-bulk-more"><summary aria-label="更多批量操作" title="更多批量操作">···</summary><div><button id="bulk-pending" type="button">批量待复核</button><button id="bulk-retry" type="button">批量重新识别</button><button id="bulk-delete" type="button">删除选中</button></div></details></div>
+        <div class="records-list-heading"><div class="record-tabs" aria-label="快捷筛选"><button type="button" data-filter="" class="active">全部回单</button><button type="button" data-filter="需人工复核">待复核</button><button type="button" data-filter="通过">已通过</button><button type="button" data-filter="不通过">不通过</button><button type="button" data-filter="识别失败">识别失败</button></div><span id="record-count" role="status"></span></div>
+        <div class="record-filter-note"><div class="record-filter-context"><div id="active-filters" class="active-filters" aria-label="已应用的筛选条件"></div><span id="record-filter-status" role="status" class="sr-only">正在加载回单…</span></div><button class="text-button" type="reset" form="filters" id="reset-filters">清空筛选</button></div>
+        <div class="table-wrap record-filter-table" tabindex="0" role="region" aria-label="筛选后的回单列表，可滚动查看"><table class="records-table"><colgroup><col class="selection-col"><col class="file-col"><col class="customer-col"><col class="signature-col"><col class="date-col"><col class="seal-col"><col class="verdict-col"><col class="time-col"><col class="action-col"></colgroup><thead><tr><th scope="col"><input id="select-all" type="checkbox" aria-label="全选当前页"></th><th scope="col" class="record-file-column">回单 / 订单号</th><th scope="col" class="record-customer-column">客户</th><th scope="col">签名核对</th><th scope="col" class="record-date-column">日期核对</th><th scope="col">客户印章</th><th scope="col">处理结果</th><th scope="col">最近处理</th><th scope="col">操作</th></tr></thead><tbody id="records-body"><tr><td colspan="9" class="empty-state">正在加载记录…</td></tr></tbody></table></div>
+        <nav class="result-pagination" aria-label="回单记录分页"><span id="records-page-info" role="status"></span><label class="page-size-label">每页<select id="records-page-size" aria-label="每页显示回单数"><option value="25">25 张</option><option value="50">50 张</option><option value="100" selected>100 张</option></select></label><button id="records-page-prev" type="button" class="mini-button" disabled>上一页</button><button id="records-page-next" type="button" class="mini-button" disabled>下一页</button></nav>
+        <div id="filter-records" class="table-popover records-filter-popover hidden" role="dialog" aria-labelledby="record-filters-title"><div class="popover-heading"><strong id="record-filters-title">筛选回单</strong><button type="button" data-close-popover aria-label="关闭回单筛选">×</button></div><div class="records-filter-grid">
+            <label><span>文件名 / 订单号开头</span><input id="column-filter-search_prefix" class="popover-filter-input" form="filters" name="search_prefix" type="search" aria-label="文件名或订单号开头" placeholder="输入开头，如 7" autocomplete="off"></label>
+            <label><span>客户名称</span><input id="column-filter-customer" class="popover-filter-input" form="filters" name="customer" type="search" aria-label="输入客户名称" placeholder="输入客户名称" autocomplete="off"></label>
+            <label><span>签收日期</span><input id="column-filter-date" class="popover-filter-input" form="filters" name="date" type="date" aria-label="筛选签收日期" placeholder="筛选签收日期" autocomplete="off"></label>
+            <label><span>日期核验</span><select id="column-filter-date_status" class="popover-filter-input" form="filters" name="date_status" aria-label="筛选签收日期核验"><option value="">全部</option><option>匹配</option><option>匹配待确认</option><option>不匹配</option><option>未识别</option><option>需人工复核</option><option>未执行</option></select></label>
+            <label><span>客户印章</span><select id="column-filter-seal_status" class="popover-filter-input" form="filters" name="seal_status" aria-label="筛选客户印章核验"><option value="">全部</option><option>匹配</option><option>匹配待确认</option><option>部分匹配</option><option>不匹配</option><option>未识别</option><option>需人工复核</option><option>未执行</option></select></label>
+            <label><span>处理结果</span><select id="column-filter-overall" class="popover-filter-input" form="filters" name="overall" aria-label="筛选整体结论"><option value="">全部</option><option>通过</option><option>需人工复核</option><option>不通过</option><option>识别失败</option></select></label>
+            <label><span>人工复核状态</span><select id="column-filter-review_status" class="popover-filter-input" form="filters" name="review_status" aria-label="筛选复核状态"><option value="">全部</option><option>无需复核</option><option>待复核</option><option>确认通过</option><option>确认不通过</option></select></label>
+        </div><div class="records-filter-footer"><span>条件更改后自动筛选</span><button type="reset" form="filters" class="text-button">清空筛选</button><button type="button" class="secondary-button" data-close-popover>完成</button></div></div>
+      </section>
     </section>
 
-    <section class="results-section records-section">
-      <div class="section-heading records-heading"><div><p class="eyebrow">REVIEW WORKBENCH</p><h2>回单记录</h2></div><div class="toolbar-actions"><button id="bulk-pass" class="secondary-button">批量确认通过</button><button id="bulk-pending" class="secondary-button">批量待复核</button><button id="bulk-retry" class="secondary-button">批量重新识别</button><button id="export-excel" class="primary-button">导出 Excel</button></div></div>
-      <form id="filters" class="filters"><input name="filename" placeholder="文件名"><input name="order_id" placeholder="订单号"><input name="customer" placeholder="客户"><input type="date" name="date"><select name="overall"><option value="">全部核验结果</option><option>通过</option><option>不通过</option><option>需人工复核</option><option>识别失败</option></select><select name="review_status"><option value="">全部复核状态</option><option>无需复核</option><option>待复核</option><option>确认通过</option><option>确认不通过</option></select><button class="secondary-button" type="submit">筛选</button><button class="text-button" type="reset" id="reset-filters">清空</button></form>
-      <div class="table-wrap"><table class="records-table"><thead><tr><th><input id="select-all" type="checkbox" aria-label="全选"></th><th>文件名 / 订单号</th><th>客户</th><th>要求 / 实际到货</th><th>日期</th><th>印章</th><th>整体结论</th><th>复核状态</th><th>处理时间</th><th>操作</th></tr></thead><tbody id="records-body"><tr><td colspan="10" class="empty-state">正在加载记录…</td></tr></tbody></table></div>
+    <section data-page="settings" class="hidden settings-page">
+      <div class="recognition-plan">
+        <div class="settings-layout">
+          <section class="settings-card settings-content" aria-labelledby="settings-content-title">
+            <div class="settings-section-heading"><div><h2 id="settings-content-title">识别内容与方式</h2><p>勾选需要的内容；多选方式可做结果对照。</p></div><span id="plan-selected-count" class="settings-count"></span></div>
+            <div class="plan-grid">
+{% for key, title, description in [('fields','印刷字段','客户、订单、到货要求与签章要求'),('products','商品明细','商品名称、型号和数量'),('handwriting','手写签名','收货人等手写信息'),('date','签收日期','识别日期，并与到货要求比对'),('seal','客户印章','识别印章，并与签章要求比对')] %}
+              <section class="plan-card" data-plan-card="{{ key }}" aria-labelledby="plan-title-{{ key }}">
+                <div class="plan-card-heading"><label class="plan-title" id="plan-title-{{ key }}"><input type="checkbox" data-target="{{ key }}" aria-controls="plan-methods-{{ key }}" checked><span>{{ title }}</span></label><span class="plan-stage-status" data-plan-status="{{ key }}"></span></div>
+                <p class="plan-description">{{ description }}</p>
+                <div class="plan-methods" id="plan-methods-{{ key }}" role="group" aria-label="{{ title }}识别方式">
+{% for backend in ocr_backend_catalog if backend.id in ['paddle','paddle_server','vision'] %}
+                  <label class="plan-method" title="{{ backend.reason if not backend.available else {'vision':'在本机使用 macOS Vision 识别','paddle':'在本机使用 Paddle Mobile 识别','paddle_server':'在本机使用 Paddle Server 大模型识别'}[backend.id] }}"><input type="checkbox" data-method="{{ backend.id }}" data-stage="{{ key }}" {{ 'disabled' if not backend.available else '' }} data-available="{{ 'true' if backend.available else 'false' }}"><span>{{ {'vision':'Vision','paddle':'Paddle Mobile','paddle_server':'Paddle Server'}[backend.id] }}</span>{% if not backend.available %}<small>不可用</small>{% endif %}</label>
+{% endfor %}
+{% if key == 'seal' %}
+                  <label class="plan-method" title="{{ '使用已配置的清瞳印章服务' if seal_api_enabled else '需要先配置清瞳服务密钥' }}"><input type="checkbox" data-method="qingtong" data-stage="seal" data-available="{{ 'true' if seal_api_enabled else 'false' }}" {{ 'disabled' if not seal_api_enabled else '' }}><span>清瞳</span><small>{{ '远程' if seal_api_enabled else '未配置' }}</small></label>
+{% endif %}
+{% if key != 'products' %}
+                  <label class="plan-method" title="生产环境真实识别，每次处理一张，每隔 2 秒查询结果"><input type="checkbox" data-method="danzhengtong" data-stage="{{ key }}" data-available="true"><span>单证通</span><small>远程</small></label>
+{% endif %}
+                </div>
+              </section>
+{% endfor %}
+            </div>
+          </section>
+          <aside class="settings-card settings-current" aria-labelledby="settings-current-title">
+            <div class="settings-current-heading"><h2 id="settings-current-title">当前配置</h2><span id="plan-name">自定义</span></div>
+            <p id="plan-save-status" class="plan-save-status" role="status" aria-live="polite"></p>
+            <div id="plan-selection-list" class="plan-selection-list"></div>
+            <p id="plan-summary" class="sr-only" aria-live="polite"></p>
+            <p id="plan-error" class="settings-note settings-note-error hidden" role="alert"></p>
+            <div class="settings-scope-note"><strong>自动用于接下来的导入与重新识别</strong><span>仅保存在当前浏览器；已进入队列的任务继续使用原配置。</span></div>
+            <div class="settings-plan-notes">
+              <p id="plan-multi-note" class="settings-note hidden">同一项选择多种方式会分别执行，耗时也会增加。</p>
+              <p id="plan-requirement-note" class="settings-note hidden">未读取印刷字段时，使用已有回单的要求信息；新回单可能缺少比对依据。</p>
+              <p id="plan-page-note" class="settings-note hidden">本地识别仍会读取整页。签章要求包含在“印刷字段”中，目前按整组识别。</p>
+              <p id="remote-plan-note" class="settings-note hidden">所选远程服务会接收完整回单图片；单证通逐张处理，每隔 2 秒查询结果。</p>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <div class="settings-reference-grid">
+        <details class="settings-card settings-disclosure">
+          <summary><span><strong>识别方式说明</strong><small>查看用途与可用状态</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="settings-disclosure-body settings-engine-list">
+{% for backend in ocr_backend_catalog if backend.id in ['paddle','paddle_server','vision'] %}
+            <div><span><strong>{{ {'vision':'Vision','paddle':'Paddle Mobile','paddle_server':'Paddle Server'}[backend.id] }}</strong><small>{{ {'vision':'macOS 本地识别，适合快速对照','paddle':'本地识别，适合印刷字段与商品表格','paddle_server':'本地大模型，适合难例对照，耗时更高'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
+{% endfor %}
+            <div><span><strong>清瞳</strong><small>在线印章服务，按所选方案执行</small></span><b class="settings-availability {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</b></div>
+            <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b class="settings-availability">已接入</b></div>
+          </div>
+        </details>
+        <details class="settings-card settings-disclosure acceptance-card" aria-labelledby="acceptance-settings-title">
+          <summary><span><strong id="acceptance-settings-title">核验与复核规则</strong><small>设置多路结果如何判定通过或不通过</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="settings-disclosure-body">
+            <div class="acceptance-settings">
+            <h3>默认通过标准</h3>
+            <div class="acceptance-rule" role="group" aria-labelledby="seal-match-title">
+              <strong id="seal-match-title">客户印章</strong>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="none"><span>不核对</span></label>
+              <small>清瞳包含“印章模板”和“文字 OCR”两路结果；同时选择多种识别方式时按此规则判定。</small>
+            </div>
+            <div class="acceptance-rule" role="group" aria-labelledby="date-match-title">
+              <strong id="date-match-title">签收日期</strong>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="none"><span>不核对</span></label>
+              <small>多种识别方式都返回日期时，按这里选择是否要求全部一致。</small>
+            </div>
+            <div class="acceptance-rule" role="group" aria-labelledby="signature-match-title">
+              <strong id="signature-match-title">签名核对</strong>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none"><span>不核对</span></label>
+              <small>多种识别方式识别收货人和仓库联系人时，按这里选择判定方式。</small>
+            </div>
+            <h3 class="acceptance-subheading">默认不通过标准</h3>
+            <div class="acceptance-rule acceptance-reject-rule" role="group" aria-labelledby="reject-match-title">
+              <strong id="reject-match-title">不匹配结果</strong>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="any_mismatch"><span>任一结果不匹配</span></label>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="all_mismatch"><span>全部结果不匹配</span></label>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="none" checked><span>不自动不通过</span></label>
+              <small>默认不自动不通过；日期或印章不一致仍会进入人工复核，由你确认。</small>
+            </div>
+            </div>
+          </div>
+        </details>
+      </div>
+      <details class="settings-card settings-disclosure settings-samples">
+        <summary><span><strong>样单测试</strong><small>{{ samples|length }} 张已标注样单 · 使用当前配置</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="settings-disclosure-body">
+{% if samples %}
+          <div class="settings-sample-heading"><p>选一张样单快速检查，或运行全部样单。</p><button type="button" class="sample-button accent" id="run-all-samples">测试全部 {{ samples|length }} 张</button></div>
+          <div class="sample-buttons">{% for sample in samples %}<button type="button" class="sample-button" data-sample="{{ sample }}">{{ sample.split('.')[0] }}</button>{% endfor %}</div>
+{% else %}
+          <div class="settings-sample-heading"><p>暂无可用的已标注样单，可先导入回单进行测试。</p><button type="button" class="sample-button" id="run-all-samples" disabled>暂无样单</button></div>
+{% endif %}
+        </div>
+      </details>
+      <details class="settings-runtime"><summary>运行信息</summary><div><span>运行环境<strong>{{ python_path }}</strong></span><span>数据存储<strong>storage/results.db</strong></span></div></details>
     </section>
-
-    <footer><span>解释器：{{ python_path }}</span><span>数据库：storage/results.db</span></footer>
   </main>
 
-  <div id="review-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="review-title">
-    <div class="modal-backdrop" data-close-modal></div>
-    <section class="modal-panel"><header class="modal-header"><div><p class="eyebrow">HUMAN REVIEW</p><h2 id="review-title">人工复核</h2></div><button class="icon-button" data-close-modal aria-label="关闭">×</button></header><div id="review-content" class="modal-content"></div></section>
-  </div>
-
+  <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-dialog-title">
+  <header class="review-dialog-heading">
+    <h2 id="review-dialog-title">人工复核</h2>
+    <div class="review-dialog-tools"><span id="review-session-progress" role="status"></span><button id="toggle-review-queue" class="review-queue-toggle" type="button" aria-expanded="false" aria-controls="review-queue-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/></svg><span>复核列表</span></button><button type="button" class="review-dialog-close" data-close-modal aria-label="关闭人工复核，返回回单记录" autofocus><span>关闭</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+  </header>
+  <section data-page="review" class="review-page hidden">
+    <div class="review-workspace queue-collapsed"><aside id="review-queue-panel" class="review-queue" aria-label="待复核回单"><header class="review-queue-heading"><strong>本次复核列表</strong><button id="review-refresh" type="button" class="text-button">刷新</button></header><p id="review-scope-label" class="review-queue-scope"></p><span id="review-scope" class="sr-only" role="status"></span><div id="review-queue"></div><nav class="result-pagination review-pagination" aria-label="待复核回单分页"><span id="review-page-info" role="status"></span><button id="review-page-prev" type="button" class="mini-button" disabled>上一页</button><button id="review-page-next" type="button" class="mini-button" disabled>下一页</button></nav></aside><div id="review-modal" aria-labelledby="review-title"><section class="modal-panel"><header class="modal-header"><div><h2 id="review-title">人工复核</h2><p id="review-subtitle"></p></div><span class="review-save-state" data-save-state role="status"></span></header><div id="review-content" class="modal-content"></div></section></div><div id="review-empty" class="review-empty hidden"><span class="empty-mark" aria-hidden="true">✓</span><h2>当前范围已处理完</h2><p>没有需要继续处理的回单。</p><button type="button" class="secondary-button" data-close-modal>返回回单记录</button><button type="button" class="text-button" id="review-revisit">重新查看稍后处理项</button></div></div>
+  </section>
+  </dialog>
   <template id="review-template">
     <div class="review-layout">
-      <aside class="review-preview"><img data-preview alt="回单标注预览"><div class="status-summary" data-status-summary></div></aside>
-      <form id="review-form" class="review-form"><input type="hidden" name="result_id"><section class="review-block"><h3>识别字段 <span>黄色项需要重点检查</span></h3><div class="editable-fields" data-fields></div></section><section class="review-block product-review-block" data-product-section><h3>商品明细表 <span>按表头定位列、按纵坐标聚合行；黄色单元格需要检查</span></h3><div class="product-table-wrap" data-product-table></div></section><section class="review-block"><h3>日期与印章人工值</h3><div class="edit-grid"><label>实际收货日期<input type="date" name="actual_date"></label><label>识别印章内容<textarea name="seal_text" rows="3"></textarea></label><label>错误类型<select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select></label><label>人工备注<textarea name="human_note" rows="3"></textarea></label></div></section><section class="review-block truth-block"><h3>评测真值 <span data-truth-status>正在检查是否已有真值…</span></h3><p>确认字段、商品、实际日期和印章结论后，可将当前人工值纳入准确率分母；每次更新都会写入本地审计历史。</p><div class="truth-controls"><label class="check-label"><input type="checkbox" name="save_ground_truth"> 本次确认同时保存为评测真值</label><label>印章真值结论<select name="truth_seal_should_match"><option value="">请选择人工结论</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select></label></div><div data-truth-history class="truth-history"></div></section><section class="review-block"><h3>中间处理过程</h3><div class="artifact-tabs"><button type="button" class="artifact-tab active" data-artifact-tab="date">手写日期区域</button><button type="button" class="artifact-tab" data-artifact-tab="seals">印章区域</button></div><div data-artifacts></div></section><section class="review-block"><h3>复核历史</h3><div data-history class="history-list"></div></section><div class="review-actions"><button type="button" class="secondary-button" data-retry>单张重新识别</button><button type="button" class="secondary-button warning-button" data-save-pending>保存并待复核</button><button type="button" class="danger-button" data-confirm-fail>确认不通过</button><button type="button" class="primary-button success-button" data-confirm-pass>确认通过</button></div></form>
+      <aside class="review-preview"><div class="image-toolbar"><label class="image-source-label">查看<select data-image-source aria-label="查看回单或识别区域"></select></label><div class="image-zoom-controls"><button type="button" class="mini-button" data-zoom="out" aria-label="缩小图片">−</button><span data-zoom-label>100%</span><button type="button" class="mini-button" data-zoom="in" aria-label="放大图片">＋</button><button type="button" class="mini-button" data-zoom="fit">适应宽度</button></div></div><div class="image-viewport" data-image-viewport><img data-preview alt="回单图片"><div class="image-empty hidden review-image-feedback" data-image-empty role="status" aria-live="polite"><span class="review-image-feedback-mark" aria-hidden="true"></span><strong data-image-message>没有可用的预览图片</strong><p data-image-detail></p><div class="review-image-feedback-actions"><button type="button" class="secondary-button hidden" data-image-retry>重新加载</button><button type="button" class="text-button hidden" data-image-fallback>查看整页回单</button></div></div></div><p class="image-caption" data-image-caption></p><p class="image-interaction-hint">拖动查看 · 按住 Ctrl / ⌘ 滚轮缩放</p></aside>
+      <div class="review-divider" data-review-divider role="separator" tabindex="0" aria-label="调整图片与复核面板宽度" aria-orientation="vertical" aria-valuemin="32" aria-valuemax="64" aria-valuenow="48" title="拖动调整宽度，或使用左右方向键"></div>
+      <form id="review-form" class="review-form"><input type="hidden" name="result_id"><div class="status-summary review-issues" data-status-summary></div>
+        <details class="review-block check-block" data-review-panel="main" data-check-card="date" open>
+          <summary><span class="check-title">签收日期</span><span class="check-summary" data-check-summary="date" hidden></span><span data-check-badge="date"></span></summary>
+          <div class="check-heading"><button type="button" class="mini-button" data-focus-image="date">查看日期区域</button></div>
+          <div class="review-comparison-pair date-comparison-pair">
+            <div class="review-comparison" data-date-comparison></div>
+            <div class="review-check-result" data-date-result></div>
+            <div class="review-comparison confirmed-date hidden" data-date-confirmed role="status"><span>签收日期<b data-confirmed-date-value></b></span><div class="confirmed-date-actions"><small data-date-save-note></small><button type="button" class="text-button" data-date-change>修改</button></div></div>
+          </div>
+          <input type="hidden" name="actual_date"><input type="hidden" name="actual_date_confirmed" value="false">
+          <fieldset class="date-confirmation">
+            <legend class="sr-only">确认签收日期</legend>
+            <div class="date-confirmation-prompt"><span data-date-question></span><div class="date-confirmation-options">
+              <button type="button" class="mini-button date-choice-icon" data-date-choice="same" aria-label="确认实际签收与要求到货同一天" title="确认实际签收与要求到货同一天" aria-pressed="false">同一天</button>
+              <button type="button" class="mini-button date-choice-icon" data-date-choice="different" aria-label="不是同一天，修改签收日期" title="不是同一天，修改日期" aria-pressed="false">修改日期</button>
+            </div></div>
+            <div class="date-editor hidden" data-date-editor><label class="review-value-label" for="date-correction">实际签收日期</label><div class="date-editor-controls"><input id="date-correction" type="date" name="date_correction"><button type="button" class="mini-button date-choice-icon" data-date-accept aria-label="确认修改后的签收日期" title="确认签收日期">确认日期</button></div><small data-date-hint></small></div>
+          </fieldset>
+          <details class="date-audit-details" data-date-audit><summary>日期识别依据</summary><div data-date-audit-content></div></details>
+        </details>
+        <details class="review-block check-block" data-review-check="seal" data-check-card="seal" open>
+          <summary><span class="check-title">客户印章</span><span class="check-summary" data-check-summary="seal" hidden></span><span data-check-badge="seal"></span></summary>
+          <div class="check-heading"><button type="button" class="mini-button" data-focus-image="seal">查看印章区域</button></div>
+          <div class="review-comparison-pair seal-comparison-pair">
+            <div class="review-comparison" data-seal-comparison></div>
+            <div class="review-comparison confirmed-seal" data-seal-value-row><span><span data-seal-value-label>识别印章</span><b data-seal-value></b></span><div class="confirmed-date-actions"><span data-seal-confirmation-status></span><small data-seal-save-note></small><button type="button" class="text-button" data-seal-change>修改文字</button></div></div>
+          </div>
+          <input type="hidden" name="seal_confirmed_match">
+          <div class="hidden" data-seal-editor><label class="review-value-label">修改印章内容<textarea name="seal_text" rows="2"></textarea></label></div>
+          <div class="date-confirmation-prompt seal-confirmation-prompt" data-seal-prompt><span>与签章要求一致？</span><div class="date-confirmation-options">
+            <button type="button" class="mini-button date-choice-icon" data-seal-choice="same" aria-label="确认印章与签章要求匹配" title="是，与签章要求匹配">印章匹配</button>
+            <button type="button" class="mini-button date-choice-icon" data-seal-choice="different" aria-label="确认印章与签章要求不匹配" title="否，与签章要求不匹配">不匹配</button>
+          </div></div>
+          <details class="date-audit-details" data-seal-audit><summary>印章识别依据</summary><div class="review-check-result" data-seal-result></div><div class="seal-dual-evidence hidden" data-seal-dual></div></details>
+        </details>
+        <details class="review-block check-block" data-review-panel="signature" data-check-card="signature" open>
+          <summary><span class="check-title">签名核对</span><span class="check-summary" data-check-summary="signature" hidden></span><span data-check-badge="signature"></span></summary>
+          <div class="review-comparison-pair signature-comparison-pair">
+            <div class="review-comparison" data-signature-contact></div>
+            <div class="review-comparison" data-signature-receiver></div>
+            <div class="review-comparison confirmed-signature hidden" data-signature-confirmed role="status"><span>签名核对<b data-confirmed-signature-status></b></span><div class="confirmed-date-actions"><small data-signature-save-note></small><button type="button" class="text-button" data-signature-change>修改</button></div></div>
+          </div>
+          <input type="hidden" name="signature_confirmed_match">
+          <div class="date-confirmation-prompt signature-confirmation-prompt" data-signature-prompt><span>仓库联系人与仓库接收人一致？</span><div class="date-confirmation-options"><button type="button" class="mini-button date-choice-icon" data-signature-choice="same" aria-label="确认签名一致" title="是，签名一致">匹配</button><button type="button" class="mini-button date-choice-icon" data-signature-choice="different" aria-label="确认签名不一致" title="否，签名不一致">不匹配</button></div></div>
+          <p class="review-nonblocking-note">签名核对仅供人工确认和记录，不影响整体通过判断。</p>
+        </details>
+        <details class="review-block" data-review-panel="fields"><summary>印刷字段 <span>7 项基础信息</span></summary><div class="editable-fields" data-fields></div></details>
+        <details class="review-block" data-review-panel="handwriting"><summary>签收填写 <span>签名</span></summary><h3>仓库接收人</h3><div class="editable-fields" data-handwritten-fields></div></details>
+        <details class="review-block product-review-block" data-product-section data-review-panel="products"><summary>商品明细 <span data-product-count></span></summary><div class="product-table-wrap" data-product-table></div></details>
+        <details class="review-block" data-review-panel="evidence"><summary>识别依据与处理图片</summary><div data-machine-summary></div><div data-variants></div><div class="artifact-tabs"><button type="button" class="artifact-tab active" data-artifact-tab="date">日期区域</button><button type="button" class="artifact-tab" data-artifact-tab="seals">印章区域</button></div><div data-artifacts></div></details>
+        <details class="review-block" data-review-panel="history"><summary>修改记录</summary><div data-history class="history-list"></div></details>
+        <details class="review-block truth-block" data-review-panel="truth"><summary>样单标注 <span data-truth-status></span></summary><p>人工确认后，可将当前结果保存为评测真值。</p><div class="truth-controls"><label class="check-label"><input type="checkbox" name="save_ground_truth">同时保存为评测真值</label><label>印章真值结论<select name="truth_seal_should_match"><option value="">请选择人工结论</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select></label></div><div data-truth-history class="truth-history"></div></details>
+        <details class="review-block review-notes"><summary>备注与错误类型</summary><label>人工备注<textarea name="human_note" rows="2"></textarea></label><label>错误类型<select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select></label></details>
+        <div class="review-actions"><div class="review-footer-context"><p data-review-readiness role="status" aria-live="polite"></p><p data-review-shortcuts>Ctrl / ⌘ + Enter 确认通过 · Ctrl / ⌘ + S 保存稍后 · Alt + D / S 定位日期 / 印章</p></div><button type="button" class="text-button" data-retry>重新识别</button><button type="button" class="secondary-button" data-save-pending>保存并稍后处理</button><button type="button" class="secondary-button review-reject" data-confirm-fail>确认不通过</button><button type="button" class="primary-button" data-confirm-pass>确认通过并继续</button></div>
+      </form>
     </div>
   </template>
+  <dialog id="import-dialog" class="workspace-dialog import-dialog" aria-labelledby="import-dialog-title"><header class="modal-header"><h2 id="import-dialog-title">导入回单</h2><button type="button" class="secondary-button" data-dismiss-dialog>关闭</button></header><div data-import-body></div></dialog>
+  <dialog id="process-history-dialog" class="workspace-dialog process-history-dialog" aria-labelledby="process-history-title"><header class="modal-header"><div><h2 id="process-history-title">流程记录</h2><p id="process-history-subtitle"></p></div><button type="button" class="secondary-button" data-process-close>关闭</button></header><div id="process-history-content" class="process-history-body"></div></dialog>
 
-  <div id="toast" class="toast hidden"></div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20260816-76"></script>
+  <div id="record-more-menu" class="table-popover record-more-menu hidden" role="dialog" aria-label="回单更多操作"><button type="button" data-menu-retry>重新识别</button><button type="button" data-menu-delete>删除回单</button></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script id="field-schema" type="application/json">{{ {"output": output_fields, "printed": printed_fields, "handwritten": handwritten_fields}|tojson }}</script>
+  <script src="{{ url_for('static', filename='queue_state.js') }}?v=20260914-workbench-actions"></script>
+  <script src="{{ url_for('static', filename='workbench.js') }}?v=20260914-workbench-actions"></script>
+  <script src="{{ url_for('static', filename='import_files.js') }}?v=20260910-review-pagination"></script>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}?v=20260916-process-history"></script>
 </body>
 </html>

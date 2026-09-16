@@ -29,3 +29,6 @@ storage/previews/
 storage/artifacts/
 storage/exports/*.json
 storage/results.db
+
+# 单证通本机认证配置
+config/danzhengtong.local.json

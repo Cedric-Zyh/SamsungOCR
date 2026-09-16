@@ -19,7 +19,7 @@ def main() -> int:
     if not isinstance(items, list):
         raise ValueError("复核规格必须是 JSON 数组")
 
-    app_module.initialize()
+    app_module.initialize(start_worker=False)
     client = app_module.app.test_client()
     for item in items:
         result_id = int(item["result_id"])

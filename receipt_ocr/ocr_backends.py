@@ -9,6 +9,7 @@ from .ocr_types import TextObservation, observations_text
 
 
 BACKEND_LABELS = {
+    "danzhengtong": "单证通",
     "vision": "macOS Vision",
     "paddle": "PaddleOCR PP-OCRv5 Mobile",
     "paddle_server": "PaddleOCR PP-OCRv5 Server（大模型）",
@@ -109,7 +110,7 @@ def backend_catalog() -> list[dict]:
 
 def default_backend() -> str:
     configured = os.getenv("OCR_BACKEND", "").strip().lower()
-    if configured:
+    if configured and configured != "auto":
         return resolve_backend(configured)
     available = {item["id"] for item in backend_catalog() if item["available"]}
     if platform.system() == "Darwin" and "hybrid" in available and "vision" in available:
@@ -162,6 +163,9 @@ def recognize_text(
     if stage not in OCR_STAGES:
         raise ValueError(f"未知 OCR 阶段: {stage}")
     selected = backend_route(backend)[stage]
+    from .recognition_scope import provider_allowed
+    if not provider_allowed(selected):
+        return []
     if selected == "vision":
         from .vision_ocr import recognize_text as recognize
     elif selected in {"paddle", "paddle_server"}:

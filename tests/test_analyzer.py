@@ -1,3 +1,4 @@
+from stage_dependencies import patch_dependency
 from datetime import date
 
 import pytest
@@ -83,6 +84,24 @@ from receipt_ocr.parser import (
     parse_date,
     parse_product_table,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_native_ocr_models(monkeypatch):
+    """Synthetic crop regressions must never load real OCR engines."""
+    import sys
+    from types import SimpleNamespace
+    from receipt_ocr import paddle_ocr
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Native OCR is disabled in synthetic evidence tests")
+
+    monkeypatch.setattr(paddle_ocr, "_pipeline", unavailable)
+    monkeypatch.setattr(paddle_ocr, "_line_recognizer", unavailable)
+    monkeypatch.setitem(
+        sys.modules, "receipt_ocr.vision_ocr",
+        SimpleNamespace(recognize_text=lambda *args, **kwargs: []),
+    )
 
 
 def test_server_model_config_is_exposed_in_result_payload(monkeypatch):
@@ -440,17 +459,17 @@ def test_original_color_crop_ocr_is_audit_only_for_seal_matching(tmp_path, monke
     def fake_save(_source, destination, _region):
         Image.new("RGB", (200, 100), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if "-original" in path.name and backend == "paddle":
             return [TextObservation("北京罗凡尼科技发展有限公司", .99, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.1, .6, .3, .2, "red", "收货客户章", .2)],
         tmp_path / "artifacts", "/artifacts", "vision", "paddle",
@@ -470,17 +489,17 @@ def test_original_color_crop_below_footer_can_support_seal_matching(tmp_path, mo
     def fake_save(_source, destination, _region):
         Image.new("RGB", (200, 100), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if "-original" in path.name and backend == "paddle":
             return [TextObservation("哈尔滨晨光智能科技有限公司维修专用章", .99, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.1, .60, .3, .2, "red", "收货客户章", .2)],
         tmp_path / "artifacts", "/artifacts", "vision", "paddle",
@@ -502,10 +521,10 @@ def test_unreliable_color_isolated_seal_uses_server_model_audit(tmp_path, monkey
     def fake_save(_source, destination, _region):
         Image.new("RGB", (200, 100), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle_server" and "-unwrapped" in path.name:
@@ -515,7 +534,7 @@ def test_unreliable_color_isolated_seal_uses_server_model_audit(tmp_path, monkey
             ]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
         tmp_path / "artifacts", "/artifacts", "vision", "paddle",
@@ -539,14 +558,12 @@ def test_shallow_company_round_seal_uses_server_unwrapped_bands(
         size = (2160, 792) if destination.name.endswith("-unwrapped.png") else (240, 240)
         Image.new("RGB", size, "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle" and path.name == "seal-0-unwrapped.png":
@@ -558,7 +575,7 @@ def test_shallow_company_round_seal_uses_server_unwrapped_bands(
                 return [TextObservation("公司", .92, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "湖南和联电子科技有限公司"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source,
@@ -611,14 +628,12 @@ def test_dense_service_center_reconstructs_only_cross_band_exact_fragments(
         size = (2160, 792) if destination.name.endswith("-unwrapped.png") else (240, 240)
         Image.new("RGB", size, "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision":
@@ -634,7 +649,7 @@ def test_dense_service_center_reconstructs_only_cross_band_exact_fragments(
                 return [TextObservation("电子", .95, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source,
         [],
@@ -673,11 +688,11 @@ def test_service_organization_seal_routes_to_safe_server_audit(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (220, 220), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision" and path.name == "seal-0-unwrapped.png":
@@ -686,7 +701,7 @@ def test_service_organization_seal_routes_to_safe_server_audit(
             return [TextObservation(requirement, .96, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
         tmp_path / "artifacts", "/artifacts", "vision", "paddle",
@@ -712,11 +727,11 @@ def test_low_similarity_weak_color_service_organization_does_not_route_to_server
     def fake_save(_source, destination, _region):
         Image.new("RGB", (220, 220), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
     server_calls = []
 
     def fake_ocr(path, *, backend, **_kwargs):
@@ -727,7 +742,7 @@ def test_low_similarity_weak_color_service_organization_does_not_route_to_server
             return [TextObservation("太原市伊加壹电子服务总汇", .96, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     _texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .05)],
         tmp_path / "artifacts", "/artifacts", "vision", "paddle",
@@ -750,11 +765,11 @@ def test_zero_score_strong_color_service_organization_routes_to_server(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (220, 220), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
     server_calls = []
 
     def fake_ocr(path, *, backend, **_kwargs):
@@ -767,7 +782,7 @@ def test_zero_score_strong_color_service_organization_routes_to_server(
             ]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source,
         [],
@@ -797,14 +812,12 @@ def test_round_stamp_rotated_unwrap_recovers_opposite_facing_suffix(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle" and path.name == "seal-0-unwrapped.png":
@@ -820,7 +833,7 @@ def test_round_stamp_rotated_unwrap_recovers_opposite_facing_suffix(
                 return [TextObservation("业务专用章", .89, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "深圳市天音科技发展有限公司业务专用章"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -853,14 +866,12 @@ def test_round_stamp_rotated_color_sheet_recovers_center_stamp_type(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle" and path.name == "seal-0-unwrapped.png":
@@ -878,7 +889,7 @@ def test_round_stamp_rotated_color_sheet_recovers_center_stamp_type(
             )]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "杭州松峰电子科技有限公司业务专用章"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -911,20 +922,15 @@ def test_branch_round_stamp_rotations_reconstruct_only_exact_observed_parts(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.extract_region_text",
-        lambda *_a: (
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: (
             "0.490.0011备注仓库接收人盖章北昌后服士"
             "供应商：中国外运物流发展有限公司广州分公司"
-        ),
-    )
+        ))
 
     organization = "北京亨通达科技有限公司西城西单分公司"
     stamp_type = "北售后服务专用章"
@@ -941,7 +947,7 @@ def test_branch_round_stamp_rotations_reconstruct_only_exact_observed_parts(
                 return [TextObservation(stamp_type, .94, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = organization + stamp_type
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -975,14 +981,12 @@ def test_round_stamp_rotated_color_sheet_requires_strong_company_evidence(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
     audited_paths = []
 
     def fake_ocr(path, *, backend, **_kwargs):
@@ -999,7 +1003,7 @@ def test_round_stamp_rotated_color_sheet_requires_strong_company_evidence(
                 )]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "深圳市天音科技发展有限公司业务专用章"
     texts, _ = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -1089,14 +1093,12 @@ def test_server_cannot_override_regular_complete_company_conflict(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle" and path.name == "seal-0-unwrapped.png":
@@ -1113,7 +1115,7 @@ def test_server_cannot_override_regular_complete_company_conflict(
             return [TextObservation("售后业务专用章", .95, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "大连北华通信设备有限公司售后业务专用章"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -1147,14 +1149,12 @@ def test_clipped_expected_prefix_allows_server_to_resolve_local_ocr_conflict(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "paddle" and path.name == "seal-0-unwrapped.png":
@@ -1170,7 +1170,7 @@ def test_clipped_expected_prefix_allows_server_to_resolve_local_ocr_conflict(
             return [TextObservation("业务专用章", .97, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "济南新宇航科技发展有限公司业务专用章"
     assert _company_conflict_allows_clipped_prefix_server_recheck(
         requirement,
@@ -1293,11 +1293,11 @@ def test_business_acceptance_server_audit_keeps_company_conflict_guard(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 180), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision" and path.name == "seal-0-unwrapped.png":
@@ -1306,7 +1306,7 @@ def test_business_acceptance_server_audit_keeps_company_conflict_guard(
             return [TextObservation(server_text, .96, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "洛阳东利通信有限公司业务受理（2）"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -1333,11 +1333,11 @@ def test_business_acceptance_reconstructs_exact_same_region_company_fragments(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (240, 180), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision" and path.name == "seal-0-unwrapped.png":
@@ -1350,7 +1350,7 @@ def test_business_acceptance_reconstructs_exact_same_region_company_fragments(
             ]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "郑州广利达电子技术有限公司业务受理"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -1500,12 +1500,12 @@ def test_round_type_band_raw_text_stays_audit_only_when_repair_is_rejected(
     def fake_save(_source, destination, *_args, **_kwargs):
         Image.new("RGB", (240, 180), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_round_seal_type_band", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_round_seal_type_band', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     company = "合肥佳元电子第一分公司"
 
@@ -1514,7 +1514,7 @@ def test_round_type_band_raw_text_stays_audit_only_when_repair_is_rejected(
             return [TextObservation(company, .96, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line",
         lambda *_a, **_kwargs: [
@@ -1585,19 +1585,14 @@ def test_hybrid_overlapping_repair_stamps_use_two_server_regions(
     def fake_save(_source, destination, _region, **_kwargs):
         Image.new("RGB", (320, 240), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.extract_region_text",
-        lambda _rows, region: (
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda _rows, region: (
             "兰科技有限公司" if region.y < .5 else "杭州索维修专用章"
-        ),
-    )
+        ))
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend != "paddle_server":
@@ -1611,7 +1606,7 @@ def test_hybrid_overlapping_repair_stamps_use_two_server_regions(
             ]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     regions = [
         SealRegion(.70, .46, .23, .16, "red", "收货客户章", .38),
         SealRegion(.73, .54, .23, .16, "red", "收货客户章", .42),
@@ -1684,14 +1679,12 @@ def test_hybrid_robust_round_bounds_use_only_cross_model_observed_suffix(
         Image.new("RGB", size, "white").save(destination)
         return robust_bounds
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: False
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: False)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision" and path.name == "seal-0-color-isolated.png":
@@ -1707,7 +1700,7 @@ def test_hybrid_robust_round_bounds_use_only_cross_model_observed_suffix(
                 )]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "牡丹江市万邦通讯器材商店"
     region = SealRegion(.55, .55, .4, .2, "red", "收货客户章", .13)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
@@ -1765,14 +1758,12 @@ def test_hybrid_mobile_rectangular_band_can_resolve_one_company_glyph_conflict(
         size = (1500, 780) if destination.name.endswith("-unwrapped.png") else (600, 300)
         Image.new("RGB", size, "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.seal_region_is_rectangular", lambda *_a: True
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'seal_region_is_rectangular', lambda *_a: True)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if path.name == "seal-0-color-isolated.png":
@@ -1793,7 +1784,7 @@ def test_hybrid_mobile_rectangular_band_can_resolve_one_company_glyph_conflict(
             return [TextObservation("业务受理", .99, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     requirement = "郑州广利达电子技术有限公司业务受理专用章"
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source,
@@ -1844,12 +1835,12 @@ def test_single_paddle_seal_artifact_does_not_require_secondary_backend(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (200, 100), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2)],
@@ -1874,11 +1865,11 @@ def test_low_similarity_numbered_service_stamp_uses_safe_server_audit(
     def fake_save(_source, destination, _region):
         Image.new("RGB", (200, 100), "white").save(destination)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_region_crop", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_color_isolated_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.save_unwrapped_seal", fake_save)
-    monkeypatch.setattr("receipt_ocr.analyzer.extract_region_text", lambda *_a: "")
+    patch_dependency(monkeypatch, 'save_region_crop', fake_save)
+    patch_dependency(monkeypatch, 'save_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_color_isolated_seal', fake_save)
+    patch_dependency(monkeypatch, 'save_unwrapped_seal', fake_save)
+    patch_dependency(monkeypatch, 'extract_region_text', lambda *_a: "")
 
     def fake_ocr(path, *, backend, **_kwargs):
         if backend == "vision" and "seal-1-isolated" in path.name:
@@ -1893,7 +1884,7 @@ def test_low_similarity_numbered_service_stamp_uses_safe_server_audit(
             ]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', fake_ocr)
     texts, artifacts = ReceiptAnalyzer()._recognize_local_seals(
         source, [], [
             SealRegion(.6, .6, .25, .18, "red", "收货客户章", .2),
@@ -1960,23 +1951,14 @@ def test_windows_hybrid_end_to_end_never_auto_passes_single_model_evidence(
         TextObservation("签章要求：测试科技有限公司", .99, .04, .47, .30, .015),
     ]
     date_row = TextObservation("2025年1月2日", .99, .80, .60, .16, .02)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: page_rows)
-    monkeypatch.setattr("receipt_ocr.analyzer.decode_qr", lambda *_a: "")
-    monkeypatch.setattr("receipt_ocr.analyzer.resolve_backend", lambda *_a: "hybrid")
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route",
-        lambda *_a: {"page": "paddle", "date": "paddle", "seal": "paddle"},
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route_labels",
-        lambda *_a: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"},
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.backend_label", lambda *_a: "Paddle")
-    monkeypatch.setattr("receipt_ocr.analyzer._recover_signature_requirement", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.detect_seal_regions",
-        lambda *_a: [SealRegion(.7, .58, .25, .18, "red", "收货客户章", .2)],
-    )
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: page_rows)
+    patch_dependency(monkeypatch, 'decode_qr', lambda *_a: "")
+    patch_dependency(monkeypatch, 'resolve_backend', lambda *_a: "hybrid")
+    patch_dependency(monkeypatch, 'backend_route', lambda *_a: {"page": "paddle", "date": "paddle", "seal": "paddle"})
+    patch_dependency(monkeypatch, 'backend_route_labels', lambda *_a: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"})
+    patch_dependency(monkeypatch, 'backend_label', lambda *_a: "Paddle")
+    patch_dependency(monkeypatch, '_recover_signature_requirement', lambda *_a, **_k: None)
+    patch_dependency(monkeypatch, 'detect_seal_regions', lambda *_a: [SealRegion(.7, .58, .25, .18, "red", "收货客户章", .2)])
     analyzer = ReceiptAnalyzer()
     monkeypatch.setattr(analyzer, "_recognize_receipt_date", lambda *_a, **_k: ([date_row], []))
     monkeypatch.setattr(
@@ -2040,9 +2022,9 @@ def test_hybrid_accepts_cross_model_month_day_on_normal_table_line(tmp_path, mon
         Image.new("RGB", (350, 80), "white").save(destination)
         return (.20, .30, .75, .60)
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer._save_date_line_crop", fake_save_line)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_args, **_kwargs: [])
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, '_save_date_line_crop', fake_save_line)
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_args, **_kwargs: [])
 
     def fake_line(path, *, model_variant):
         name = str(path)
@@ -2092,9 +2074,9 @@ def test_hybrid_rejects_cross_model_month_day_when_region_has_other_date(
         text = "-820年4月20日" if model_variant == "mobile" else "802年4月20日"
         return [TextObservation(text, .90, .05, .10, .90, .70)]
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer._save_date_line_crop", fake_save_line)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_recognize_text)
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, '_save_date_line_crop', fake_save_line)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", fake_line)
 
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
@@ -2134,9 +2116,9 @@ def _install_hybrid_mismatch_fakes(tmp_path, monkeypatch, *, server_crop: str):
             return [TextObservation("2025年3月6日", .90, .05, .10, .90, .70)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer._save_date_line_crop", fake_save_line)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_recognize_text)
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, '_save_date_line_crop', fake_save_line)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", fake_recognize_line)
     return source
 
@@ -2198,9 +2180,9 @@ def _install_hybrid_line_mismatch_fakes(
             return [TextObservation("2025年8月31日", .80, .05, .10, .90, .70)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer._save_date_line_crop", fake_save_line)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, '_save_date_line_crop', fake_save_line)
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", fake_recognize_line)
     return source
 
@@ -2269,9 +2251,9 @@ def _install_hybrid_partial_line_mismatch_fakes(
             return [TextObservation("2025年4月29日", .89, .05, .10, .90, .70)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer._save_date_line_crop", fake_save_line)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, '_save_date_line_crop', fake_save_line)
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", fake_recognize_line)
     return source
 
@@ -2330,25 +2312,16 @@ def test_non_receipt_page_skips_fixed_date_and_seal_pipeline(tmp_path, monkeypat
     source = tmp_path / "authorization.jpg"
     preview = tmp_path / "preview.jpg"
     Image.new("RGB", (800, 1200), "white").save(source)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.recognize_text",
-        lambda *_args, **_kwargs: [
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_args, **_kwargs: [
             TextObservation("仓库货物接收委托书", .99, .2, .1, .6, .05),
             TextObservation("本公司全权委托", .96, .1, .2, .3, .03),
             TextObservation("仓库联系人", .95, .1, .3, .2, .03),
-        ],
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.decode_qr", lambda *_args: "")
-    monkeypatch.setattr("receipt_ocr.analyzer.resolve_backend", lambda *_args: "paddle")
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route",
-        lambda *_args: {"page": "paddle", "date": "paddle", "seal": "paddle"},
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route_labels",
-        lambda *_args: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"},
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.backend_label", lambda *_args: "Paddle")
+        ])
+    patch_dependency(monkeypatch, 'decode_qr', lambda *_args: "")
+    patch_dependency(monkeypatch, 'resolve_backend', lambda *_args: "paddle")
+    patch_dependency(monkeypatch, 'backend_route', lambda *_args: {"page": "paddle", "date": "paddle", "seal": "paddle"})
+    patch_dependency(monkeypatch, 'backend_route_labels', lambda *_args: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"})
+    patch_dependency(monkeypatch, 'backend_label', lambda *_args: "Paddle")
     analyzer = ReceiptAnalyzer()
     monkeypatch.setattr(
         analyzer,
@@ -2385,19 +2358,13 @@ def test_receipt_cover_without_signature_footer_waits_for_continuation(tmp_path,
         TextObservation("要求到货：2025-04-25", .99, .04, .28, .30, .02),
         TextObservation("收货地址：北京市", .99, .04, .32, .30, .02),
     ]
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: rows)
-    monkeypatch.setattr("receipt_ocr.analyzer.decode_qr", lambda *_a: "")
-    monkeypatch.setattr("receipt_ocr.analyzer.resolve_backend", lambda *_a: "paddle")
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route",
-        lambda *_a: {"page": "paddle", "date": "paddle", "seal": "paddle"},
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.backend_route_labels",
-        lambda *_a: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"},
-    )
-    monkeypatch.setattr("receipt_ocr.analyzer.backend_label", lambda *_a: "Paddle")
-    monkeypatch.setattr("receipt_ocr.analyzer._recover_signature_requirement", lambda *_a, **_k: None)
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: rows)
+    patch_dependency(monkeypatch, 'decode_qr', lambda *_a: "")
+    patch_dependency(monkeypatch, 'resolve_backend', lambda *_a: "paddle")
+    patch_dependency(monkeypatch, 'backend_route', lambda *_a: {"page": "paddle", "date": "paddle", "seal": "paddle"})
+    patch_dependency(monkeypatch, 'backend_route_labels', lambda *_a: {"page": "Paddle", "date": "Paddle", "seal": "Paddle"})
+    patch_dependency(monkeypatch, 'backend_label', lambda *_a: "Paddle")
+    patch_dependency(monkeypatch, '_recover_signature_requirement', lambda *_a, **_k: None)
     analyzer = ReceiptAnalyzer()
     monkeypatch.setattr(
         analyzer, "_recognize_receipt_date",
@@ -2476,10 +2443,16 @@ def test_unreliable_non_match_must_wait_for_human_review():
     assert decide_overall(date, seal, ["印章内容无法可靠判断"]) == "需人工复核"
 
 
-def test_reliable_non_match_can_be_rejected_automatically():
+def test_reliable_seal_non_match_waits_for_human_confirmation():
     date = {"status": "匹配", "reliable": True}
     seal = {"status": "不匹配", "reliable": True}
-    assert decide_overall(date, seal, []) == "不通过"
+    assert decide_overall(date, seal, []) == "需人工复核"
+
+
+def test_reliable_date_non_match_waits_for_human_confirmation():
+    date = {"status": "不匹配", "reliable": True}
+    seal = {"status": "匹配", "reliable": True}
+    assert decide_overall(date, seal, []) == "需人工复核"
 
 
 def test_reliable_matches_can_pass_automatically():
@@ -2572,10 +2545,7 @@ def test_missing_product_grade_can_be_recovered_from_enlarged_crop(tmp_path, mon
         TextObservation("签章要求：测试公司", 1, .04, .47, .20, .01),
     ]
     table = parse_product_table(rows)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.recognize_text",
-        lambda *_args, **_kwargs: [TextObservation("A", 1, .39, .47, .05, .15)],
-    )
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_args, **_kwargs: [TextObservation("A", 1, .39, .47, .05, .15)])
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line",
         lambda *_args, **_kwargs: [],
@@ -2606,7 +2576,7 @@ def test_missing_grade_uses_exact_row_cell_recognition(tmp_path, monkeypatch):
         TextObservation("签章要求：测试公司", 1, .04, .47, .20, .01),
     ]
     table = parse_product_table(rows)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line",
         lambda *_args, **_kwargs: [TextObservation("A", .95, 0, 0, 1, 1)],
@@ -2759,7 +2729,7 @@ def test_tight_and_wide_date_line_consensus_can_corroborate_required_date(tmp_pa
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, **_kwargs):
         name = str(path)
@@ -2792,7 +2762,7 @@ def test_one_crop_date_line_agreement_never_promotes_required_date(tmp_path, mon
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, **_kwargs):
         if "tight-line" in str(path):
@@ -2833,7 +2803,7 @@ def test_server_cross_year_consensus_is_audit_only(tmp_path, monkeypatch):
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(_path, *, model_variant="mobile", **_kwargs):
         if model_variant == "server":
@@ -3338,8 +3308,12 @@ def test_date_component_consensus_rejects_disagreement_or_full_date_conflict(
     assert _date_component_consensus_from_artifacts([artifact]) is None
 
 
+@pytest.mark.parametrize("ocr_text, required_text, expected", [
+    ("20年3月2日", "2025-03-02", date(2025, 3, 2)),
+    ("1月5日", "2025-08-09", date(2025, 1, 5)),
+])
 def test_upscaled_table_clean_server_candidate_is_visible_but_unreliable(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, ocr_text, required_text, expected,
 ):
     from datetime import date
     from PIL import Image
@@ -3348,25 +3322,25 @@ def test_upscaled_table_clean_server_candidate_is_visible_but_unreliable(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         if (
             model_variant == "server"
-            and "wide-line-table-clean-upscaled" in str(path)
+            and "line-table-clean-upscaled" in str(path)
         ):
-            return [TextObservation("20年3月2日", .92, 0, 0, 1, 1)]
+            return [TextObservation(ocr_text, .92, 0, 0, 1, 1)]
         return []
 
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
-        source, .47, "2025-03-02", tmp_path / "artifacts", "/x",
+        source, .47, required_text, tmp_path / "artifacts", "/x",
         "vision", secondary_ocr_backend="paddle",
     )
 
-    actual, _ = find_receipt_date(rows, "2025-03-02")
-    assert actual == date(2025, 3, 2)
-    assert estimate_date_confidence(rows, "2025-03-02", actual) < .72
+    actual, _ = find_receipt_date(rows, required_text)
+    assert actual == expected
+    assert estimate_date_confidence(rows, required_text, actual) < .72
     assert all(
         artifact.get("date_line_table_clean_upscaled_url")
         for artifact in artifacts
@@ -3382,7 +3356,9 @@ def test_server_audit_candidate_never_replaces_explicit_month_from_requirement()
     from datetime import date
 
     required = date(2025, 8, 9)
-    assert _parse_server_audit_candidate("1月5日", required) is None
+    # The parser now preserves the literal January month. It may remain a
+    # review candidate; the enlarged single-model route still caps confidence.
+    assert _parse_server_audit_candidate("1月5日", required) == date(2025, 1, 5)
     assert _parse_server_audit_candidate("0月9日", required) is None
     assert _parse_server_audit_candidate("2240月5日", required) is None
     assert _parse_server_audit_candidate("202年8月9日", required) == required
@@ -3422,7 +3398,7 @@ def test_single_paddle_date_route_generates_otsu_preview_without_cross_model_can
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     called_paths = []
 
@@ -3480,7 +3456,7 @@ def test_autocontrast_compact_date_is_visible_but_never_reliable(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         if (
@@ -3521,7 +3497,7 @@ def test_max_channel_date_requires_cross_model_cross_geometry_consensus(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -3571,7 +3547,7 @@ def test_max_channel_compact_mobile_date_needs_strict_server_other_geometry(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -3620,7 +3596,7 @@ def test_max_channel_compact_mobile_date_rejects_same_geometry_server(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -3652,7 +3628,7 @@ def test_max_channel_date_rejects_same_geometry_or_conflicting_date(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -3698,7 +3674,7 @@ def test_max_channel_three_cell_consensus_tolerates_only_one_digit_day_truncatio
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -4552,7 +4528,7 @@ def test_max_channel_cross_model_cross_geometry_confirms_strict_mismatch(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         path = str(path)
@@ -4598,7 +4574,7 @@ def test_max_channel_mismatch_rejects_same_geometry_or_other_strict_date(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def same_geometry(path, *, model_variant="mobile", **_kwargs):
         if "wide-line-max-channel-upscaled" in str(path):
@@ -4645,7 +4621,7 @@ def test_fixed_template_slots_expose_cross_model_candidate_but_never_reliable(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         if "date-slot-month_day-max-channel" in str(path):
@@ -4692,9 +4668,7 @@ def test_fixed_template_slots_promote_only_strict_required_date_consensus(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: []
-    )
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         name = str(path)
@@ -4766,7 +4740,7 @@ def test_vision_month_day_slot_exposes_only_low_confidence_review_candidate(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         if "date-slot-year_full-max-channel-white" in str(path):
@@ -4774,10 +4748,7 @@ def test_vision_month_day_slot_exposes_only_low_confidence_review_candidate(
         return []
 
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer._recognize_date_slot_with_vision",
-        lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)],
-    )
+    patch_dependency(monkeypatch, '_recognize_date_slot_with_vision', lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)])
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
         source, .47, "2025-08-25", tmp_path / "artifacts", "/x",
         "vision", secondary_ocr_backend="paddle",
@@ -4807,7 +4778,7 @@ def test_vision_month_day_slot_rejects_disagreeing_paddle_years(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, *, model_variant="mobile", **_kwargs):
         if "date-slot-year_full-max-channel-white" in str(path):
@@ -4816,10 +4787,7 @@ def test_vision_month_day_slot_rejects_disagreeing_paddle_years(
         return []
 
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer._recognize_date_slot_with_vision",
-        lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)],
-    )
+    patch_dependency(monkeypatch, '_recognize_date_slot_with_vision', lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)])
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
         source, .47, "2025-08-25", tmp_path / "artifacts", "/x",
         "vision", secondary_ocr_backend="paddle",
@@ -4841,7 +4809,7 @@ def test_vision_original_white_line_exposes_stable_review_candidate(
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: []
     )
@@ -4851,10 +4819,7 @@ def test_vision_original_white_line_exposes_stable_review_candidate(
         "accepted_texts": ["_2025年3月7E"],
         "acceptance_note": "三种配置一致，仅供人工复核",
     }]
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer._recognize_date_line_vision_consensus",
-        lambda *_a, **_k: (variants, {date(2025, 3, 7)}),
-    )
+    patch_dependency(monkeypatch, '_recognize_date_line_vision_consensus', lambda *_a, **_k: (variants, {date(2025, 3, 7)}))
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
         source, .47, "2025-03-07", tmp_path / "artifacts", "/x",
         "vision", secondary_ocr_backend="paddle",
@@ -4922,7 +4887,7 @@ def test_mobile_and_server_other_geometry_can_confirm_strict_date(tmp_path, monk
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, model_variant="mobile", **_kwargs):
         name = str(path)
@@ -4968,7 +4933,7 @@ def test_low_confidence_matching_candidate_still_gets_cross_geometry_confirmatio
             return [TextObservation("2025年11月23日", .94, 0, 0, 1, 1)]
         return [TextObservation("2025年11月日", .90, 0, 0, 1, 1)]
 
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", region_ocr)
+    patch_dependency(monkeypatch, 'recognize_text', region_ocr)
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
         source, .47, "2025-11-23", tmp_path / "artifacts", "/x",
@@ -5010,8 +4975,8 @@ def test_far_below_handwritten_date_is_visible_as_audit_candidate_only(tmp_path,
             return [TextObservation("2025.8.5", .99, .10, .10, .70, .30)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_recognize_text)
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: [])
 
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
@@ -5056,12 +5021,8 @@ def test_far_lower_date_needs_repeated_cross_model_cross_geometry_evidence(
             return [TextObservation("之2025.8.12", .96, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.recognize_text", fake_recognize_text
-    )
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: []
     )
@@ -5194,12 +5155,8 @@ def test_far_lower_padding_complementary_route_is_visible_and_reliable(
             return [TextObservation(text, .88, 0, 0, 1, 1)]
         return []
 
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop
-    )
-    monkeypatch.setattr(
-        "receipt_ocr.analyzer.recognize_text", fake_recognize_text
-    )
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr(
         "receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: []
     )
@@ -5296,8 +5253,8 @@ def test_page_bottom_handwritten_date_is_visible_but_never_auto_reliable(tmp_pat
             return [TextObservation("2025.11.18", .99, .10, .10, .70, .30)]
         return []
 
-    monkeypatch.setattr("receipt_ocr.analyzer.save_receipt_date_crop", fake_save_crop)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", fake_recognize_text)
+    patch_dependency(monkeypatch, 'save_receipt_date_crop', fake_save_crop)
+    patch_dependency(monkeypatch, 'recognize_text', fake_recognize_text)
     monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: [])
 
     rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
@@ -5319,7 +5276,7 @@ def test_two_geometry_partial_dates_need_strict_server_confirmation(tmp_path, mo
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, model_variant="mobile", **_kwargs):
         name = str(path)
@@ -5351,7 +5308,7 @@ def test_upper_signature_row_date_needs_mobile_and_server_agreement(tmp_path, mo
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, model_variant="mobile", **_kwargs):
         if "upper-line" in str(path):
@@ -5384,7 +5341,7 @@ def test_table_clean_date_line_is_visible_and_partial_text_is_audit_only(tmp_pat
 
     source = tmp_path / "receipt.jpg"
     Image.new("RGB", (1000, 1600), "white").save(source)
-    monkeypatch.setattr("receipt_ocr.analyzer.recognize_text", lambda *_a, **_k: [])
+    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
 
     def line_ocr(path, model_variant="mobile", **_kwargs):
         if "line-table-clean" in str(path):
@@ -5411,3 +5368,49 @@ def test_table_clean_date_line_is_visible_and_partial_text_is_audit_only(tmp_pat
     )
     assert table_variant["ocr_texts"] == ["20年4日"]
     assert table_variant["accepted_texts"] == []
+
+
+@pytest.mark.parametrize("required_text, date_crop", [
+    ("", "lower"),
+    ("无法识别", "lower"),
+    ("2025-09-09", "tight"),
+])
+def test_date_fallback_regions_do_not_stop_on_two_missing_dates(
+    tmp_path, monkeypatch, required_text, date_crop
+):
+    from PIL import Image
+    from receipt_ocr import date_crops
+
+    crops = []
+
+    def save_crop(
+        source, destination, anchor_y, *, tight, raw_destination,
+        color_clean_destination, left=None,
+    ):
+        crops.append(destination.stem)
+        for path in (destination, raw_destination, color_clean_destination):
+            Image.new("RGB", (300, 100), "white").save(path)
+        return .65, .58, .30, .08
+
+    def recognize(path, **kwargs):
+        if path.name.startswith(f"date-{date_crop}-"):
+            return [TextObservation("2025年9月9日", .95, .1, .1, .7, .3)]
+        return []
+
+    monkeypatch.setattr(date_crops, "save_receipt_date_crop", save_crop)
+    monkeypatch.setattr(date_crops, "recognize_text", recognize)
+    rows, _ = ReceiptAnalyzer()._recognize_receipt_date(
+        tmp_path / "unused.jpg", .47, required_text,
+        tmp_path / "artifacts", "/x", "vision",
+        allow_strict_date_without_requirement=True,
+    )
+
+    actual, _ = find_receipt_date(rows, required_text)
+    assert actual == date(2025, 9, 9)
+    if required_text == "2025-09-09":
+        assert crops == ["date-tight", "date-wide"]
+    else:
+        assert crops == [
+            "date-tight", "date-wide", "date-lower",
+            "date-far_lower", "date-deep_lower",
+        ]

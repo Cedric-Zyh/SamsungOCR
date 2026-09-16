@@ -14,9 +14,9 @@ resultsSheet.showGridLines = false;
 summarySheet.showGridLines = false;
 
 const headers = [
-  "文件名", "文档类型", "运单号", "客户订单号", "客户名称", "要求到货日期", "实际收货日期",
-  "日期核验结论", "签章要求", "识别印章内容", "印章相似度", "印章核验结论",
-  "整体结论", "复核状态", "人工备注", "处理时间"
+  "文件名", "文档类型", "仓库联系人", "拒收数量", "实收数量", "仓库接收人", "签收日期",
+  "签章要求", "合计数量", "客户名称", "要求到货", "日期核验结论", "识别印章内容",
+  "印章相似度", "印章核验结论", "整体结论", "复核状态", "人工备注", "处理时间"
 ];
 
 function dateValue(value) {
@@ -43,13 +43,16 @@ const rows = results.map((item) => {
   return [
     item.filename || "",
     item.document_type?.label || "旧记录未分类",
-    String(fields["运单号"] || ""),
-    String(fields["客户订单号"] || ""),
+    fields["仓库联系人"] || "",
+    String(fields["拒收数量"] || ""),
+    String(fields["实收数量"] || ""),
+    fields["仓库接收人"] || "",
+    dateValue(date.actual),
+    fields["签章要求"] || seal.requirement || "",
+    String(fields["合计数量"] || ""),
     fields["客户名称"] || "",
     dateValue(fields["要求到货"] || date.required),
-    dateValue(date.actual),
     date.status || "",
-    fields["签章要求"] || seal.requirement || "",
     seal.recognized || "",
     Number(seal.score || 0),
     seal.status || "",
@@ -60,15 +63,15 @@ const rows = results.map((item) => {
   ];
 });
 
-resultsSheet.getRange("A1:P1").values = [headers];
+resultsSheet.getRange("A1:S1").values = [headers];
 if (rows.length) resultsSheet.getRangeByIndexes(1, 0, rows.length, headers.length).values = rows;
 const lastRow = Math.max(2, rows.length + 1);
-const used = resultsSheet.getRange(`A1:P${lastRow}`);
+const used = resultsSheet.getRange(`A1:S${lastRow}`);
 used.format = {
   font: { name: "Microsoft YaHei", size: 10, color: "#1F2933" },
   verticalAlignment: "center",
 };
-resultsSheet.getRange("A1:P1").format = {
+resultsSheet.getRange("A1:S1").format = {
   fill: "#173F4F",
   font: { name: "Microsoft YaHei", bold: true, color: "#FFFFFF", size: 10 },
   horizontalAlignment: "center",
@@ -78,46 +81,49 @@ resultsSheet.getRange("A1:P1").format = {
   borders: { preset: "outside", style: "thin", color: "#173F4F" },
 };
 if (rows.length) {
-  resultsSheet.getRange(`A2:P${lastRow}`).format.borders = {
+  resultsSheet.getRange(`A2:S${lastRow}`).format.borders = {
     insideHorizontal: { style: "thin", color: "#E4E8E5" },
   };
   resultsSheet.getRange(`A2:E${lastRow}`).format.numberFormat = "@";
-  resultsSheet.getRange(`F2:G${lastRow}`).format.numberFormat = "yyyy-mm-dd";
-  resultsSheet.getRange(`K2:K${lastRow}`).format.numberFormat = "0.0%";
-  resultsSheet.getRange(`P2:P${lastRow}`).format.numberFormat = "yyyy-mm-dd hh:mm:ss";
-  resultsSheet.getRange(`A2:P${lastRow}`).format.rowHeight = 30;
-  resultsSheet.getRange(`E2:E${lastRow}`).format.wrapText = true;
-  resultsSheet.getRange(`I2:J${lastRow}`).format.wrapText = true;
-  resultsSheet.getRange(`O2:O${lastRow}`).format.wrapText = true;
+  resultsSheet.getRange(`G2:G${lastRow}`).format.numberFormat = "yyyy-mm-dd";
+  resultsSheet.getRange(`K2:K${lastRow}`).format.numberFormat = "yyyy-mm-dd";
+  resultsSheet.getRange(`I2:I${lastRow}`).format.numberFormat = "@";
+  resultsSheet.getRange(`M2:M${lastRow}`).format.wrapText = true;
+  resultsSheet.getRange(`N2:N${lastRow}`).format.numberFormat = "0.0%";
+  resultsSheet.getRange(`S2:S${lastRow}`).format.numberFormat = "yyyy-mm-dd hh:mm:ss";
+  resultsSheet.getRange(`A2:S${lastRow}`).format.rowHeight = 30;
+  resultsSheet.getRange(`J2:J${lastRow}`).format.wrapText = true;
+  resultsSheet.getRange(`H2:H${lastRow}`).format.wrapText = true;
+  resultsSheet.getRange(`R2:R${lastRow}`).format.wrapText = true;
   // Long seal OCR evidence must remain inspectable in the exported workbook.
   // Estimate the required wrapped lines from the three narrative columns and
   // cap the height so noisy OCR cannot make one row dominate the sheet.
   rows.forEach((row, index) => {
     const narrativeLength = Math.max(
-      String(row[8] || "").length,
-      String(row[9] || "").length,
-      String(row[14] || "").length,
+      String(row[7] || "").length,
+      String(row[12] || "").length,
+      String(row[17] || "").length,
     );
     const wrappedLines = Math.max(1, Math.ceil(narrativeLength / 34));
     resultsSheet.getRangeByIndexes(index + 1, 0, 1, headers.length).format.rowHeight =
       Math.min(90, Math.max(30, wrappedLines * 18));
   });
-  resultsSheet.getRange(`M2:M${lastRow}`).conditionalFormats.add("containsText", {
+  resultsSheet.getRange(`P2:P${lastRow}`).conditionalFormats.add("containsText", {
     text: "不通过", format: { fill: "#FCE8E6", font: { color: "#A93226", bold: true } }
   });
-  resultsSheet.getRange(`M2:M${lastRow}`).conditionalFormats.add("containsText", {
+  resultsSheet.getRange(`P2:P${lastRow}`).conditionalFormats.add("containsText", {
     text: "通过", format: { fill: "#E5F3EB", font: { color: "#216E51", bold: true } }
   });
-  resultsSheet.getRange(`N2:N${lastRow}`).conditionalFormats.add("containsText", {
+  resultsSheet.getRange(`Q2:Q${lastRow}`).conditionalFormats.add("containsText", {
     text: "待复核", format: { fill: "#FFF2CC", font: { color: "#8A5A00", bold: true } }
   });
 }
-const widths = [20, 18, 21, 19, 32, 15, 15, 15, 42, 42, 13, 15, 14, 15, 32, 25];
+const widths = [20, 18, 16, 13, 13, 16, 15, 42, 13, 32, 15, 15, 42, 13, 15, 14, 15, 32, 25];
 widths.forEach((width, index) => resultsSheet.getRangeByIndexes(0, index, lastRow, 1).format.columnWidth = width);
 resultsSheet.freezePanes.freezeRows(1);
 resultsSheet.freezePanes.freezeColumns(1);
 if (rows.length) {
-  const table = resultsSheet.tables.add(`A1:P${lastRow}`, true, "ReceiptResultsTable");
+  const table = resultsSheet.tables.add(`A1:S${lastRow}`, true, "ReceiptResultsTable");
   table.style = "TableStyleMedium2";
   table.showFilterButton = true;
 }
@@ -135,11 +141,11 @@ summarySheet.getRange("A3:B9").values = [
 const resultEnd = Math.max(2, lastRow);
 summarySheet.getRange("B4:B9").formulas = [
   [`=COUNTA('回单结果'!$A$2:$A$${resultEnd})`],
-  [`=COUNTIF('回单结果'!$M$2:$M$${resultEnd},"通过")`],
-  [`=COUNTIF('回单结果'!$M$2:$M$${resultEnd},"不通过")`],
-  [`=COUNTIF('回单结果'!$N$2:$N$${resultEnd},"待复核")`],
-  [`=COUNTIF('回单结果'!$N$2:$N$${resultEnd},"确认通过")`],
-  [`=COUNTIF('回单结果'!$N$2:$N$${resultEnd},"确认不通过")`],
+  [`=COUNTIF('回单结果'!$P$2:$P$${resultEnd},"通过")`],
+  [`=COUNTIF('回单结果'!$P$2:$P$${resultEnd},"不通过")`],
+  [`=COUNTIF('回单结果'!$Q$2:$Q$${resultEnd},"待复核")`],
+  [`=COUNTIF('回单结果'!$Q$2:$Q$${resultEnd},"确认通过")`],
+  [`=COUNTIF('回单结果'!$Q$2:$Q$${resultEnd},"确认不通过")`],
 ];
 const accuracy = payload.report?.accuracy || {};
 summarySheet.getRange("D3:E12").values = [
@@ -164,7 +170,7 @@ summarySheet.getRange("D3:E3").format = summaryHeaderFormat;
 summarySheet.getRange("A4:B9").format.borders = { insideHorizontal: { style: "thin", color: "#E4E8E5" } };
 summarySheet.getRange("D4:E12").format.borders = { insideHorizontal: { style: "thin", color: "#E4E8E5" } };
 summarySheet.getRange("A14:F14").merge();
-summarySheet.getRange("A14").values = [["说明：订单号以文本保存，日期以真正日期类型保存；黄色为待复核，红色为不通过。自动决策指标只统计系统可靠判定的样本。"]];
+summarySheet.getRange("A14").values = [["说明：数量字段保留原始文本，空白不按零处理；日期以真正日期类型保存；黄色为待复核，红色为不通过。自动决策指标只统计系统可靠判定的样本。"]];
 summarySheet.getRange("A14:F14").format = { fill: "#FFF8E1", font: { name: "Microsoft YaHei", color: "#765600" }, wrapText: true, rowHeight: 42 };
 summarySheet.getRange("A1:A14").format.columnWidth = 25;
 summarySheet.getRange("B1:B14").format.columnWidth = 16;

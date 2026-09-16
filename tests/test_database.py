@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from receipt_ocr.database import Database
 
 
@@ -280,3 +282,260 @@ def test_unreliable_machine_rejection_is_audited_and_queued(tmp_path: Path):
     assert database.history(result_id)[0]["action"] == "安全规则升级"
     assert database.list_original_results()[0]["overall"] == "不通过"
     assert database.enforce_uncertain_review_queue() == 0
+
+
+def test_legacy_reliable_date_mismatch_is_migrated_to_review(tmp_path: Path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+    result = sample_result("legacy-date-mismatch.jpg")
+    result.update(overall="不通过", final_result="不通过", review_status="无需复核")
+    result["date_check"] = {"status": "不匹配", "reliable": True}
+    result["seal_check"] = {"status": "匹配", "reliable": True}
+    result_id = database.insert_result(
+        filename=result["filename"], stored_name="sample:legacy-date-mismatch.jpg",
+        preview_name="x.jpg", task_id="", result=result,
+    )
+
+    assert database.enforce_uncertain_review_queue() == 1
+    updated = database.get_result(result_id)
+    assert updated["overall"] == updated["final_result"] == "需人工复核"
+    assert updated["review_status"] == "待复核"
+    assert database.history(result_id)[0]["action"] == "安全规则升级"
+
+
+def test_legacy_provider_timeout_is_migrated_to_failed(tmp_path: Path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+    result = sample_result("provider-timeout.jpg")
+    result["review_reasons"] = ["印刷字段 / danzhengtong：单证通等待识别结果超时（60 秒），已停止查询"]
+    result_id = database.insert_result(
+        filename=result["filename"], stored_name="sample:provider-timeout.jpg",
+        preview_name="x.jpg", task_id="", result=result,
+    )
+
+    assert database.enforce_uncertain_review_queue() == 1
+    updated = database.get_result(result_id)
+    assert updated["overall"] == updated["final_result"] == "识别失败"
+    assert updated["review_status"] == "无需复核"
+    assert database.history(result_id)[0]["action"] == "失败分类修复"
+    assert database.enforce_uncertain_review_queue() == 0
+
+
+def test_import_day_scopes_before_dedup_and_survives_retry(tmp_path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+    ids = []
+    for day in ("2026-09-08", "2026-09-09"):
+        item = sample_result("same.jpg")
+        item.update(created_at=f"{day}T23:59:00+08:00", ocr_backend="hybrid")
+        item["date_check"]["actual"] = "2025-01-05"
+        ids.append(database.insert_result(
+            filename="same.jpg", stored_name="same.jpg", preview_name="", task_id="", result=item,
+        ))
+    retried = sample_result("same.jpg")
+    retried.update(ocr_backend="hybrid")
+    retried["date_check"]["actual"] = "2025-01-05"
+    database.replace_after_retry(ids[0], retried, "")
+    scope = {"import_date": "2026-09-08", "customer": "测试", "date": "2025-01-05"}
+    results = database.list_results(filters=scope, latest_by_filename=True)
+    assert [item["id"] for item in results] == [ids[0]]
+    assert results[0]["created_at"].startswith("2026-09-08")
+    assert not database.list_results(filters={**scope, "overall": "通过"}, latest_by_filename=True)
+    assert [item["id"] for item in database.list_results(
+        filters={"import_date": "2026-09-09"}, latest_by_filename=True
+    )] == [ids[1]]
+    assert not database.list_results(filters={"import_date": "2026-09-10"}, latest_by_filename=True)
+
+
+def test_import_calendar_counts_days_and_backend_without_duplicate_runs(tmp_path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+    for filename, day, backend in [
+        ("a.jpg", "2026-09-08", "hybrid"),
+        ("a.jpg", "2026-09-08", "hybrid"),
+        ("b.jpg", "2026-09-08", "hybrid"),
+        ("a.jpg", "2026-09-09", "hybrid"),
+        ("c.jpg", "2026-09-09", "paddle"),
+        ("d.jpg", "2026-08-31", "hybrid"),
+    ]:
+        result = sample_result(filename)
+        result.update(created_at=f"{day}T12:00:00+08:00", ocr_backend=backend)
+        database.insert_result(filename=filename, stored_name=filename, preview_name="", task_id="", result=result)
+    assert database.import_date_counts("2026-09", "hybrid") == {"2026-09-08": 2, "2026-09-09": 1}
+    assert database.import_date_counts("2026-09", "paddle") == {"2026-09-09": 1}
+    assert database.import_date_counts("2026-10", "hybrid") == {}
+
+
+def test_header_filters_prefix_and_reliability_status(tmp_path):
+    database = Database(tmp_path / 'header-filters.db')
+    database.initialize()
+    for filename, reliable in [('7123.jpg', True), ('8172.jpg', False), ('7281.jpg', False)]:
+        database.insert_result(filename=filename, stored_name=filename, preview_name='', task_id='', result={
+            'fields': {'客户名称': '合肥示例有限公司'}, 'internal_fields': {'客户订单号': '8172', '运单号': '71234'},
+            'seal_check': {'status': '匹配', 'reliable': reliable}, 'date_check': {'status': '未识别'},
+            'overall': '需人工复核'})
+    rows = database.list_results(filters={'filename': '7', 'text_match': 'prefix'}, latest_by_filename=True)
+    assert {r['filename'] for r in rows} == {'7123.jpg', '7281.jpg'}
+    assert len(database.list_results(filters={'filename': '7'})) == 3  # Other callers retain contains search.
+    assert len(database.list_results(filters={'order_id': '7', 'text_match': 'prefix'})) == 3
+    assert not database.list_results(filters={'order_id': '123', 'text_match': 'prefix'})
+    assert len(database.list_results(filters={'search_prefix': '7'})) == 3
+    assert [r['filename'] for r in database.list_results(filters={'search_prefix': '728'})] == ['7281.jpg']
+    assert not database.list_results(filters={'search_prefix': '123'})
+    assert len(database.list_results(filters={'customer': '示例', 'text_match': 'prefix'})) == 3
+    matched = database.list_results(filters={'seal_status': '匹配'})
+    assert [r['filename'] for r in matched] == ['7123.jpg']
+    assert len(database.list_results(filters={'seal_status': '匹配待确认', 'date_status': '未识别'})) == 2
+    assert not database.list_results(filters={'date_status': '匹配'})
+
+
+def test_folder_import_keeps_same_names_and_searches_image_prefix(tmp_path):
+    database = Database(tmp_path / 'folder.db')
+    database.initialize()
+    for filename in ['回单/甲/7123.jpg', '回单/乙/7123.jpg', '回单/乙/8172.jpg']:
+        database.insert_result(filename=filename, stored_name=filename, preview_name='', task_id='',
+                               result={'overall': '需人工复核'})
+    rows = database.list_results(filters={'search_prefix': '7'}, latest_by_filename=True)
+    assert {r['filename'] for r in rows} == {'回单/甲/7123.jpg', '回单/乙/7123.jpg'}
+
+
+def add_two_page_receipt(database, task_id="task", *, backend="vision", day="2026-09-10"):
+    database.create_task(task_id, task_id, 2)
+    ids = []
+    for suffix, kind, row in (("", "receipt", "10"), ("_01", "product_continuation", "40")):
+        filename = "folder/receipt" + suffix + ".jpg"
+        payload = {
+            **sample_result(filename), "ocr_backend": backend,
+            "created_at": day + "T12:00:00+08:00", "document_type": {"type": kind},
+            "fields": {"客户订单号": "ORDER-123", "客户名称": "测试客户", "要求到货": "2026-09-10"}
+                if kind == "receipt" else {"签章要求": "客户章"},
+            "product_table": {"columns": ["行号"], "rows": [{"values": {"行号": row}}]},
+            "date_check": {"actual": "2026-09-10", "confidence": .99, "reliable": True}
+                if kind == "product_continuation" else {"actual": "", "status": "未识别"},
+        }
+        ids.append(database.insert_result(filename=filename, stored_name=filename, preview_name="",
+                                          task_id=task_id, result=payload))
+    return ids
+
+
+@pytest.mark.parametrize("filters", [
+    {"order_id": "ORDER-123"}, {"customer": "测试客户"}, {"date": "2026-09-10"},
+    {"filename": "receipt_01"}, {"filename": "folder/receipt_01", "text_match": "prefix"},
+    {"search_prefix": "receipt_01"}, {"task_id": "task", "import_date": "2026-09-10"},
+])
+def test_query_receipts_filters_complete_receipt_and_matches_continuation_filename(tmp_path, filters):
+    database = Database(tmp_path / "query.db")
+    database.initialize()
+    cover_id, _ = add_two_page_receipt(database)
+
+    response = database.query_receipts(filters=filters, latest_by_filename=True, limit=1)
+    assert response["total"] == 1
+    assert len(response["items"]) == 1
+    item = response["items"][0]
+    assert item["id"] == cover_id
+    assert [row["values"]["行号"] for row in item["product_table"]["rows"]] == ["10", "40"]
+    assert item["fields"]["签章要求"] == "客户章"
+
+
+def test_query_receipts_paginates_logical_rows_without_cutting_pages(tmp_path):
+    database = Database(tmp_path / "query.db")
+    database.initialize()
+    cover_id, _ = add_two_page_receipt(database)
+    single = database.insert_result(filename="new.jpg", stored_name="new", preview_name="", task_id="",
+                                    result=sample_result("new.jpg"))
+
+    first = database.query_receipts(limit=1)
+    second = database.query_receipts(limit=1, offset=1)
+    assert first["total"] == second["total"] == 2
+    assert [r["id"] for r in first["items"]] == [single]
+    assert [r["id"] for r in second["items"]] == [cover_id]
+    assert len(second["items"][0]["product_table"]["rows"]) == 2
+    assert database.query_receipts(limit=0) == {"items": [], "total": 2}
+    assert database.query_receipts(offset=2) == {"items": [], "total": 2}
+
+
+def test_query_receipts_latest_does_not_duplicate_resubmitted_continuation(tmp_path):
+    database = Database(tmp_path / "resubmit.db")
+    database.initialize()
+    cover, continuation = add_two_page_receipt(database)
+    updated = database.get_result(continuation)
+    updated["product_table"]["rows"] = [{"values": {"行号": "50"}}]
+    database.insert_result(filename=updated["filename"], stored_name="new", preview_name="",
+                           task_id="task", result=updated)
+
+    response = database.query_receipts(latest_by_filename=True)
+    assert response["total"] == 1
+    assert response["items"][0]["id"] == cover
+    assert [row["values"]["行号"] for row in response["items"][0]["product_table"]["rows"]] == ["10", "50"]
+
+
+def test_query_receipts_backend_scope_precedes_logical_filename_dedup(tmp_path):
+    database = Database(tmp_path / "query.db")
+    database.initialize()
+    first, _ = add_two_page_receipt(database, "production", backend="hybrid")
+    latest, _ = add_two_page_receipt(database, "experiment", backend="paddle")
+
+    response = database.query_receipts(filters={"ocr_backend": "hybrid"}, latest_by_filename=True)
+    assert response["total"] == 1
+    assert [r["id"] for r in response["items"]] == [first]
+    assert len(response["items"][0]["product_table"]["rows"]) == 2
+    assert [r["id"] for r in database.query_receipts(latest_by_filename=True)["items"]] == [latest]
+    assert database.query_receipts()["total"] == 2
+
+
+def test_query_receipts_keeps_companion_page_with_different_backend(tmp_path):
+    database = Database(tmp_path / "query.db")
+    database.initialize()
+    cover, continuation = add_two_page_receipt(database)
+    updated = database.get_result(continuation)
+    updated["ocr_backend"] = "paddle"
+    database.replace_after_retry(continuation, updated, "")
+
+    response = database.query_receipts(filters={"ocr_backend": "vision"}, latest_by_filename=True)
+    assert response["items"][0]["id"] == cover
+    assert len(response["items"][0]["product_table"]["rows"]) == 2
+
+
+def test_query_receipts_includes_continuation_when_legacy_import_crosses_midnight(tmp_path):
+    database = Database(tmp_path / "midnight.db")
+    database.initialize()
+    cover, continuation = add_two_page_receipt(database)
+    with database.connect() as connection:
+        connection.execute("UPDATE results SET created_at=? WHERE id=?", ("2026-09-11T00:01:00+08:00", continuation))
+
+    response = database.query_receipts(filters={"import_date": "2026-09-10"}, latest_by_filename=True)
+    assert response["items"][0]["id"] == cover
+    assert len(response["items"][0]["product_table"]["rows"]) == 2
+    assert database.query_receipts(filters={"import_date": "2026-09-11"})["total"] == 0
+
+
+def test_initialize_backfills_page_keys_for_preexisting_database(tmp_path):
+    import json
+    import sqlite3
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("""CREATE TABLE results (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL,
+            filename TEXT NOT NULL, stored_name TEXT NOT NULL, preview_name TEXT NOT NULL,
+            overall TEXT NOT NULL, result_json TEXT NOT NULL)""")
+        connection.execute("INSERT INTO results VALUES(1,?,?,?,?,?,?)", (
+            "2026-09-10T12:00:00+08:00", "folder/r_01.jpg", "r", "", "需人工复核", json.dumps(sample_result())))
+    database = Database(path)
+    database.initialize()
+    with database.connect() as connection:
+        assert connection.execute("SELECT page_key FROM results WHERE id=1").fetchone()[0] == "folder/r"
+
+
+def test_review_result_shared_transaction_rolls_back_all_reviews_and_history(tmp_path):
+    database = Database(tmp_path / "atomic.db")
+    database.initialize()
+    ids = [database.insert_result(filename=name, stored_name=name, preview_name="", task_id="",
+                                  result=sample_result(name)) for name in ("first.jpg", "second.jpg")]
+    snapshots = [database.get_result(i) for i in ids]
+    with pytest.raises(KeyError):
+        with database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for result_id, original in zip(ids + [99999], snapshots + [sample_result()]):
+                database.review_result(result_id, result=original, review_status="确认不通过",
+                                       final_result="不通过", note="", action="批量确认", _connection=connection)
+    assert [database.get_result(i)["review_status"] for i in ids] == ["待复核", "待复核"]
+    assert database.all_history() == []

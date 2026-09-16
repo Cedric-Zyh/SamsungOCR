@@ -1,0 +1,167 @@
+/* Shared visual foundation for workspace pages and receipt review. */
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) {
+  --archive-stage:#e8e5e1;
+  --archive-paper:#f2efe9;
+  --archive-ink:#161812;
+  --archive-text:#52564c;
+  --archive-muted:#73756a;
+  --archive-line:#d4d0c7;
+  --archive-soft-line:#dfdcd4;
+  --archive-accent:#c69d66;
+  --archive-accent-wash:#e9dfd0;
+  --archive-danger:#a3483c;
+  --archive-success:#626f4f;
+  --archive-warning:#876b43;
+  --ink:var(--archive-ink);
+  --muted:var(--archive-muted);
+  --paper:var(--archive-paper);
+  --line:var(--archive-line);
+  --brand:#4f5744;
+  --green:var(--archive-success);
+  --amber:var(--archive-warning);
+  --red:var(--archive-danger);
+  background:var(--archive-stage);
+  color:var(--archive-ink);
+  accent-color:#626f4f;
+}
+
+/* :where keeps page-specific controls free to define their own emphasis. */
+:where(body[data-active-page="progress"], body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.primary-button,.secondary-button,.mini-button,.sample-button,.icon-button) {
+  border-radius:2px;
+  box-shadow:none;
+  font-weight:500;
+}
+:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.secondary-button,.mini-button,.sample-button,.icon-button) {
+  border-color:var(--archive-line);
+  background:var(--archive-paper);
+  color:var(--archive-text);
+}
+:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.secondary-button,.mini-button,.sample-button,.icon-button):hover:not(:disabled) {
+  border-color:#b5a17f;
+  background:var(--archive-accent-wash);
+  color:var(--archive-ink);
+}
+:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) .primary-button {
+  background:#282d23;
+  border:1px solid #282d23;
+  color:var(--archive-paper);
+}
+:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) .text-button { color:var(--archive-text); font-size:12px; }
+:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) button:disabled { cursor:not-allowed; }
+
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { margin-left:176px; padding:32px 36px 28px; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar { width:176px; background:var(--archive-stage); border-right:1px solid var(--archive-line); }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-brand { color:var(--archive-ink); }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-brand>span { background:#282d23; color:var(--archive-paper); box-shadow:none; border-radius:2px; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) :is(.app-brand small,.sidebar-note,.sidebar-note small,.nav-caption) { color:var(--archive-muted); }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .sidebar-note { border-color:var(--archive-line); }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .sidebar-dot { background:var(--archive-accent); box-shadow:none; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a { color:var(--archive-text); font-weight:500; border-radius:2px; transition:background-color .16s ease,color .16s ease; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a.active { color:var(--archive-ink); background:#ded9d0; box-shadow:inset 2px 0 var(--archive-accent); font-weight:650; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a:hover { color:var(--archive-ink); background:#e1dcd3; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero { padding-bottom:26px; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero h1 { color:var(--archive-ink); font-size:28px; font-weight:650; letter-spacing:1px; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero .subtitle { color:var(--archive-muted); font-size:13px; margin-top:8px; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero :is(.primary-button,.secondary-button) { height:36px; border:1px solid #a7a89a; border-radius:2px; padding:8px 14px; background:transparent; color:#34392e; font-size:13px; font-weight:500; box-shadow:none; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero :is(.primary-button,.secondary-button):hover { background:var(--archive-paper); border-color:#777d6a; }
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) :is(a,button,input,select,textarea,summary,[tabindex]):focus-visible { outline:2px solid #947343; outline-offset:3px; }
+
+@media(max-width:1080px) {
+  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { padding:28px 26px; }
+}
+/* Preserve the existing small-screen fallback. Desktop is the design target. */
+@media(max-width:760px) {
+  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { margin:0; padding:24px 18px 28px; }
+  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar { width:auto; border-right:0; border-bottom:1px solid var(--archive-line); }
+}
+@media(prefers-reduced-motion:reduce) {
+  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a { transition:none; }
+}
+
+/* The import dialog keeps the archive palette regardless of its opening page. */
+#import-dialog {
+  --paper:var(--archive-paper,#f2efe9);
+  --ink:var(--archive-ink,#161812);
+  --muted:var(--archive-muted,#73756a);
+  --line:var(--archive-line,#d4d0c7);
+  --brand:#4f5744;
+  --brand-dark:#414735;
+  border:1px solid var(--line);
+  border-radius:2px;
+  background:var(--paper);
+  color:var(--ink);
+  box-shadow:0 20px 64px #302c2529;
+}
+#import-dialog::backdrop { background:#35382f66; backdrop-filter:blur(3px); }
+#import-dialog .modal-header {
+  padding:18px 24px;
+  border-bottom:1px solid var(--line);
+  border-radius:0;
+  background:var(--paper);
+}
+#import-dialog .modal-header h2 { font-size:18px; font-weight:600; letter-spacing:.5px; }
+#import-dialog .workspace { border-radius:0; background:var(--paper); box-shadow:none; }
+#import-dialog .upload-panel { padding:24px; }
+#import-dialog .drop-zone {
+  min-height:280px;
+  padding:28px 22px;
+  border:1px dashed #b3b8a7;
+  border-radius:2px;
+  background:#eeede5;
+  transform:none;
+  transition:background-color .16s ease,border-color .16s ease;
+}
+#import-dialog .drop-zone:hover { border-color:#8b967b; background:#e9ece1; transform:none; }
+#import-dialog .drop-zone:is(.dragging,:focus-within) {
+  border-color:#626f4f;
+  background:#e3e8d9;
+  transform:none;
+}
+#import-dialog .upload-icon {
+  width:48px;
+  height:48px;
+  border:1px solid #c5cbb8;
+  border-radius:2px;
+  background:#e1e5d7;
+  color:#626f4f;
+  font-size:27px;
+}
+#import-dialog .drop-zone h2 { margin:18px 0 8px; color:var(--ink); font-size:19px; font-weight:600; }
+#import-dialog .drop-zone p { max-width:440px; margin:0 0 22px; color:var(--muted); font-size:12px; line-height:1.7; }
+#import-dialog :is(.primary-button,.secondary-button) {
+  min-height:36px;
+  padding:8px 16px;
+  border:1px solid var(--line);
+  border-radius:2px;
+  font-size:13px;
+  font-weight:500;
+  box-shadow:none;
+}
+#import-dialog .primary-button { border-color:#4f5744; background:#4f5744; color:var(--paper); }
+#import-dialog .primary-button:hover:not(:disabled) { border-color:#414735; background:#414735; }
+#import-dialog .primary-button:active:not(:disabled) { border-color:#343b2b; background:#343b2b; }
+#import-dialog .secondary-button { background:var(--paper); color:#52564c; }
+#import-dialog .secondary-button:hover:not(:disabled) { border-color:#a3ab94; background:#e3e7da; color:#343b2b; }
+#import-dialog .secondary-button:active:not(:disabled) { border-color:#8b967b; background:#dce2d0; }
+#import-dialog :is(.primary-button,.secondary-button):disabled {
+  border-color:#d8d5cc;
+  background:#e5e2da;
+  color:#888a7c;
+  opacity:1;
+  cursor:not-allowed;
+}
+#import-dialog :is(a,button,[tabindex]):focus-visible { outline:2px solid #697557; outline-offset:3px; }
+#import-dialog .import-hint { color:var(--muted); line-height:1.8; }
+#import-dialog .import-hint a { color:#4f5744; text-decoration:underline; text-underline-offset:3px; }
+#import-dialog .import-hint a:hover { color:#343b2b; }
+#import-dialog #folder-scan-status:empty { display:none; }
+#import-dialog .toast { border-radius:2px; background:#30352a; color:var(--paper); }
+@media(max-width:760px) {
+  #import-dialog .modal-header { padding:16px 18px; }
+  #import-dialog .upload-panel { padding:18px; }
+  #import-dialog .drop-zone { padding:24px 14px; }
+  #import-dialog .drop-zone h2 { font-size:17px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  #import-dialog .drop-zone { transition:none; }
+}

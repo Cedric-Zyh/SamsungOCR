@@ -7,8 +7,10 @@ import Vision
 from Foundation import NSURL
 from Quartz import CGImageSourceCreateImageAtIndex, CGImageSourceCreateWithURL
 from .ocr_types import TextObservation, observations_text
+from .execution import timed
 
 
+@timed('vision_ocr')
 def recognize_text(
     image_path: str | Path,
     *,

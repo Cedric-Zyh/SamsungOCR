@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from collections import defaultdict
 
 from .parser import compare_dates, parse_date
+from .field_schema import derive_signature_check
 
 
 PAGE_SUFFIX = re.compile(r"^(?P<base>.+?)_(?P<page>\d{2})(?P<ext>\.[^.]+)$")
+
+
+def _page_evidence_revision(page: dict) -> str:
+    """Version physical evidence even when a cover override masks its display."""
+    projection_keys = {
+        "page_group", "page_group_id", "page_role", "parent_result_id", "page_index",
+        "source_filenames", "page_review_applied", "page_evidence_revisions", "review_revision",
+    }
+    # Includes business values, updated_at and attempt from the physical page.
+    # Derived presentation fields must not make the version self-referential.
+    evidence = {key: value for key, value in page.items() if key not in projection_keys}
+    payload = json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def page_identity(filename: str) -> tuple[str, int]:
@@ -130,6 +146,11 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
             "filenames": [str(item.get("filename") or "") for item in pages],
         }
         merged["source_filenames"] = merged["page_group"]["filenames"]
+        # Query-only provenance: prepare_review_payload persists an explicit
+        # override whitelist, so these versions never become physical OCR data.
+        merged["page_evidence_revisions"] = {
+            str(int(page.get("id") or 0)): _page_evidence_revision(page) for page in pages
+        }
         merged["document_type"] = {
             **(merged.get("document_type") or {}),
             "label": f"三星出库回单（{len(pages)}页）",
@@ -149,7 +170,9 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
         if footer is not None:
             footer_fields = footer.get("fields") or {}
             merged_fields = merged.setdefault("fields", {})
-            for field_name in ("签章要求", "签收说明"):
+            for field_name in ("签章要求", "签收说明", "仓库接收人", "实收数量", "拒收数量"):
+                if field_name == "签收说明" and merged.get("field_schema_version"):
+                    continue
                 value = str(footer_fields.get(field_name) or "").strip()
                 if value:
                     merged_fields[field_name] = value
@@ -164,10 +187,12 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
                 confidence = float(footer_date.get("confidence") or 0)
                 date_check.update(
                     confidence=confidence,
-                    reliable=bool(confidence >= 0.72),
+                    reliable=bool(confidence >= 0.72 and footer_date.get("reliable") is not False),
                     source_page=str(footer.get("filename") or ""),
                 )
                 merged["date_check"] = date_check
+                if merged.get("field_schema_version"):
+                    merged_fields["签收日期"] = date_check.get("actual", "")
 
             footer_seal = footer.get("seal_check") or {}
             if footer_seal.get("recognized") or footer_seal.get("all_recognized"):
@@ -186,6 +211,9 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
             if "首页未包含签收页脚" not in reason and "等待商品续页关联" not in reason
         ]
         merged["review_reasons"] = reasons
+        merged["signature_check"] = derive_signature_check(
+            merged.get("fields") or {}, merged.get("signature_check")
+        )
 
         # A human reviews the logical receipt, not each scanner page.  Keep
         # the audited merged values as an override on the cover record so the
@@ -195,7 +223,7 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
         if override:
             for key in (
                 "fields", "field_metadata", "product_table", "date_check",
-                "seal_check", "review_reasons", "review_status",
+                "seal_check", "signature_check", "review_reasons", "review_status",
                 "final_result", "overall", "human_note", "error_type",
             ):
                 if key in override:

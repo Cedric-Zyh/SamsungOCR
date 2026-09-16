@@ -1,0 +1,48 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {imageSources} = require('../static/workbench.js');
+
+function record() {
+  return {id:23, review_revision:'version+1', preview_url:'/files/previews/page.jpg',
+    seal_check:{api:{ok:true},dual_check:{policy:'qingtong_template_and_ocr',
+      selected:{index:1,xyxy:[120,300,520,600]},candidates:[{index:0,xyxy:[1,2,30,40]},{index:1,xyxy:[120,300,520,600]}]}},
+    processing_artifacts:{date:[{original_url:'/files/artifacts/date.jpg'}],seals:[{original_url:'/files/artifacts/other-local-stamp.jpg'}]}};
+}
+
+test('QingTong exposes one selected stamp alongside the whole page and date crop',()=>{
+  assert.deepEqual(imageSources(record()),[
+    {url:'/files/previews/page.jpg',label:'整页回单',group:'page'},
+    {url:'/files/artifacts/date.jpg',label:'日期区域 1',group:'date'},
+    {url:'/files/selected-seal/23.png?revision=version%2B1',label:'印章区域',group:'seal'},
+  ]);
+});
+
+test('the any-channel matching policy preserves the selected QingTong stamp preview',()=>{
+  const item = record(); item.seal_check.dual_check.policy = 'qingtong_any_channel';
+  assert.deepEqual(imageSources(item), imageSources(record()));
+  item.seal_check.dual_check.selected = null;
+  assert.equal(imageSources(item).filter(source => source.group === 'seal').length, 0);
+});
+
+test('missing or malformed selection does not substitute an unrelated local stamp',()=>{
+  for(const box of [null,[],[1,2,3],[3,0,2,5],[0,0,2,Infinity],['0',0,2,5]]) {
+    const item=record(); item.seal_check.dual_check.selected.xyxy=box;
+    assert.equal(imageSources(item).filter(source=>source.group==='seal').length,0);
+  }
+  const item=record(); item.seal_check.dual_check.selected=null;
+  assert.equal(imageSources(item).filter(source=>source.group==='seal').length,0);
+});
+
+test('failed API results and invalid record IDs cannot create a selected-stamp URL',()=>{
+  const item=record(); item.seal_check.api.ok=false;
+  assert.equal(imageSources(item).filter(source=>source.group==='seal').length,0);
+  for(const id of [0,-1,'23/../24',NaN]) {
+    const item=record(); item.id=id;
+    assert.equal(imageSources(item).filter(source=>source.group==='seal').length,0);
+  }
+});
+
+test('local-only receipt previews retain their existing crop',()=>{
+  const item=record(); delete item.seal_check.dual_check;
+  assert.equal(imageSources(item).find(source=>source.group==='seal').url,'/files/artifacts/other-local-stamp.jpg');
+});

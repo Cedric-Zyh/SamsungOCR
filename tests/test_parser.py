@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from receipt_ocr.parser import (
     TextObservation,
     compare_dates,
@@ -141,6 +143,22 @@ def test_receipt_date_repairs_common_stamp_overlap_errors():
     assert parse_receipt_date("20年月8日", date(2025, 5, 9)) == date(2025, 5, 8)
     assert parse_receipt_date("2035年1月31日", required) is None
     assert parse_receipt_date("1105年2月23日", date(2025, 2, 23)) is None
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("6月11日", date(2025, 6, 11)),
+    ("签收：12 月 11 日", date(2025, 12, 11)),
+    ("25年6月11日", date(2025, 6, 11)),
+    ("20256月11日", date(2025, 6, 11)),
+    ("206月11日", date(2025, 6, 11)),
+    ("0月11日", None),
+    ("13月11日", None),
+    ("123月11日", None),
+    ("20250月11日", None),
+    ("20年月11日", date(2025, 5, 11)),
+])
+def test_receipt_date_preserves_explicit_month_without_year(text, expected):
+    assert parse_receipt_date(text, date(2025, 5, 11)) == expected
 
 
 def test_receipt_date_aggregates_variants_before_accepting_high_confidence_misread():

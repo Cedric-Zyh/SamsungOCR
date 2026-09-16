@@ -4,12 +4,14 @@ import os
 from pathlib import Path
 
 import requests
+from .execution import timed
 
 
 DEFAULT_API_KEY_FILE = Path(__file__).resolve().parent.parent / "config" / "seal_api_key"
 
 
 SEAL_RECOGNITION_MODES = (
+    {"id": "qingtong_only", "label": "仅清瞳印章 API", "description": "仅调用清瞳接口，不执行本地印章识别"},
     {
         "id": "local",
         "label": "本地印章识别",
@@ -52,6 +54,7 @@ class SealApiClient:
     def enabled(self) -> bool:
         return bool(self.api_key)
 
+    @timed('seal_api')
     def recognize(self, image_path: str | Path) -> dict:
         if not self.enabled:
             return {

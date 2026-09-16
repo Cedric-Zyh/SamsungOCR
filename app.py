@@ -1,18 +1,31 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
 from werkzeug.utils import secure_filename
 
-from receipt_ocr.analyzer import ReceiptAnalyzer, decide_overall
+from receipt_ocr.analyzer import ReceiptAnalyzer
+from receipt_ocr.pipeline import complete_result
+from receipt_ocr.review import (
+    apply_human_edits as _apply_human_edits,
+    confirmation_error as _confirmation_error,
+    prepare_review_payload,
+)
+from receipt_ocr.recognition_config import validate_config, run_configured
+from receipt_ocr.field_schema import OUTPUT_FIELDS, PRINTED_FIELDS, HANDWRITTEN_FIELDS, derive_signature_check, recognition_fields
 from receipt_ocr.database import Database, now_iso
+from receipt_ocr.job_store import JobStore
+from receipt_ocr.job_worker import JobWorker
+from receipt_ocr.job_service import ReceiptJobService
 from receipt_ocr.evaluation import (
     build_ground_truth_entry,
     evaluate_backends,
@@ -22,15 +35,8 @@ from receipt_ocr.evaluation import (
     save_ground_truth_entry,
 )
 from receipt_ocr.ocr_backends import backend_catalog, backend_label, default_backend, resolve_backend
-from receipt_ocr.pagination import merge_paginated_results
-from receipt_ocr.parser import (
-    LOW_CONFIDENCE_THRESHOLD,
-    compare_dates,
-    compare_seal_text,
-    parse_date,
-    product_table_text,
-)
 from receipt_ocr.seal_reference import SealReferenceMatcher
+from receipt_ocr.qingtong_preview import render_selected_seal
 from receipt_ocr.seal_api import (
     SEAL_RECOGNITION_MODES,
     resolve_seal_recognition_mode,
@@ -47,6 +53,10 @@ EXPORT_DIR = STORAGE_DIR / "exports"
 DATABASE_PATH = STORAGE_DIR / "results.db"
 GROUND_TRUTH_PATH = DATA_DIR / "ground_truth.json"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+RESULT_FILTERS = (
+    "filename", "order_id", "customer", "date", "import_date", "overall", "review_status",
+    "text_match", "search_prefix", "search", "date_status", "seal_status", "task_id", "ocr_backend",
+)
 _BUNDLED_NODE = Path(
     "/Users/zhuyihao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 )
@@ -99,118 +109,61 @@ def _export_machine_scope(
 NODE_EXECUTABLE = resolve_node_executable()
 
 app = Flask(__name__)
-app.config.update(MAX_CONTENT_LENGTH=500 * 1024 * 1024, JSON_AS_ASCII=False)
+app.config.update(MAX_CONTENT_LENGTH=500 * 1024 * 1024, JSON_AS_ASCII=False,
+                  BACKGROUND_WORKER=True, TEMPLATES_AUTO_RELOAD=True)
 analyzer = ReceiptAnalyzer()
 database = Database(DATABASE_PATH)
 seal_reference_matcher = SealReferenceMatcher(ARTIFACT_DIR)
+_initialized = False
+_initialization_lock = threading.Lock()
+job_store = JobStore(database)
+job_worker = None
 
 
-def initialize() -> None:
+def initialize(*, start_worker: bool = True) -> None:
+    global _initialized, job_store, job_worker
+    if job_worker is not None:
+        raise RuntimeError('后台任务已启动，请勿重复初始化服务')
     for directory in (UPLOAD_DIR, PREVIEW_DIR, ARTIFACT_DIR, EXPORT_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     database.initialize()
+    job_store = JobStore(database)
+    job_store.initialize()
     database.recover_interrupted_tasks()
     database.enforce_uncertain_review_queue()
     seal_reference_matcher.refresh(
         database, load_ground_truth(GROUND_TRUTH_PATH)
     )
+    _initialized = True
+    if start_worker and app.config['BACKGROUND_WORKER']:
+        service = ReceiptJobService(_configured_analyze,
+            data_dir=DATA_DIR, upload_dir=UPLOAD_DIR, preview_dir=PREVIEW_DIR, artifact_dir=ARTIFACT_DIR)
+        job_worker = JobWorker(job_store, service, logger=app.logger)
+        job_worker.start()
+
+
+@app.before_request
+def ensure_initialized() -> None:
+    # Importing this module must not recover tasks or write to the real DB.
+    # WSGI/Flask CLI initialize on their first request; direct launch below
+    # initializes before accepting requests.
+    if not _initialized:
+        with _initialization_lock:
+            if not _initialized:
+                initialize()
+
+
+def _configured_analyze(*args, recognition_config=None, previous_fields=None, **kwargs):
+    kwargs['reference_matcher'] = seal_reference_matcher
+    if recognition_config is None:
+        return analyzer.analyze(*args, **kwargs)
+    return run_configured(analyzer, *args, config=recognition_config, previous_fields=previous_fields, **kwargs)
 
 
 def _apply_visual_seal_reference(result: dict) -> dict:
-    """Promote only a broad match to an exact human-truth seal reference."""
-    evidence = seal_reference_matcher.match(result)
-    if "reference_filename" not in evidence:
-        return result
-    seal_check = result.get("seal_check") or {}
-    seal_check["visual_reference_match"] = evidence
-    route = str(evidence.get("route") or "")
-    consensus_routes = {
-        "multi_reference_consensus",
-        "high_purity_multi_reference_consensus",
-        "chromatic_crop_multi_reference_consensus",
-        "color_mask_multi_reference_consensus",
-        "strong_prefix_color_mask_multi_reference_consensus",
-    }
-    candidate_index = int(
-        evidence.get("consensus_candidate_index", -1)
-        if route in consensus_routes
-        else evidence.get("candidate_index", -1)
-    )
-    for artifact in result.get("processing_artifacts", {}).get("seals", []):
-        if int(artifact.get("index", -2)) == candidate_index:
-            artifact["visual_reference_match"] = evidence
-            break
-    if not evidence.get("accepted"):
-        return result
-
-    confidence = float(evidence.get("confidence", 0.90))
-    seal_check.update({
-        "ocr_only_status": seal_check.get("status", ""),
-        "ocr_only_reliable": bool(seal_check.get("reliable")),
-        "ocr_only_score": float(seal_check.get("score", 0)),
-        "status": "匹配",
-        "message": (
-            "OCR 文字不完整，但章面与同签章要求的人工真值阳性参考章"
-            + (
-                "在两份独立样单中形成一致几何证据"
-                if route in consensus_routes
-                else "的彩色墨迹形成整体几何一致"
-                if route == "color_mask_geometry"
-                else "同时形成整体彩色墨迹与大面积局部几何一致"
-                if route == "color_mask_sift_geometry"
-                else "去除稀疏彩色扫描噪点后形成高纯度大面积几何一致"
-                if route == "trimmed_chromatic_single_reference"
-                else "形成大面积几何一致"
-            )
-        ),
-        "score": round(max(float(seal_check.get("score", 0)), confidence), 3),
-        "confidence": confidence,
-        "reliable": True,
-        "match_basis": (
-            "人工真值参考章 + SIFT/RANSAC 多参考一致"
-            if route == "multi_reference_consensus"
-            else "人工真值参考章 + SIFT/RANSAC 多参考高纯度一致"
-            if route == "high_purity_multi_reference_consensus"
-            else "人工真值参考章 + 章色稳健裁剪/SIFT 多参考一致"
-            if route == "chromatic_crop_multi_reference_consensus"
-            else "人工真值参考章 + 整体彩色墨迹多参考一致"
-            if route == "color_mask_multi_reference_consensus"
-            else "人工真值参考章 + 强文字前缀/章色多参考一致"
-            if route == "strong_prefix_color_mask_multi_reference_consensus"
-            else "人工真值参考章 + 彩色墨迹整体几何一致"
-            if route == "color_mask_geometry"
-            else "人工真值参考章 + 彩色墨迹/SIFT 联合几何一致"
-            if route == "color_mask_sift_geometry"
-            else "人工真值参考章 + 稀疏章色噪点裁剪/SIFT 高纯度一致"
-            if route == "trimmed_chromatic_single_reference"
-            else "人工真值参考章 + SIFT/RANSAC 高支持度微覆盖抖动"
-            if route == "high_support_minor_coverage"
-            else "人工真值参考章 + SIFT/RANSAC 超高支持度局部覆盖"
-            if route == "ultra_support_partial_coverage"
-            else "人工真值参考章 + SIFT/RANSAC 高内点率几何一致"
-            if route == "high_ratio_single_reference"
-            else "人工真值参考章 + SIFT/RANSAC 大面积几何一致"
-        ),
-        "backend": (
-            str(seal_check.get("backend") or "本地 OCR")
-            + " + 本地人工真值参考章"
-        ),
-    })
-    result["seal_check"] = seal_check
-    reasons = [
-        reason for reason in result.get("review_reasons", [])
-        if reason != "印章内容无法可靠判断"
-    ]
-    result["review_reasons"] = reasons
-    overall = decide_overall(
-        result.get("date_check") or {}, seal_check, reasons
-    )
-    result["overall"] = overall
-    result["final_result"] = overall
-    result["review_status"] = (
-        "待复核" if overall == "需人工复核" else "无需复核"
-    )
-    return result
+    # Compatibility for saved-result audit tools. Live recognition finalizes
+    # inside the pipeline, with the original filename supplied before matching.
+    return complete_result(result, reference_matcher=seal_reference_matcher)
 
 
 @app.get("/")
@@ -221,6 +174,7 @@ def index():
     return render_template(
         "index.html",
         samples=samples,
+        output_fields=OUTPUT_FIELDS, printed_fields=PRINTED_FIELDS, handwritten_fields=HANDWRITTEN_FIELDS,
         seal_api_enabled=analyzer.seal_api.enabled,
         python_path=sys.executable,
         default_ocr_backend=default_backend(),
@@ -241,10 +195,13 @@ def ocr_backends():
 @app.post("/api/tasks")
 def create_task():
     payload = request.get_json(silent=True) or {}
-    total = int(payload.get("total", 0))
+    total = payload.get("total", 0)
+    if type(total) is not int:
+        return jsonify(error='批量任务数量必须是整数'), 400
     if total <= 0 or total > 5000:
         return jsonify({"error": "批量任务数量必须在 1 至 5000 之间"}), 400
     try:
+        recognition_config = validate_config(payload.get("recognition_config"), api_enabled=analyzer.seal_api.enabled)
         ocr_backend = resolve_backend(str(payload.get("ocr_backend") or "auto"))
         seal_recognition_mode = resolve_seal_recognition_mode(
             payload.get("seal_recognition_mode")
@@ -252,16 +209,210 @@ def create_task():
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
     task_id = uuid.uuid4().hex
+    if payload.get('background'):
+        items = payload.get('items')
+        if (not isinstance(items, list) or len(items) != total or
+            any(not isinstance(item, dict) or not isinstance(item.get('filename'), str)
+                or not item['filename'].strip() or len(item['filename']) > 500 for item in items)):
+            return jsonify(error='请提供与上传数量一致的图片清单'), 400
+        return jsonify(job_store.create_batch(task_id, str(payload.get('name') or '批量识别'), items,
+            dict(ocr_backend=ocr_backend, seal_recognition_mode=seal_recognition_mode,
+                 recognition_config=recognition_config))), 201
     return jsonify(database.create_task(
         task_id, str(payload.get("name") or "批量识别"), total, ocr_backend,
-        seal_recognition_mode,
+        seal_recognition_mode, recognition_config,
     ))
+
+
+@app.get("/api/tasks")
+def list_tasks():
+    return jsonify(database.list_tasks())
+
+
+@app.post("/api/results/delete")
+def delete_results():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get('ids')
+    if not isinstance(ids, list) or not ids or len(ids) > 2000 or any(type(i) is not int or i <= 0 for i in ids):
+        return jsonify(error='请选择有效的回单记录'), 400
+    try:
+        affected = database.delete_results(ids)
+    except KeyError:
+        return jsonify(error='回单不存在'), 404
+    return jsonify(ids=affected)
 
 
 @app.get("/api/tasks/<task_id>")
 def get_task(task_id: str):
     try:
-        return jsonify(database.get_task(task_id))
+        task = database.get_task(task_id)
+        return jsonify(job_store.task(task_id) if task['execution_mode'] == 'queue' else task)
+    except KeyError:
+        abort(404)
+
+
+def _wake_jobs():
+    if job_worker is not None:
+        job_worker.start()
+
+
+@app.get('/api/queue')
+def queue_progress():
+    from datetime import date
+    day = request.args.get('import_date', '')
+    try:
+        if date.fromisoformat(day).isoformat() != day:
+            raise ValueError()
+    except ValueError:
+        return jsonify(error='请选择有效的导入日期'), 400
+    return jsonify(job_store.daily(day))
+
+
+@app.route('/api/queue/control', methods=['GET', 'POST'])
+def queue_control():
+    if request.method == 'GET':
+        return jsonify(job_store.control())
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict) or not isinstance(payload.get('paused'), bool):
+        return jsonify(error='请指定是否暂停识别'), 400
+    control = job_store.set_paused(payload['paused'])
+    if not control['paused']:
+        _wake_jobs()
+    return jsonify(control)
+
+
+@app.post('/api/jobs/<job_id>/upload')
+def upload_job(job_id):
+    try:
+        job = job_store.get(job_id)
+    except KeyError:
+        abort(404)
+    # A lost HTTP response can be retried without creating another result.
+    if job['status'] != 'awaiting_upload':
+        return jsonify(job_store.public(job)), 200
+    upload = request.files.get('file')
+    sample = request.form.get('sample', '')
+    saved_path = None
+    if upload and upload.filename:
+        expected = Path(job['filename'].replace('\\', '/')).name
+        if Path(upload.filename.replace('\\', '/')).name != expected:
+            return jsonify(error=f'请选择原任务中的图片：{expected}'), 400
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in ALLOWED_EXTENSIONS:
+            return jsonify(error='仅支持 JPG、PNG、BMP、WEBP 图片'), 400
+        stored_name = f'{uuid.uuid4().hex}{suffix}'
+        saved_path = UPLOAD_DIR / stored_name
+        temporary = UPLOAD_DIR / f'{stored_name}.part'
+        try:
+            upload.save(temporary)
+            if temporary.stat().st_size == 0:
+                return jsonify(error='图片为空，请重新选择'), 400
+            temporary.replace(saved_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    elif sample:
+        source = (DATA_DIR / Path(sample).name).resolve()
+        if source.parent != DATA_DIR.resolve() or not source.is_file() or source.suffix.lower() not in ALLOWED_EXTENSIONS:
+            abort(404)
+        if source.name != Path(job['filename'].replace('\\', '/')).name:
+            return jsonify(error='样单与任务清单不一致'), 400
+        stored_name = f'sample:{source.name}'
+    else:
+        return jsonify(error='请选择图片'), 400
+    try:
+        job, accepted = job_store.accept_upload(job_id, stored_name)
+    except Exception:
+        if saved_path:
+            saved_path.unlink(missing_ok=True)
+        raise
+    if not accepted and saved_path:
+        saved_path.unlink(missing_ok=True)
+    if job['start_requested']:
+        _wake_jobs()
+    return jsonify(job_store.public(job)), 202
+
+
+@app.post('/api/jobs/start')
+def start_jobs():
+    payload = request.get_json(silent=True)
+    ids = payload.get('ids') if isinstance(payload, dict) else None
+    if (not isinstance(ids, list) or not ids or len(ids) > 5000
+            or any(not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 100 for job_id in ids)):
+        return jsonify(error='请选择有效的待开始回单'), 400
+    try:
+        started = job_store.start_jobs(ids)
+    except KeyError:
+        return jsonify(error='所选回单不存在'), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 409
+    _wake_jobs()
+    return jsonify(**started, control=job_store.control()), 202
+
+
+@app.post('/api/jobs/<job_id>/retry')
+def retry_job(job_id):
+    try:
+        job = job_store.retry_failed(job_id)
+    except KeyError:
+        abort(404)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 409
+    _wake_jobs()
+    return jsonify(job_store.public(job)), 202
+
+
+@app.post('/api/jobs/<job_id>/cancel')
+def cancel_job(job_id):
+    try:
+        job, deleted = job_store.delete_job(job_id)
+    except KeyError:
+        abort(404)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 409
+    if not deleted:
+        return jsonify(error='这条回单已经完成，不能取消'), 409
+    _cleanup_cancelled_upload(job)
+    return jsonify(deleted=True, job_id=job_id), 200
+
+
+def _cleanup_cancelled_upload(job):
+    stored_name = job.get('stored_name') or ''
+    if stored_name and not job.get('preserve_upload') and not stored_name.startswith('sample:'):
+        candidate = (UPLOAD_DIR / Path(stored_name).name).resolve()
+        if candidate.parent == UPLOAD_DIR.resolve():
+            candidate.unlink(missing_ok=True)
+
+
+@app.post('/api/jobs/cancel')
+def cancel_jobs():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get('ids') if isinstance(payload, dict) else None
+    try:
+        result = job_store.delete_jobs(ids)
+    except KeyError:
+        return jsonify(error='所选待处理回单中有任务已不存在，请刷新后重试'), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    for job in result['deleted']:
+        _cleanup_cancelled_upload(job)
+    return jsonify(deleted=True, deleted_ids=[job['id'] for job in result['deleted']],
+                   kept_ids=[job['id'] for job in result['kept']]), 200
+
+
+@app.get('/api/process-history')
+def process_history():
+    job_id = request.args.get('job_id', '').strip()
+    result_id_raw = request.args.get('result_id', '').strip()
+    result_id = 0
+    if result_id_raw:
+        try:
+            result_id = int(result_id_raw)
+        except ValueError:
+            return jsonify(error='请选择有效的回单记录'), 400
+    if not job_id and not result_id:
+        return jsonify(error='请选择需要查看流程的回单'), 400
+    try:
+        return jsonify(job_store.process_history(job_id=job_id, result_id=result_id))
     except KeyError:
         abort(404)
 
@@ -269,6 +420,12 @@ def get_task(task_id: str):
 @app.post("/api/analyze")
 def analyze_upload():
     task_id = request.form.get("task_id", "").strip()
+    if task_id:
+        try:
+            if database.get_task(task_id)['execution_mode'] == 'queue':
+                return jsonify(error='该任务请通过后台上传接口提交图片'), 409
+        except KeyError:
+            return jsonify(error='批量任务不存在'), 404
     upload = request.files.get("file")
     sample_name = request.form.get("sample", "").strip()
     source = None
@@ -295,6 +452,7 @@ def analyze_upload():
     if task_id:
         try:
             task = database.get_task(task_id)
+            recognition_config = validate_config(json.loads(task.get("recognition_config") or "null"), api_enabled=analyzer.seal_api.enabled)
             ocr_backend = resolve_backend(task.get("ocr_backend") or "auto")
             seal_recognition_mode = resolve_seal_recognition_mode(
                 task.get("seal_recognition_mode")
@@ -305,6 +463,7 @@ def analyze_upload():
             return jsonify({"error": str(exc)}), 400
     else:
         try:
+            recognition_config = validate_config(json.loads(request.form.get("recognition_config", "null")), api_enabled=analyzer.seal_api.enabled)
             ocr_backend = resolve_backend(request.form.get("ocr_backend", "auto"))
             seal_recognition_mode = resolve_seal_recognition_mode(
                 request.form.get("seal_recognition_mode")
@@ -313,18 +472,20 @@ def analyze_upload():
             return jsonify({"error": str(exc)}), 400
         task_id = uuid.uuid4().hex
         database.create_task(
-            task_id, original_name, 1, ocr_backend, seal_recognition_mode
+            task_id, original_name, 1, ocr_backend, seal_recognition_mode, recognition_config
         )
 
     token = uuid.uuid4().hex
     preview_name = f"{token}.jpg"
     artifacts = ARTIFACT_DIR / token
     try:
-        result = analyzer.analyze(
+        result = _configured_analyze(
             source,
             PREVIEW_DIR / preview_name,
             artifact_dir=artifacts,
             artifact_url_prefix=f"/files/artifacts/{token}",
+            recognition_config=recognition_config,
+            filename=original_name,
             ocr_backend=ocr_backend,
             seal_recognition_mode=seal_recognition_mode,
         )
@@ -334,7 +495,6 @@ def analyze_upload():
             created_at=now_iso(),
             updated_at=now_iso(),
         )
-        result = _apply_visual_seal_reference(result)
         record_id = database.insert_result(
             filename=original_name,
             stored_name=stored_name,
@@ -378,108 +538,215 @@ def analyze_upload():
         return jsonify({"error": f"识别失败：{exc}", "id": record_id}), 500
 
 
+@app.get("/api/daily-results")
+def daily_results():
+    from datetime import date
+    day = request.args.get("import_date", "")
+    try:
+        if date.fromisoformat(day).isoformat() != day:
+            raise ValueError()
+    except ValueError:
+        return jsonify(error="请选择有效的导入日期"), 400
+    try:
+        deferred_ids = _selected_result_ids('deferred_ids')
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    rows = database.query_receipts(filters={"import_date": day}, latest_by_filename=True)["items"]
+    if request.args.get('include_queue') == '1':
+        # Retries belong to their task day, while the result keeps its original
+        # import date. Resolve missing results by ID, never by filename.
+        seen = {row['id'] for row in rows}
+        for job in job_store.daily(day):
+            result_id = job.get('result_id') or job.get('target_result_id')
+            if not result_id or result_id in seen:
+                continue
+            try:
+                projected = _project_paginated_result(database.get_result(result_id))
+                if projected['id'] not in seen:
+                    rows.append(projected)
+                    seen.add(projected['id'])
+            except KeyError:
+                continue  # A result may be deleted between these reads.
+    if request.args.get('reviewable') == '1':
+        rows = _reviewable_results(rows)
+    rows.sort(key=lambda row: row['id'], reverse=True)
+    if 'page' in request.args or 'page_size' in request.args:
+        try:
+            page, page_size = _page_options()
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(items=rows[(page - 1) * page_size:page * page_size],
+                       total=len(rows), page=page, page_size=page_size,
+                       **_deferred_scope_metadata(rows, deferred_ids))
+    return jsonify(rows)
+
+
+def _page_options():
+    try:
+        page = int(request.args.get('page', '1'))
+        page_size = int(request.args.get('page_size', '100'))
+    except ValueError:
+        raise ValueError('页码和每页数量必须为正整数') from None
+    if page < 1 or not 1 <= page_size <= 2000:
+        raise ValueError('页码必须大于零，每页数量必须在 1 至 2000 之间')
+    return page, page_size
+
+
+def _reviewable_results(rows):
+    """Filter the logical receipt before pagination, including busy linked pages."""
+    with database.connect() as connection:
+        has_jobs = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_jobs'").fetchone()
+        busy = set()
+        if has_jobs:
+            for job in connection.execute("SELECT result_id,target_result_id FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')"):
+                busy.update(value for value in job if value)
+    return [row for row in rows if row.get('review_status') == '待复核'
+            and not row.get('error_message') and row.get('overall') != '识别失败'
+            and not busy.intersection({row['id'], *(row.get('page_group') or {}).get('continuation_result_ids', [])})]
+
+
+def _receipt_listing(*, latest_by_filename):
+    filters = {key: request.args.get(key, '') for key in RESULT_FILTERS}
+    paged = 'page' in request.args or 'page_size' in request.args
+    try:
+        page, page_size = _page_options() if paged else (1, min(max(request.args.get('limit', 200, type=int), 1), 2000))
+        selected_ids = _selected_result_ids()
+        deferred_ids = _selected_result_ids('deferred_ids')
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    offset = (page - 1) * page_size
+    if request.args.get('reviewable') == '1' or selected_ids is not None or deferred_ids is not None:
+        rows = database.query_receipts(filters=filters, latest_by_filename=latest_by_filename)['items']
+        if selected_ids is not None:
+            rows = [row for row in rows if selected_ids.intersection({row['id'],
+                    *(row.get('page_group') or {}).get('continuation_result_ids', [])})]
+        if request.args.get('reviewable') == '1':
+            rows = _reviewable_results(rows)
+        result = {'items': rows[offset:offset + page_size], 'total': len(rows),
+                  **_deferred_scope_metadata(rows, deferred_ids)}
+    else:
+        result = database.query_receipts(filters=filters, latest_by_filename=latest_by_filename,
+                                         limit=page_size, offset=offset)
+    return jsonify({**result, 'page': page, 'page_size': page_size} if paged else result['items'])
+
+
+def _deferred_scope_metadata(rows, deferred_ids):
+    if deferred_ids is None:
+        return {}
+    return {'deferred_in_scope_ids': [row['id'] for row in rows
+            if deferred_ids.intersection({row['id'],
+                *(row.get('page_group') or {}).get('continuation_result_ids', [])})]}
+
+
+def _selected_result_ids(parameter='ids'):
+    """An explicit empty selection stays empty; malformed scopes never broaden."""
+    if parameter not in request.args:
+        return None
+    values = request.args.getlist(parameter)
+    if len(values) != 1:
+        raise ValueError('选中的回单编号格式无效')
+    if values[0] == '':
+        return set()
+    ids = set()
+    for value in values[0].split(','):
+        if not value.isascii() or not value.isdigit() or value.startswith('0') or len(value) > 19:
+            raise ValueError('选中的回单编号必须为正整数')
+        result_id = int(value)
+        if result_id > 9223372036854775807:
+            raise ValueError('选中的回单编号超出有效范围')
+        ids.add(result_id)
+    return ids
+
+
 @app.get("/api/results")
 def list_results():
-    limit = min(max(request.args.get("limit", 200, type=int), 1), 2000)
-    filters = {key: request.args.get(key, "") for key in (
-        "filename", "order_id", "customer", "date", "overall", "review_status",
-        "task_id", "ocr_backend",
-    )}
-    return jsonify(merge_paginated_results(
-        database.list_results(
-            limit=limit,
-            filters=filters,
-            latest_by_filename=True,
-        )
-    ))
+    return _receipt_listing(latest_by_filename=True)
+
+
+@app.get("/api/import-dates")
+def import_dates():
+    month = request.args.get("month", "")
+    try:
+        from datetime import datetime
+        parsed = datetime.strptime(month, "%Y-%m")
+        if parsed.strftime("%Y-%m") != month:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "请选择有效月份"}), 400
+    return jsonify(database.import_date_counts(month, request.args.get("ocr_backend", "")))
 
 
 @app.get("/api/history")
 def list_result_history():
-    limit = min(max(request.args.get("limit", 200, type=int), 1), 2000)
-    filters = {key: request.args.get(key, "") for key in (
-        "filename", "order_id", "customer", "date", "overall", "review_status",
-        "task_id", "ocr_backend",
-    )}
-    return jsonify(merge_paginated_results(
-        database.list_results(limit=limit, filters=filters)
-    ))
+    return _receipt_listing(latest_by_filename=False)
 
 
 @app.get("/api/results/<int:result_id>")
 def get_result(result_id: int):
     try:
-        return jsonify(_project_paginated_result(database.get_result(result_id)))
+        return jsonify(_with_review_revision(_project_paginated_result(database.get_result(result_id))))
     except KeyError:
         abort(404)
+
+
+def _review_revision(result):
+    evidence = {key: value for key, value in result.items() if key not in {'review_revision', 'ground_truth_saved'}}
+    return hashlib.sha256(json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def _with_review_revision(result):
+    return {**result, 'review_revision': _review_revision(result)}
 
 
 @app.patch("/api/results/<int:result_id>/review")
 def review_result(result_id: int):
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify(error="请提供有效的复核内容"), 400
+    if payload.get('actual_date_confirmed') is not None and not isinstance(payload['actual_date_confirmed'], bool):
+        return jsonify(error="日期确认结果必须为布尔值"), 400
+    if payload.get('signature_confirmed_match') is not None and not isinstance(payload['signature_confirmed_match'], bool):
+        return jsonify(error="签名确认结果必须为匹配或不匹配"), 400
+    seal_confirmation = payload.get('seal_confirmed_match')
+    if seal_confirmation is not None and not isinstance(seal_confirmation, bool):
+        return jsonify(error="印章确认结果必须为匹配或不匹配"), 400
+    if payload.get('save_ground_truth') and isinstance(seal_confirmation, bool) and payload.get('truth_seal_should_match') is not seal_confirmation:
+        return jsonify(error="印章真值结论与本次人工确认不一致，请核对"), 409
     try:
-        stored_current = database.get_result(result_id)
+        with database.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            stored_current = database.get_result(result_id)
+            current = _project_paginated_result(stored_current)
+            if 'review_revision' in payload and payload['review_revision'] != _review_revision(current):
+                return jsonify(error='这张回单已在其他窗口或重新识别中更新，请重新打开后核对；当前编辑尚未保存。',
+                               code='review_revision_conflict'), 409
+            updated = _apply_human_edits(current, payload)
+            review_status = str(payload.get("review_status", "待复核"))
+            final_result = str(payload.get("final_result") or updated.get("overall", "需人工复核"))
+            confirmation_error = _confirmation_error(updated, review_status, final_result)
+            if confirmation_error:
+                return jsonify(error=confirmation_error), 409
+            truth_entry = None
+            if payload.get("save_ground_truth"):
+                if review_status not in {"确认通过", "确认不通过"}:
+                    return jsonify(error="只有完成确认通过/不通过后才能保存评测真值"), 400
+                seal_should_match = payload.get("truth_seal_should_match")
+                if not isinstance(seal_should_match, bool):
+                    return jsonify(error="请选择真值中的印章是否应匹配"), 400
+                truth_entry = build_ground_truth_entry(updated, seal_should_match=seal_should_match,
+                    date_present=bool(payload.get("truth_date_present", True)))
+            result_to_store = prepare_review_payload(stored_current, updated,
+                review_status=review_status, final_result=final_result,
+                note=str(payload.get("human_note", "")), error_type=str(payload.get("error_type", "")))
+            database.review_result(result_id, result=result_to_store, review_status=review_status,
+                final_result=final_result, note=str(payload.get("human_note", "")),
+                action=str(payload.get("action", "人工复核")), error_type=str(payload.get("error_type", "")),
+                _connection=connection)
     except KeyError:
         abort(404)
-    current = _project_paginated_result(stored_current)
-    updated = _apply_human_edits(current, payload)
-    review_status = str(payload.get("review_status", "待复核"))
-    final_result = str(payload.get("final_result") or updated.get("overall", "需人工复核"))
-    confirmation_error = _confirmation_error(updated, review_status, final_result)
-    if confirmation_error:
-        return jsonify({"error": confirmation_error}), 409
-    truth_entry = None
-    if payload.get("save_ground_truth"):
-        if review_status not in {"确认通过", "确认不通过"}:
-            return jsonify({"error": "只有完成确认通过/不通过后才能保存评测真值"}), 400
-        seal_should_match = payload.get("truth_seal_should_match")
-        if not isinstance(seal_should_match, bool):
-            return jsonify({"error": "请选择真值中的印章是否应匹配"}), 400
-        try:
-            truth_entry = build_ground_truth_entry(
-                updated,
-                seal_should_match=seal_should_match,
-                date_present=bool(payload.get("truth_date_present", True)),
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-    try:
-        result_to_store = updated
-        is_paginated = bool(
-            current.get("page_group", {}).get("page_count", 0) > 1
-            and current.get("page_role") != "continuation"
-        )
-        if is_paginated:
-            override = {
-                key: updated[key]
-                for key in (
-                    "fields", "field_metadata", "product_table", "date_check",
-                    "seal_check", "review_reasons", "overall",
-                )
-                if key in updated
-            }
-            override.update(
-                review_status=review_status,
-                final_result=final_result,
-                human_note=str(payload.get("human_note", "")),
-                error_type=str(payload.get("error_type", "")),
-            )
-            result_to_store = dict(stored_current)
-            result_to_store["page_review_override"] = override
-            result_to_store["overall"] = updated.get("overall", "需人工复核")
-        reviewed = database.review_result(
-            result_id,
-            result=result_to_store,
-            review_status=review_status,
-            final_result=final_result,
-            note=str(payload.get("human_note", "")),
-            action=str(payload.get("action", "人工复核")),
-            error_type=str(payload.get("error_type", "")),
-        )
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    if current.get("page_group", {}).get("page_count", 0) > 1:
-        reviewed = _project_paginated_result(reviewed)
+    except (ValueError, TypeError, AttributeError) as exc:
+        return jsonify(error=str(exc) if isinstance(exc, ValueError) else '复核字段格式无效，请检查输入内容'), 400
+    reviewed = _project_paginated_result(database.get_result(result_id))
     if truth_entry is not None:
         change = save_ground_truth_entry(
             GROUND_TRUTH_PATH, reviewed["filename"], truth_entry
@@ -496,7 +763,7 @@ def review_result(result_id: int):
         seal_reference_matcher.refresh(
             database, load_ground_truth(GROUND_TRUTH_PATH)
         )
-    return jsonify(reviewed)
+    return jsonify(_with_review_revision(reviewed))
 
 
 @app.get("/api/results/<int:result_id>/review-history")
@@ -522,6 +789,9 @@ def result_ground_truth(result_id: int):
 
 @app.post("/api/results/<int:result_id>/retry")
 def retry_result(result_id: int):
+    payload = request.get_json(silent=True) or {}
+    if payload.get('background'):
+        return _enqueue_result_retries([result_id], payload)
     try:
         current = database.get_result(result_id)
     except KeyError:
@@ -533,6 +803,7 @@ def retry_result(result_id: int):
     preview_name = f"{token}.jpg"
     payload = request.get_json(silent=True) or {}
     try:
+        recognition_config = validate_config(payload.get("recognition_config", current.get("recognition_config")), api_enabled=analyzer.seal_api.enabled)
         ocr_backend = resolve_backend(
             str(payload.get("ocr_backend") or current.get("ocr_backend") or "auto")
         )
@@ -543,11 +814,14 @@ def retry_result(result_id: int):
         )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    result = analyzer.analyze(
+    result = _configured_analyze(
         source,
         PREVIEW_DIR / preview_name,
         artifact_dir=ARTIFACT_DIR / token,
         artifact_url_prefix=f"/files/artifacts/{token}",
+        recognition_config=recognition_config,
+        previous_fields=recognition_fields(current),
+        filename=current["filename"],
         ocr_backend=ocr_backend,
         seal_recognition_mode=seal_recognition_mode,
     )
@@ -555,53 +829,52 @@ def retry_result(result_id: int):
         filename=current["filename"], preview_url=f"/files/previews/{preview_name}",
         created_at=current["created_at"], updated_at=now_iso(),
     )
-    result = _apply_visual_seal_reference(result)
     return jsonify(database.replace_after_retry(result_id, result, preview_name))
 
 
 @app.post("/api/results/bulk-review")
 def bulk_review():
     payload = request.get_json(silent=True) or {}
-    ids = [int(item) for item in payload.get("ids", [])]
-    if not ids:
-        return jsonify({"error": "请选择回单"}), 400
+    ids = payload.get("ids") if isinstance(payload, dict) else None
+    if (not isinstance(ids, list) or not ids or len(ids) > 2000 or
+        any(type(item) is not int or item <= 0 for item in ids)):
+        return jsonify(error="请选择有效的回单记录"), 400
+    ids = list(dict.fromkeys(ids))
     review_status = str(payload.get("review_status", "待复核"))
-    requested_final = str(payload.get("final_result", ""))
-    current_items = []
+    requested_final = str(payload.get("final_result") or "")
     try:
-        for result_id in ids:
-            current_items.append((result_id, _project_paginated_result(database.get_result(result_id))))
+        with database.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            current_items = []
+            invalid = []
+            for result_id in ids:
+                stored = database.get_result(result_id)
+                current = _project_paginated_result(stored)
+                final_result = requested_final or str(current.get("overall", ""))
+                error = _confirmation_error(current, review_status, final_result)
+                if error:
+                    invalid.append({"id": result_id, "filename": current.get("filename", ""), "reason": error})
+                current_items.append((result_id, stored, current, final_result))
+            if invalid:
+                return jsonify(error="部分回单的日期或印章证据不完整，不能批量确认通过", invalid=invalid), 409
+            for result_id, stored, current, final_result in current_items:
+                note = str(payload.get("human_note", ""))
+                reviewed = prepare_review_payload(stored, current, review_status=review_status,
+                                                   final_result=final_result, note=note)
+                database.review_result(result_id, result=reviewed, review_status=review_status,
+                    final_result=final_result, note=note, action="批量确认", _connection=connection)
     except KeyError:
-        return jsonify({"error": "选中的回单不存在"}), 404
-    invalid = []
-    for result_id, current in current_items:
-        final_result = requested_final or str(current.get("overall", ""))
-        error = _confirmation_error(current, review_status, final_result)
-        if error:
-            invalid.append({"id": result_id, "filename": current.get("filename", ""), "reason": error})
-    if invalid:
-        return jsonify({
-            "error": "部分回单的日期或印章证据不完整，不能批量确认通过",
-            "invalid": invalid,
-        }), 409
-    output = []
-    for result_id, current in current_items:
-        update = {
-            "review_status": review_status,
-            "final_result": requested_final or current.get("overall", ""),
-            "human_note": payload.get("human_note", ""),
-            "action": "批量确认",
-        }
-        output.append(database.review_result(
-            result_id, result=current, review_status=update["review_status"],
-            final_result=update["final_result"], note=update["human_note"], action=update["action"],
-        ))
-    return jsonify(output)
+        return jsonify(error="选中的回单不存在"), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify([_project_paginated_result(database.get_result(result_id)) for result_id in ids])
 
 
 @app.post("/api/results/bulk-retry")
 def bulk_retry():
     payload = request.get_json(silent=True) or {}
+    if payload.get('background'):
+        return _enqueue_result_retries(payload.get('ids'), payload)
     output = []
     for raw_id in payload.get("ids", []):
         result_id = int(raw_id)
@@ -620,19 +893,50 @@ def bulk_retry():
                 or current.get("seal_recognition_mode")
                 or (current.get("seal_check") or {}).get("recognition_mode")
             )
-            result = analyzer.analyze(
+            result = _configured_analyze(
                 source, PREVIEW_DIR / preview_name,
                 artifact_dir=ARTIFACT_DIR / token,
                 artifact_url_prefix=f"/files/artifacts/{token}",
+                recognition_config=payload.get("recognition_config", current.get("recognition_config")),
+                previous_fields=recognition_fields(current),
+                filename=current["filename"],
                 ocr_backend=ocr_backend,
                 seal_recognition_mode=seal_recognition_mode,
             )
             result.update(filename=current["filename"], preview_url=f"/files/previews/{preview_name}")
-            result = _apply_visual_seal_reference(result)
             output.append({"id": result_id, "ok": True, "result": database.replace_after_retry(result_id, result, preview_name)})
         except Exception as exc:
             output.append({"id": result_id, "ok": False, "error": str(exc)})
     return jsonify(output)
+
+
+def _enqueue_result_retries(ids, payload):
+    if (not isinstance(ids, list) or not ids or len(ids) > 2000 or
+        any(type(i) is not int or i <= 0 for i in ids)):
+        return jsonify(error='请选择有效的回单记录'), 400
+    ids = list(dict.fromkeys(ids))
+    options = {}
+    try:
+        for result_id in ids:
+            current = database.get_result(result_id)
+            source = _source_for_record(current)
+            if source is None or not source.is_file():
+                return jsonify(error=f"原始图片不存在：{current['filename']}"), 409
+            options[result_id] = {
+                'recognition_config': validate_config(payload.get('recognition_config', current.get('recognition_config')),
+                    api_enabled=analyzer.seal_api.enabled),
+                'ocr_backend': resolve_backend(str(payload.get('ocr_backend') or current.get('ocr_backend') or 'auto')),
+                'seal_recognition_mode': resolve_seal_recognition_mode(
+                    payload.get('seal_recognition_mode') or current.get('seal_recognition_mode') or 'local'),
+                '_stored_name': f'sample:{source.name}' if source.parent.resolve() == DATA_DIR.resolve() else current['stored_name'],
+            }
+        task = job_store.create_retries(uuid.uuid4().hex, ids, options)
+    except KeyError:
+        return jsonify(error='选中的回单不存在'), 404
+    except (ValueError, RuntimeError) as exc:
+        return jsonify(error=str(exc)), 409
+    _wake_jobs()
+    return jsonify(task), 202
 
 
 @app.get("/api/report")
@@ -654,11 +958,9 @@ def report():
     if requested_backend and not machine_results:
         machine_results = all_machine_results
         requested_backend = ""
-    results = merge_paginated_results(database.list_results(
-        limit=5000,
-        filters={"ocr_backend": requested_backend},
-        latest_by_filename=True,
-    ))
+    results = database.query_receipts(
+        filters={"ocr_backend": requested_backend}, latest_by_filename=True,
+    )["items"]
     accuracy = evaluate_results(
         machine_results, truth
     )
@@ -683,17 +985,8 @@ def report():
 
 @app.get("/api/export.xlsx")
 def export_excel():
-    filters = {key: request.args.get(key, "") for key in (
-        "filename", "order_id", "customer", "date", "overall", "review_status",
-        "task_id", "ocr_backend",
-    )}
-    results = merge_paginated_results(
-        database.list_results(
-            limit=5000,
-            filters=filters,
-            latest_by_filename=True,
-        )
-    )
+    filters = {key: request.args.get(key, "") for key in RESULT_FILTERS}
+    results = database.query_receipts(filters=filters, latest_by_filename=True)["items"]
     all_machine_results = database.list_original_results(
         limit=5000, completed_tasks_only=True
     )
@@ -738,6 +1031,38 @@ def export_excel():
     return send_file(output_path, as_attachment=True, download_name="三星回单识别结果.xlsx")
 
 
+@app.get("/files/selected-seal/<int:result_id>.png")
+def selected_seal_preview(result_id: int):
+    try:
+        item = _project_paginated_result(database.get_result(result_id))
+        revision = request.args.get("revision")
+        if revision and revision != _review_revision(item):
+            abort(409)
+        check = item.get("seal_check") or {}
+        physical = item
+        source_page = check.get("source_page")
+        if source_page and source_page != item.get("filename"):
+            group = item.get("page_group") or {}
+            footer_id = group.get("footer_result_id")
+            if footer_id not in (group.get("continuation_result_ids") or []):
+                abort(404)
+            physical = database.get_result(footer_id)
+            if physical.get("filename") != source_page:
+                abort(404)
+        source = _source_for_record(physical)
+        if source is None:
+            abort(404)
+        source = source.resolve()
+        if not any(source.is_relative_to(root.resolve()) for root in (UPLOAD_DIR, DATA_DIR)):
+            abort(404)
+        preview = render_selected_seal(source, check)
+    except (KeyError, OSError, ValueError):
+        abort(404)
+    response = send_file(preview, mimetype="image/png", max_age=0)
+    response.cache_control.no_store = True
+    return response
+
+
 @app.get("/files/<kind>/<path:name>")
 def files(kind: str, name: str):
     directory = {"previews": PREVIEW_DIR, "uploads": UPLOAD_DIR, "artifacts": ARTIFACT_DIR}.get(kind)
@@ -746,128 +1071,20 @@ def files(kind: str, name: str):
     return send_from_directory(directory, name)
 
 
-def _confirmation_error(result: dict, review_status: str, final_result: str) -> str:
-    """Reject a human 'pass' when the auditable evidence is still incomplete."""
-    if review_status != "确认通过" and final_result != "通过":
-        return ""
-    date_check = result.get("date_check") or {}
-    seal_check = result.get("seal_check") or {}
-    missing = []
-    if not (
-        date_check.get("actual")
-        and date_check.get("status") == "匹配"
-        and date_check.get("reliable") is True
-    ):
-        missing.append("实际收货日期尚未可靠识别或与要求到货日期不一致")
-    if not (
-        seal_check.get("recognized")
-        and seal_check.get("status") == "匹配"
-        and seal_check.get("reliable") is True
-    ):
-        missing.append("印章内容尚未可靠识别或与签章要求不一致")
-    if result.get("overall") != "通过" and not missing:
-        missing.append("整体核验结论尚未达到通过条件")
-    if not missing:
-        return ""
-    return "确认通过前请补全并核对：" + "；".join(missing)
-
-
-def _apply_human_edits(current: dict, payload: dict) -> dict:
-    fields = dict(current.get("fields", {}))
-    metadata = dict(current.get("field_metadata", {}))
-    for name, value in (payload.get("fields") or {}).items():
-        value = str(value).strip()
-        previous = fields.get(name, "")
-        fields[name] = value
-        if value != previous:
-            meta = dict(metadata.get(name, {}))
-            meta.update(original=meta.get("original", previous), value=value, confidence=1.0, low_confidence=False, source="人工复核")
-            metadata[name] = meta
-    current["fields"] = fields
-    current["field_metadata"] = metadata
-
-    table = current.get("product_table") or {}
-    table_rows = table.get("rows") or []
-    columns = set(table.get("columns") or [])
-    for edit in payload.get("product_rows") or []:
-        row_index = int(edit.get("row", -1))
-        column = str(edit.get("column", ""))
-        if row_index < 0 or row_index >= len(table_rows) or column not in columns:
-            continue
-        detail = table_rows[row_index]
-        value = str(edit.get("value", "")).strip()
-        previous = str(detail.get("values", {}).get(column, ""))
-        if value == previous:
-            continue
-        detail.setdefault("original_values", {}).setdefault(column, previous)
-        detail.setdefault("values", {})[column] = value
-        detail.setdefault("confidences", {})[column] = 1.0
-        detail.setdefault("sources", {})[column] = "人工复核"
-        detail["low_confidence_columns"] = [
-            name for name in detail.get("low_confidence_columns", []) if name != column
-        ]
-        scores = [score for name, score in detail["confidences"].items() if detail["values"].get(name)]
-        detail["row_confidence"] = round(sum(scores) / max(1, len(scores)), 3)
-    if table_rows:
-        scores = [
-            score for detail in table_rows for name, score in detail.get("confidences", {}).items()
-            if detail.get("values", {}).get(name)
-        ]
-        table["confidence"] = round(sum(scores) / max(1, len(scores)), 3)
-        current["product_table"] = table
-        fields["商品明细原文"] = product_table_text(table)
-        table_meta = dict(metadata.get("商品明细原文", {}))
-        table_meta.update(
-            value=fields["商品明细原文"],
-            confidence=table["confidence"],
-            low_confidence=table["confidence"] < LOW_CONFIDENCE_THRESHOLD,
-            source="商品表格按列识别 + 人工复核",
-        )
-        metadata["商品明细原文"] = table_meta
-
-    actual = str(payload.get("actual_date", current.get("date_check", {}).get("actual", ""))).strip()
-    actual_date = parse_date(actual)
-    date_check = compare_dates(fields.get("要求到货", ""), actual_date)
-    date_check.update(confidence=1.0 if actual_date else 0.0, reliable=bool(actual_date), source="人工复核")
-    current["date_check"] = date_check
-
-    seal_text = str(payload.get("seal_text", current.get("seal_check", {}).get("recognized", ""))).strip()
-    seal_check = compare_seal_text(fields.get("签章要求", ""), [seal_text] if seal_text else [])
-    human_seal_match = payload.get("truth_seal_should_match")
-    if isinstance(human_seal_match, bool) and seal_text:
-        seal_check.update(
-            status="匹配" if human_seal_match else "不匹配",
-            message=(
-                "人工复核确认印章与签章要求一致"
-                if human_seal_match else "人工复核确认印章与签章要求不一致"
-            ),
-            score=1.0,
-            human_confirmed_match=human_seal_match,
-        )
-    seal_check.update(confidence=1.0 if seal_text else 0.0, reliable=bool(seal_text), source="人工复核", backend="人工复核")
-    current["seal_check"] = seal_check
-
-    if date_check["status"] == "不匹配" or seal_check["status"] == "不匹配":
-        current["overall"] = "不通过"
-    elif date_check["status"] == "匹配" and seal_check["status"] == "匹配":
-        current["overall"] = "通过"
-    else:
-        current["overall"] = "需人工复核"
-    current["review_reasons"] = [] if current["overall"] != "需人工复核" else ["人工复核信息尚不完整"]
-    return current
-
-
 def _project_paginated_result(item: dict) -> dict:
     """Return one logical receipt when ``item`` is a paginated cover."""
+    # Backfill the display-only signature comparison for records created
+    # before the explicit signature evidence field was introduced.
+    item["signature_check"] = derive_signature_check(
+        item.get("fields") or {}, item.get("signature_check")
+    )
     page_group = item.get("page_group") or {}
     if page_group.get("page_count", 0) <= 1 or item.get("page_role") == "continuation":
         return item
     task_id = str(item.get("task_id") or "")
     if not task_id:
         return item
-    projected = merge_paginated_results(
-        database.list_results(limit=5000, filters={"task_id": task_id})
-    )
+    projected = database.query_receipts(filters={"task_id": task_id})["items"]
     return next((row for row in projected if int(row.get("id") or 0) == int(item.get("id") or 0)), item)
 
 
@@ -882,10 +1099,12 @@ def _source_for_record(item: dict) -> Path | None:
     return fallback if fallback.is_file() else None
 
 
-initialize()
-
-
 if __name__ == "__main__":
+    # Werkzeug's reloader parent must not keep an old queue worker alive while
+    # serving children restart with new code.
+    if os.getenv('FLASK_DEBUG', '0') == '1' and os.getenv('WERKZEUG_RUN_MAIN') != 'true':
+        app.config['BACKGROUND_WORKER'] = False
+    initialize()
     app.run(
         host=os.getenv("APP_HOST", "127.0.0.1"),
         port=int(os.getenv("APP_PORT", "5001")),

@@ -3,10 +3,32 @@ from pathlib import Path
 from PIL import Image
 
 from receipt_ocr import paddle_ocr
+import pytest
 
 
 class FakeResult(dict):
     pass
+
+
+def test_prediction_failure_releases_lock_and_records_inference(tmp_path, monkeypatch):
+    from receipt_ocr.execution import recognition_run
+    source = tmp_path / 'input.png'
+    Image.new('RGB', (40, 20), 'white').save(source)
+    class Failing:
+        def predict(self, **kw):
+            raise RuntimeError('native prediction failed')
+    monkeypatch.setattr(paddle_ocr, '_line_recognizer', lambda variant: Failing())
+
+    @recognition_run
+    def run():
+        with pytest.raises(RuntimeError):
+            paddle_ocr.recognize_line(source)
+        assert not paddle_ocr._PREDICT_LOCK.locked()
+        return {}
+
+    steps = run()['processing_timings']['steps']
+    assert steps['paddle_line_inference']['calls'] == 1
+    assert steps['paddle_queue_wait']['calls'] == 1
 
 
 class FakePipeline:

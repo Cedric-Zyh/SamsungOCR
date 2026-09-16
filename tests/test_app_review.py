@@ -125,6 +125,40 @@ def test_confirm_pass_rejects_missing_date_and_seal_evidence(tmp_path, monkeypat
     assert test_database.history(result_id) == []
 
 
+def test_date_mismatch_stays_pending_until_human_confirms_rejection(tmp_path, monkeypatch):
+    test_database = Database(tmp_path / "results.db")
+    test_database.initialize()
+    monkeypatch.setattr(app_module, "database", test_database)
+    result = sample_result("date-mismatch.jpg")
+    result.update(
+        fields={"要求到货": "2026-02-02", "签章要求": "测试收货章"},
+        field_metadata={},
+        date_check={"required": "2026-02-02", "actual": "2026-02-01", "status": "不匹配", "reliable": True},
+        seal_check={"recognized": "测试收货章", "status": "匹配", "reliable": True},
+        overall="需人工复核", final_result="需人工复核", review_status="待复核",
+    )
+    result_id = test_database.insert_result(
+        filename=result["filename"], stored_name="sample:date-mismatch.jpg",
+        preview_name="date-mismatch.jpg", task_id="", result=result,
+    )
+    client = app_module.app.test_client()
+
+    machine = client.get(f"/api/results/{result_id}").get_json()
+    assert machine["review_status"] == "待复核"
+    assert machine["final_result"] == "需人工复核"
+
+    response = client.patch(f"/api/results/{result_id}/review", json={
+        "fields": result["fields"], "actual_date": "2026-02-01",
+        "actual_date_confirmed": True, "seal_text": "测试收货章",
+        "seal_confirmed_match": True, "review_status": "确认不通过",
+        "final_result": "不通过",
+    })
+    assert response.status_code == 200
+    reviewed = response.get_json()
+    assert reviewed["review_status"] == "确认不通过"
+    assert reviewed["final_result"] == reviewed["overall"] == "不通过"
+
+
 def test_results_show_latest_receipt_once_while_history_retains_prior_runs(
     tmp_path, monkeypatch
 ):
@@ -279,6 +313,7 @@ def test_confirmed_review_can_create_audited_ground_truth(tmp_path, monkeypatch)
         "actual_date": "2025-01-05", "seal_text": "测试客户收货章",
         "review_status": "确认通过", "final_result": "通过",
         "save_ground_truth": True, "truth_seal_should_match": True,
+        "actual_date_confirmed": True,
         "human_note": "人工逐项核对",
     }
     client = app_module.app.test_client()

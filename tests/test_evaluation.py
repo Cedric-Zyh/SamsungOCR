@@ -131,6 +131,22 @@ def test_backend_comparison_keeps_backends_separate():
     assert comparison["paddle"]["field_accuracy"] == 1
     assert comparison["vision"]["field_accuracy"] == 0
     assert comparison["paddle"]["average_seconds"] == 20
+    assert comparison["paddle"]["timed_samples"] == 1
+    for metrics in comparison.values():
+        assert metrics["field_total"] == 1
+        assert metrics["product_cell_total"] == 0
+        assert metrics["date_total"] == 1
+        assert metrics["seal_total"] == 1
+
+
+def test_backend_report_exposes_zero_denominators_for_unlabeled_results():
+    metrics = evaluate_backends([
+        {"id": 1, "filename": "unlabeled.jpg", "ocr_backend": "vision"}
+    ], {})[0]
+    assert metrics["samples"] == 0
+    assert metrics["timed_samples"] == 0
+    for name in ("field_total", "product_cell_total", "date_total", "seal_total"):
+        assert metrics[name] == 0
 
 
 def test_safe_decision_metrics_separate_abstention_from_wrong_decision():
@@ -165,3 +181,28 @@ def test_safe_decision_metrics_separate_abstention_from_wrong_decision():
     assert accuracy["seal_conclusion_accuracy"] == 0.5
     assert accuracy["seal_decision_coverage"] == 0.5
     assert accuracy["seal_decision_accuracy"] == 1
+
+
+def test_legacy_truth_reports_missing_new_fields_without_inventing_labels():
+    from receipt_ocr.field_schema import OUTPUT_FIELDS
+    fields = {name: '正确' for name in GROUND_TRUTH_FIELDS}
+    truth = {'sample.jpg': {'fields': fields, 'actual_date': '2025-01-05', 'seal_should_match': True}}
+    result = {'id': 1, 'filename': 'sample.jpg', 'field_schema_version': 1,
+              'fields': {name: fields.get(name, '') for name in OUTPUT_FIELDS},
+              'date_check': {'actual': '2025-01-05'}, 'seal_check': {'status': '匹配'}}
+    accuracy = evaluate_results([result], truth)
+    assert accuracy['field_accuracy'] == 1
+    assert accuracy['field_total'] == 3
+    coverage = accuracy['field_coverage']
+    assert set(coverage['evaluated_fields']) == {'客户名称', '要求到货', '签章要求'}
+    assert coverage['separately_evaluated_fields'] == ['签收日期']
+    assert set(coverage['unlabeled_fields']) == {'仓库联系人', '仓库接收人', '实收数量', '拒收数量', '合计数量'}
+
+
+def test_explicitly_labeled_blank_fields_count_as_evaluated():
+    truth = {'sample.jpg': {'fields': {'拒收数量': ''}, 'actual_date': '', 'date_present': False}}
+    result = {'filename': 'sample.jpg', 'field_schema_version': 1, 'fields': {'拒收数量': ''}}
+    metrics = evaluate_results([result], truth)
+    assert metrics['field_correct'] == 1
+    assert '拒收数量' in metrics['field_coverage']['evaluated_fields']
+    assert '拒收数量' not in metrics['field_coverage']['unlabeled_fields']

@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable
 
 from .ocr_types import TextObservation
+from .execution import measure
 
 
 # Intel/OpenMP may try to allocate a shared-memory control segment while
@@ -25,6 +27,18 @@ _PIPELINES = {}
 _LINE_RECOGNIZERS = {}
 _PIPELINE_LOCK = threading.Lock()
 _PREDICT_LOCK = threading.Lock()
+
+
+@contextmanager
+def _prediction_slot():
+    # Keep the native predictor serialized, but expose waiting separately from
+    # model loading and actual inference. Always release on a failed predict.
+    with measure('paddle_queue_wait'):
+        _PREDICT_LOCK.acquire()
+    try:
+        yield
+    finally:
+        _PREDICT_LOCK.release()
 
 
 def server_max_side() -> int:
@@ -108,11 +122,17 @@ def recognize_line(
     detector can merge or clip that line before recognition, so this path feeds
     the whole date line directly to the same PP-OCR recognition model.
     """
+    from .recognition_scope import provider_allowed
+    if not provider_allowed('paddle_server' if model_variant == 'server' else 'paddle'):
+        return []
     path = Path(image_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
-    with _PREDICT_LOCK:
-        results = list(_line_recognizer(model_variant).predict(input=str(path)))
+    with _prediction_slot():
+        with measure('paddle_model_setup'):
+            recognizer = _line_recognizer(model_variant)
+        with measure('paddle_line_inference'):
+            results = list(recognizer.predict(input=str(path)))
     output: list[TextObservation] = []
     for result in results:
         text = str(result.get("rec_text", "")).strip()
@@ -142,6 +162,9 @@ def recognize_text(
 ) -> list[TextObservation]:
     """Run local PP-OCRv5 and return top-left normalized text boxes."""
     del languages, fast, custom_words, language_correction  # Common backend interface.
+    from .recognition_scope import provider_allowed
+    if not provider_allowed('paddle_server' if model_variant == 'server' else 'paddle'):
+        return []
     path = Path(image_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -174,8 +197,11 @@ def recognize_text(
     # The Paddle pipeline object is reused to avoid repeated model loading, while
     # inference is serialized because the native predictor is not thread-safe.
     try:
-        with _PREDICT_LOCK:
-            results = list(_pipeline(model_variant).predict(input=str(inference_path)))
+        with _prediction_slot():
+            with measure('paddle_model_setup'):
+                pipeline = _pipeline(model_variant)
+            with measure('paddle_text_inference'):
+                results = list(pipeline.predict(input=str(inference_path)))
     finally:
         if temporary is not None:
             temporary.cleanup()

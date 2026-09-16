@@ -1,0 +1,17 @@
+/* Keep cached application templates connected to the complete review theme. */
+@import url("./review_archive.css?v=20260910-check-summary");
+
+.review-image-feedback { display:flex; min-height:240px; margin:0; padding:30px 20px; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+.review-image-feedback strong { color:#34465f; font-size:14px; font-weight:600; }
+.review-image-feedback p { margin:0; max-width:300px; line-height:1.7; }
+.review-image-feedback-mark { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:#e6edf6; color:#63748c; }
+.review-image-feedback-mark::before { content:'·'; font-size:24px; line-height:1; }
+[data-image-state="loading"] .review-image-feedback-mark { width:26px; height:26px; background:transparent; border:3px solid #dce5f0; border-top-color:var(--brand); animation:review-preview-loading .85s linear infinite; }
+[data-image-state="loading"] .review-image-feedback-mark::before { content:''; }
+[data-image-state="error"] .review-image-feedback-mark::before { content:'!'; font-size:17px; font-weight:700; }
+.review-image-feedback-actions { display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; }
+.review-image-feedback-actions button { font-size:12px; }
+[data-image-state="loading"],[data-image-state="error"],[data-image-state="empty"] { cursor:default; }
+[data-focus-image][aria-pressed="true"] { border-color:#b3c9e8; background:#eaf2ff; color:#245590; }
+@keyframes review-preview-loading { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { [data-image-state="loading"] .review-image-feedback-mark { animation:none; } }

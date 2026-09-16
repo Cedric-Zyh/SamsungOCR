@@ -25,7 +25,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    app_module.initialize()
+    app_module.initialize(start_worker=False)
     query = {}
     if args.task_id:
         query["task_id"] = args.task_id

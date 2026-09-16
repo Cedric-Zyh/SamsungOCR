@@ -1,0 +1,170 @@
+[
+  {
+    "filename": "7284571207_01.jpg",
+    "size": [
+      2468,
+      3588
+    ],
+    "sharpness": 4558.621,
+    "color_ratio": 0.007491,
+    "expected_type": "product_continuation",
+    "product_rows": 0,
+    "expected_row_count": 34,
+    "category": "商品续页",
+    "sha256": "a76f305af6efefbf1e3d6e2f0a562cda7dc737ef7a06e7b2d0b30c73d51be98a"
+  },
+  {
+    "filename": "7284571207.jpg",
+    "size": [
+      2473,
+      3573
+    ],
+    "sharpness": 5418.796,
+    "color_ratio": 0.002899,
+    "expected_type": "receipt",
+    "product_rows": 0,
+    "expected_row_count": 33,
+    "category": "密集分页首页",
+    "sha256": "f58f1ce9cbdd37ad894393df867eb6f56eb5ddcb8de24b063a0fe7118801a052"
+  },
+  {
+    "filename": "7295149808_01.jpg",
+    "size": [
+      2469,
+      3589
+    ],
+    "sharpness": 2834.753,
+    "color_ratio": 0.016616,
+    "expected_type": "warehouse_authorization",
+    "product_rows": 0,
+    "expected_row_count": null,
+    "category": "委托书",
+    "sha256": "10b14f2b8d59324d75485222d18f26b82c45fdc2cd09f17b033637209dd03e25"
+  },
+  {
+    "filename": "7268377010.jpg",
+    "size": [
+      1653,
+      2406
+    ],
+    "sharpness": 4378.553,
+    "color_ratio": 0.004686,
+    "expected_type": "receipt",
+    "product_rows": 5,
+    "expected_row_count": null,
+    "category": "商品行数较多",
+    "sha256": "46c713f7c3a94238cb49a4e6eab38f92346964ffe17ee7a61360aa1d899d12a4"
+  },
+  {
+    "filename": "7266274552.jpg",
+    "size": [
+      1648,
+      2394
+    ],
+    "sharpness": 4782.98,
+    "color_ratio": 0.005628,
+    "expected_type": "receipt",
+    "product_rows": 4,
+    "expected_row_count": null,
+    "category": "商品行数较多",
+    "sha256": "cd67c81b28c95671d23b88b2a356c2bcb8d8e9e1f5e02d1f88d1d8cfafa5de8a"
+  },
+  {
+    "filename": "7267503641.jpg",
+    "size": [
+      1650,
+      2380
+    ],
+    "sharpness": 4352.891,
+    "color_ratio": 0.008694,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "较低原图分辨率",
+    "sha256": "6e7358dd75dd145dbedcf66b5c72aa321d557387eafe9aca8a9db34bd445155c"
+  },
+  {
+    "filename": "7267130988.jpg",
+    "size": [
+      1647,
+      2381
+    ],
+    "sharpness": 4354.052,
+    "color_ratio": 0.008562,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "较低原图分辨率",
+    "sha256": "b0e02899d1bdffdb3561da68c682aaef113a76d6cfa853266665721dd51702f5"
+  },
+  {
+    "filename": "7276798826.jpg",
+    "size": [
+      2474,
+      3579
+    ],
+    "sharpness": 3312.967,
+    "color_ratio": 0.008565,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "低边缘清晰度代理",
+    "sha256": "66bb5154b27ff37e9bca3652238e1862bd42fdff2f05298c3481bcb4980ff45b"
+  },
+  {
+    "filename": "7311558827.jpg",
+    "size": [
+      2481,
+      3597
+    ],
+    "sharpness": 3417.113,
+    "color_ratio": 0.004495,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "低边缘清晰度代理",
+    "sha256": "3925fe574fb18b2953d44a0ff407b083ceb3ccf345f218733e9e22445425ef87"
+  },
+  {
+    "filename": "7305680939.jpg",
+    "size": [
+      2480,
+      3598
+    ],
+    "sharpness": 4838.157,
+    "color_ratio": 0.043428,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "彩色墨迹较多",
+    "sha256": "65dc7d78d9d66f753f0f8b96cf60fb47974a337e8c6dfb5c12b1e7bf1dace477"
+  },
+  {
+    "filename": "7299677690.jpg",
+    "size": [
+      2484,
+      3586
+    ],
+    "sharpness": 4520.174,
+    "color_ratio": 0.031338,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "彩色墨迹较多",
+    "sha256": "53b46350bb719dc065a120396bdb4ac5d0da5701686797c2946e381bb1b30eee"
+  },
+  {
+    "filename": "7305098425.jpg",
+    "size": [
+      2483,
+      2742
+    ],
+    "sharpness": 5203.153,
+    "color_ratio": 0.006542,
+    "expected_type": "receipt",
+    "product_rows": 1,
+    "expected_row_count": null,
+    "category": "高边缘清晰度代理",
+    "sha256": "bbe79bc660dad8712811a49bd8c1eb044b2fba91ce86ea5b4aca64f4599e01a3"
+  }
+]

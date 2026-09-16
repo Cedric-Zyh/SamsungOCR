@@ -34,6 +34,26 @@ def test_windows_defaults_to_paddle(monkeypatch):
     assert ocr_backends.default_backend() == "paddle"
 
 
+@pytest.mark.parametrize("configured", ["auto", " AUTO "])
+@pytest.mark.parametrize("system, expected", [("Darwin", "hybrid"), ("Windows", "paddle")])
+def test_auto_environment_uses_available_default(monkeypatch, configured, system, expected):
+    monkeypatch.setenv("OCR_BACKEND", configured)
+    monkeypatch.setattr(ocr_backends, "backend_catalog", lambda: AVAILABLE)
+    monkeypatch.setattr(ocr_backends.platform, "system", lambda: system)
+
+    assert ocr_backends.default_backend() == expected
+    assert ocr_backends.resolve_backend(None) == expected
+    assert ocr_backends.resolve_backend("auto") == expected
+
+
+def test_explicit_environment_backend_still_overrides_platform_default(monkeypatch):
+    monkeypatch.setenv("OCR_BACKEND", "paddle_server")
+    monkeypatch.setattr(ocr_backends, "backend_catalog", lambda: AVAILABLE)
+    monkeypatch.setattr(ocr_backends.platform, "system", lambda: "Darwin")
+
+    assert ocr_backends.default_backend() == "paddle_server"
+
+
 def test_windows_catalog_never_exposes_macos_vision(monkeypatch):
     def fake_find_spec(name):
         return object() if name in {"Vision", "paddle", "paddleocr"} else None

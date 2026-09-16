@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from .execution import timed
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ def _read_image(path: str | Path) -> np.ndarray:
     return image
 
 
+@timed('qr_decode')
 def decode_qr(path: str | Path) -> str:
     image = _read_image(path)
     text, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
@@ -490,6 +492,7 @@ def extract_region_text(
     return "".join(text for _, _, text in sorted(texts))
 
 
+@timed('preview_generation')
 def annotate_image(
     source: str | Path,
     destination: str | Path,
@@ -663,6 +666,7 @@ def save_region_crop(
     encoded.tofile(str(destination))
 
 
+@timed('date_crop_generation')
 def save_receipt_date_crop(
     source: str | Path,
     destination: str | Path,

@@ -16,7 +16,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True, help="JSON 输出路径")
     args = parser.parse_args()
 
-    app_module.initialize()
+    app_module.initialize(start_worker=False)
     response = app_module.app.test_client().get(
         "/api/report", query_string={"ocr_backend": args.backend}
     )

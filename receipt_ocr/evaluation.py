@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .ocr_backends import backend_label
 from .parser import PRODUCT_COLUMNS, normalize_text
+from .field_schema import OUTPUT_FIELDS
 
 
 GROUND_TRUTH_FIELDS = (
@@ -28,8 +29,10 @@ def build_ground_truth_entry(
 ) -> dict:
     """Build a strict, reviewable truth row from the current human-confirmed result."""
     fields = result.get("fields") or {}
-    truth_fields = {name: str(fields.get(name, "")).strip() for name in GROUND_TRUTH_FIELDS}
-    missing = [name for name, value in truth_fields.items() if not value]
+    names = OUTPUT_FIELDS if result.get("field_schema_version") else GROUND_TRUTH_FIELDS
+    truth_fields = {name: str(fields.get(name, "")).strip() for name in names}
+    required = {"客户名称", "要求到货", "签章要求"} if result.get("field_schema_version") else set(names)
+    missing = [name for name, value in truth_fields.items() if name in required and not value]
     if missing:
         raise ValueError(f"评测真值缺少字段：{'、'.join(missing)}")
 
@@ -48,7 +51,7 @@ def build_ground_truth_entry(
         if row_missing:
             raise ValueError(f"商品第 {index} 行真值缺少：{'、'.join(row_missing)}")
         product_rows.append(row)
-    if not product_rows:
+    if not product_rows and not result.get("field_schema_version"):
         raise ValueError("评测真值至少需要一行商品明细")
 
     return {
@@ -104,6 +107,8 @@ def evaluate_results(results: list[dict], ground_truth: dict) -> dict:
         issues = []
         fields = result.get("fields", {})
         for name, expected in truth.get("fields", {}).items():
+            if result.get("field_schema_version") and name not in OUTPUT_FIELDS:
+                continue
             field_total += 1
             field_stats.setdefault(name, Counter())["total"] += 1
             actual = fields.get(name, "")
@@ -224,6 +229,19 @@ def evaluate_results(results: list[dict], ground_truth: dict) -> dict:
         }
         for name in PRODUCT_COLUMNS if product_stats.get(name, Counter())["total"]
     ]
+    labeled_fields = {name for truth in ground_truth.values() for name in truth.get("fields", {})}
+    separately_evaluated = ["签收日期"] if any("actual_date" in truth for truth in ground_truth.values()) else []
+    field_coverage = {
+        "output_fields": list(OUTPUT_FIELDS),
+        "evaluated_fields": [name for name in OUTPUT_FIELDS if field_stats.get(name, {}).get("total", 0)],
+        "separately_evaluated_fields": separately_evaluated,
+        "unlabeled_fields": [name for name in OUTPUT_FIELDS if name not in labeled_fields and name not in separately_evaluated],
+        "by_field": [{
+            "field": name,
+            "labeled_samples": sum(name in truth.get("fields", {}) for truth in ground_truth.values()),
+            "evaluated_samples": field_stats.get(name, {}).get("total", 0),
+        } for name in OUTPUT_FIELDS],
+    }
     return {
         "tested_samples": len(latest),
         "ground_truth_samples": len(ground_truth),
@@ -231,6 +249,7 @@ def evaluate_results(results: list[dict], ground_truth: dict) -> dict:
         "field_correct": field_correct,
         "field_total": field_total,
         "field_by_name": by_field,
+        "field_coverage": field_coverage,
         "product_cell_accuracy": _ratio(product_cell_correct, product_cell_total),
         "product_cell_correct": product_cell_correct,
         "product_cell_total": product_cell_total,
@@ -289,14 +308,19 @@ def evaluate_backends(results: list[dict], ground_truth: dict) -> list[dict]:
             "label": backend_label(backend),
             "samples": metrics["tested_samples"],
             "field_accuracy": metrics["field_accuracy"],
+            "field_total": metrics["field_total"],
             "product_cell_accuracy": metrics["product_cell_accuracy"],
+            "product_cell_total": metrics["product_cell_total"],
             "date_accuracy": metrics["date_accuracy"],
+            "date_total": metrics["date_total"],
             "date_decision_coverage": metrics["date_decision_coverage"],
             "date_decision_accuracy": metrics["date_decision_accuracy"],
             "seal_conclusion_accuracy": metrics["seal_conclusion_accuracy"],
+            "seal_total": metrics["seal_total"],
             "seal_decision_coverage": metrics["seal_decision_coverage"],
             "seal_decision_accuracy": metrics["seal_decision_accuracy"],
             "average_seconds": round(sum(seconds) / len(seconds), 2) if seconds else 0.0,
+            "timed_samples": len(seconds),
         })
     return sorted(output, key=lambda item: (order.get(item["backend"], 99), item["backend"]))
 
