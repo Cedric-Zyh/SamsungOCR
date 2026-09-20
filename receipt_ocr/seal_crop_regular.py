@@ -15,6 +15,7 @@ from .image_processing import (
     save_rectangular_seal_code_line,
     save_region_crop,
     save_round_seal_type_band,
+    round_seal_type_band_box,
     save_unwrapped_seal,
     seal_region_is_rectangular,
 )
@@ -101,6 +102,7 @@ def _collect_primary_region_evidence(
         }
     evidence.round_type_band = None
     evidence.round_type_band_texts = []
+    type_band_focus_box = None
     # Keep the horizontal stamp-type row as a first-class v6 input. The
     # circular company name remains read from the polar-unwrapped image below;
     # this band prevents the two geometries from competing in one detector.
@@ -111,11 +113,16 @@ def _collect_primary_region_evidence(
             # been put into its detected text orientation.  Otherwise the
             # lower slice can contain an arbitrary arc of the company name.
             band_source = evidence.color_isolated_oriented or evidence.color_isolated
+            type_band_focus_box = evidence.orientation.get("oriented_type_row_box")
+            if type_band_focus_box is None and request.orientation_mode == "none":
+                type_band_focus_box = round_seal_type_band_box(
+                    band_source, orientation_aligned=False
+                )
             save_round_seal_type_band(
                 band_source,
                 evidence.round_type_band,
                 orientation_aligned=evidence.color_isolated_oriented is not None,
-                focus_box=evidence.orientation.get("oriented_type_row_box"),
+                focus_box=type_band_focus_box,
             )
             from .paddle_ocr import recognize_line
 
@@ -204,8 +211,33 @@ def _collect_primary_region_evidence(
         except Exception:
             pass
     evidence.region_texts.extend(evidence.oriented_texts)
+    ring_exclude_boxes = []
+    source_type_box = evidence.orientation.get("type_row_box")
+    if source_type_box is None and type_band_focus_box is not None:
+        source_type_box = type_band_focus_box
+    if source_type_box is not None:
+        try:
+            with Image.open(evidence.color_isolated) as image:
+                mask_width, mask_height = image.size
+            left, top, right, bottom = [float(value) for value in source_type_box]
+            ring_exclude_boxes.append(
+                (
+                    max(0.0, left / mask_width),
+                    max(0.0, top / mask_height),
+                    min(1.0, right / mask_width),
+                    min(1.0, bottom / mask_height),
+                )
+            )
+            evidence.orientation["ring_type_mask_box"] = ring_exclude_boxes[-1]
+        except (OSError, TypeError, ValueError, ZeroDivisionError):
+            ring_exclude_boxes = []
     evidence.unwrapped = Path(temp_dir) / f"seal-{index}-unwrapped.png"
-    save_unwrapped_seal(request.source, evidence.unwrapped, region)
+    save_unwrapped_seal(
+        request.source,
+        evidence.unwrapped,
+        region,
+        exclude_boxes=ring_exclude_boxes,
+    )
     evidence.unwrapped_rotated = (
         Path(temp_dir) / f"seal-{index}-unwrapped-rotated-180.png"
     )
@@ -527,6 +559,10 @@ def _record_region_evidence(
             "color_isolated": evidence.color_isolated,
             "color_isolated_oriented": evidence.color_isolated_oriented,
             "orientation": evidence.orientation,
+            "ring_type_mask_boxes": (
+                [evidence.orientation["ring_type_mask_box"]]
+                if evidence.orientation.get("ring_type_mask_box") else []
+            ),
             "code_line": evidence.code_line,
             "unwrapped": evidence.unwrapped,
             "unwrapped_rotated": evidence.unwrapped_rotated,

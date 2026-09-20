@@ -96,6 +96,7 @@ def _prepare_server_audit_images(
                 audit.robust_unwrapped,
                 candidate["region"],
                 robust_bounds=True,
+                exclude_boxes=candidate.get("ring_type_mask_boxes", []),
             )
         except Exception:
             used_robust_bounds = False

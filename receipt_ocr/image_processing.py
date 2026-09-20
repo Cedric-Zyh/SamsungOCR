@@ -903,8 +903,15 @@ def save_unwrapped_seal(
     region: SealRegion,
     *,
     robust_bounds: bool = False,
+    exclude_boxes: list[tuple[float, float, float, float]] | None = None,
 ) -> bool:
-    """Unwrap circular stamp text into a horizontal line for conventional OCR."""
+    """Unwrap circular stamp text into a horizontal line for conventional OCR.
+
+    ``exclude_boxes`` contains normalized boxes within the extracted stamp
+    crop.  They are whitened only in this ring-text derivative, so a detected
+    horizontal stamp-type row cannot contaminate the circular company-name
+    OCR while the original/color/type-band evidence remains auditable.
+    """
     image = _read_image(source)
     height, width = image.shape[:2]
     x1, y1 = int(region.x * width), int(region.y * height)
@@ -916,6 +923,15 @@ def save_unwrapped_seal(
     # red JPEG fringes around black table lines become thick horizontal bars
     # after polar unwrapping and can erase the curved company name.
     mask = _ocr_color_mask(crop, region.color)
+    for box in exclude_boxes or ():
+        if not box or len(box) != 4:
+            continue
+        left, top, right, bottom = box
+        x1 = max(0, min(mask.shape[1], round(float(left) * mask.shape[1])))
+        y1 = max(0, min(mask.shape[0], round(float(top) * mask.shape[0])))
+        x2 = max(x1, min(mask.shape[1], round(float(right) * mask.shape[1])))
+        y2 = max(y1, min(mask.shape[0], round(float(bottom) * mask.shape[0])))
+        mask[y1:y2, x1:x2] = 0
     canvas = np.full(mask.shape, 255, dtype=np.uint8)
     canvas[mask > 0] = 0
     h, w = canvas.shape
@@ -1100,6 +1116,32 @@ def save_round_seal_type_band(
     height, width = image.shape[:2]
     if height < 40 or width < 40:
         raise ValueError("圆章章类型分带图片过小")
+    left, top, right, bottom = round_seal_type_band_box(
+        source, orientation_aligned=orientation_aligned, focus_box=focus_box
+    )
+    band = image[top:bottom, left:right]
+    if band.size == 0:
+        raise ValueError("圆章章类型分带为空")
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", band)
+    if not ok:
+        raise ValueError("圆章章类型分带图片编码失败")
+    encoded.tofile(str(destination))
+    return destination
+
+
+def round_seal_type_band_box(
+    source: str | Path,
+    *,
+    orientation_aligned: bool = False,
+    focus_box: list[float] | tuple[float, float, float, float] | None = None,
+) -> tuple[int, int, int, int]:
+    """Return the pixel box used by :func:`save_round_seal_type_band`."""
+    image = _read_image(source)
+    height, width = image.shape[:2]
+    if height < 40 or width < 40:
+        raise ValueError("圆章章类型分带图片过小")
     if focus_box and len(focus_box) == 4:
         left = max(0, round(float(focus_box[0])))
         top = max(0, round(float(focus_box[1])))
@@ -1111,13 +1153,4 @@ def save_round_seal_type_band(
             top, bottom = round(height * 0.42), round(height * 0.62)
         else:
             top, bottom = round(height * 0.56), round(height * 0.84)
-    band = image[top:bottom, left:right]
-    if band.size == 0:
-        raise ValueError("圆章章类型分带为空")
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    ok, encoded = cv2.imencode(".png", band)
-    if not ok:
-        raise ValueError("圆章章类型分带图片编码失败")
-    encoded.tofile(str(destination))
-    return destination
+    return left, top, right, bottom

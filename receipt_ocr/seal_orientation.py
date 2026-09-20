@@ -181,6 +181,23 @@ def _transform_points(points, matrix):
     return [[round(float(point[0]), 2), round(float(point[1]), 2)] for point in transformed]
 
 
+def _transform_box(box, matrix, width, height):
+    if not box or len(box) != 4:
+        return None
+    left, top, right, bottom = [float(value) for value in box]
+    points = _transform_points(
+        [[left, top], [right, top], [right, bottom], [left, bottom]], matrix
+    )
+    if not points:
+        return None
+    return [
+        max(0.0, min(float(width), min(point[0] for point in points))),
+        max(0.0, min(float(height), min(point[1] for point in points))),
+        max(0.0, min(float(width), max(point[0] for point in points))),
+        max(0.0, min(float(height), max(point[1] for point in points))),
+    ]
+
+
 def _oriented_type_row_box(boxes, decision, matrix, width, height):
     """Find the horizontal stamp-type row after the rotation.
 
@@ -266,7 +283,14 @@ def prepare_round_stamp(source, destination, *, model_variant="mobile"):
     decision["mode"] = "polygon"
     decision["model_variant"] = model_variant
     decision["detected_boxes"] = boxes
+    with Image.open(source) as image:
+        source_width, source_height = image.size
+    identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    decision["type_row_box"] = _oriented_type_row_box(
+        boxes, decision, identity, source_width, source_height
+    )
     if not decision.get("applied_rotation"):
+        decision["oriented_type_row_box"] = decision.get("type_row_box")
         decision["oriented_path"] = ""
         decision["status"] = (
             "印章已接近水平，保留原方向"
@@ -308,10 +332,52 @@ def prepare_round_stamp_doc_ori(source, destination):
     if angle is None:
         decision["status"] = "doc_ori 未返回有效方向，保留原方向"
         return None, decision
+    try:
+        with Image.open(source) as image:
+            source_width, source_height = image.size
+    except (OSError, ValueError):
+        source_width = source_height = None
     if angle == 0:
+        if source_width and source_height:
+            decision["oriented_type_row_box"] = [
+                round(source_width * 0.08), round(source_height * 0.42),
+                round(source_width * 0.92), round(source_height * 0.62),
+            ]
+            decision["type_row_box"] = decision["oriented_type_row_box"]
         decision["status"] = "doc_ori 判断为 0°，保留原方向"
         return None, decision
     oriented = rotate_stamp_image(source, destination, angle)
+    if not source_width or not source_height:
+        decision["oriented_path"] = str(oriented)
+        decision["status"] = f"doc_ori 判断为 {angle}°，已旋正"
+        return oriented, decision
+    with Image.open(oriented) as image:
+        oriented_width, oriented_height = image.size
+    matrix, _, _ = _rotation_geometry(source_width, source_height, angle)
+    oriented_box = [
+        round(oriented_width * 0.08), round(oriented_height * 0.42),
+        round(oriented_width * 0.92), round(oriented_height * 0.62),
+    ]
+    # If the regular detector is available, tighten the fixed center band to
+    # the actual horizontal stamp-type text.  This is only for the mask; the
+    # doc_ori result remains the sole source of the rotation angle.
+    try:
+        from .paddle_ocr import detect_text_boxes
+
+        boxes = detect_text_boxes(oriented, model_variant="mobile")
+        row_decision = choose_round_stamp_angle(boxes, minimum_confidence=0.45)
+        detected_box = _oriented_type_row_box(
+            boxes, row_decision, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            oriented_width, oriented_height,
+        )
+        if detected_box:
+            oriented_box = detected_box
+    except Exception:
+        pass
+    decision["oriented_type_row_box"] = oriented_box
+    decision["type_row_box"] = _transform_box(
+        oriented_box, cv2.invertAffineTransform(matrix), source_width, source_height
+    )
     decision["oriented_path"] = str(oriented)
     decision["status"] = f"doc_ori 判断为 {angle}°，已旋正"
     return oriented, decision
