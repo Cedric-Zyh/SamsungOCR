@@ -167,6 +167,27 @@ def test_progress_write_failure_does_not_fail_or_resubmit_recognition(tmp_path, 
     assert calls == ['POST', 'POST', 'GET']
 
 
+def test_model_progress_exposes_target_model_phase_and_timing(store):
+    job = store.claim()
+    assert store.update_progress(job, {
+        'provider': 'model', 'stage': 'date', 'phase': 'started',
+        'method': 'paddle_server', 'method_label': 'Paddle Server',
+        'target': '签收日期', 'target_id': 'date',
+        'updated_at': '2026-09-11T19:00:00+08:00',
+    })
+    assert store.update_progress(job, {
+        'provider': 'model', 'stage': 'date', 'phase': 'completed',
+        'method': 'paddle_server', 'method_label': 'Paddle Server',
+        'target': '签收日期', 'target_id': 'date', 'elapsed_seconds': 2.4,
+        'updated_at': '2026-09-11T19:00:02+08:00',
+    })
+    progress = store.public(store.get(job['id']))['progress']
+    assert (progress['method_label'], progress['target'], progress['phase']) == ('Paddle Server', '签收日期', 'completed')
+    assert progress['elapsed_seconds'] == 2.4
+    history = store.process_history(job_id=job['id'])
+    assert any('签收日期 · 完成' == event['title'] and 'Paddle Server' in event['detail'] for event in history['events'])
+
+
 def test_wait_timeout_switches_progress_to_the_real_error(tmp_path, monkeypatch):
     source = tmp_path / 'sample.jpg'
     source.write_bytes(b'image')

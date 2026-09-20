@@ -23,6 +23,7 @@ class SealCropRequest:
     requirement: str
     footer_anchor_y: float | None
     orientation_resolved_indices: frozenset[int] = frozenset()
+    orientation_mode: str = "polygon"
 
 
 @dataclass
@@ -41,12 +42,16 @@ class SealRegionEvidence:
     whole_text: str = ""
     isolated: Path | None = None
     color_isolated: Path | None = None
+    color_isolated_oriented: Path | None = None
+    orientation: dict = field(default_factory=dict)
     round_type_band: Path | None = None
     round_type_band_texts: list[str] = field(default_factory=list)
     code_line: Path | None = None
     code_line_texts: list[str] = field(default_factory=list)
     crop_text: str = ""
     color_isolated_texts: list[str] = field(default_factory=list)
+    oriented_texts: list[str] = field(default_factory=list)
+    orientation_anchor_text: str = ""
     unwrapped: Path | None = None
     unwrapped_rotated: Path | None = None
     color_isolated_rotations: Path | None = None

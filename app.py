@@ -43,6 +43,7 @@ from receipt_ocr.seal_api import (
     SEAL_RECOGNITION_MODES,
     resolve_seal_recognition_mode,
 )
+from receipt_ocr.seal_orientation import SEAL_ORIENTATION_MODES
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -182,6 +183,7 @@ def index():
         default_ocr_backend=default_backend(),
         ocr_backend_catalog=backend_catalog(),
         seal_recognition_modes=SEAL_RECOGNITION_MODES,
+        seal_orientation_modes=SEAL_ORIENTATION_MODES,
     )
 
 

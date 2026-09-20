@@ -44,6 +44,7 @@ def _recognize_local_seals(
     secondary_ocr_backend: str | None = None,
     requirement: str = "",
     footer_anchor_y: float | None = None,
+    orientation_mode: str = "polygon",
 ) -> tuple[list[str], list[dict]]:
     from shutil import copyfile
     from .seal_orientation import prepare_rectangles
@@ -51,10 +52,14 @@ def _recognize_local_seals(
     # The temporary corrected page is used by ALL later local OCR routes,
     # including specialized SealOCR and optional secondary/audit models.
     with tempfile.TemporaryDirectory(prefix="seal-orientation-") as temp_dir:
-        corrected, decisions = prepare_rectangles(source, regions, temp_dir)
+        if orientation_mode in {"none", "doc_ori"}:
+            corrected, decisions = source, {}
+        else:
+            corrected, decisions = prepare_rectangles(source, regions, temp_dir)
         texts, artifacts = _recognize_oriented_seals(
             corrected, rows, regions, artifact_dir, artifact_url_prefix,
             ocr_backend, secondary_ocr_backend, requirement, footer_anchor_y,
+            orientation_mode,
             frozenset(index for index, decision in decisions.items()
                       if decision["applied_rotation"] == 180),
         )
@@ -77,11 +82,15 @@ def _recognize_local_seals(
 def _recognize_oriented_seals(
     source, rows, regions, artifact_dir, artifact_url_prefix, ocr_backend,
     secondary_ocr_backend=None, requirement="", footer_anchor_y=None,
+    orientation_mode="polygon",
     orientation_resolved_indices=frozenset(),
 ):
     if ocr_backend == "paddle_seal":
         from .seal_dedicated import recognize_regions
-        return recognize_regions(source, regions, artifact_dir, artifact_url_prefix)
+        return recognize_regions(
+            source, regions, artifact_dir, artifact_url_prefix,
+            orientation_mode=orientation_mode,
+        )
     request = SealCropRequest(
         source=source,
         rows=rows,
@@ -92,6 +101,7 @@ def _recognize_oriented_seals(
         requirement=requirement,
         footer_anchor_y=footer_anchor_y,
         orientation_resolved_indices=orientation_resolved_indices,
+        orientation_mode=orientation_mode,
     )
     collection = SealEvidenceCollection()
     context = (

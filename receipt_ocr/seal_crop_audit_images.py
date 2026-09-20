@@ -40,8 +40,14 @@ def _prepare_server_audit_images(
     # the curved company name. They remain safe from printed
     # requirement self-matching because neutral form text was
     # removed before either image reached the Server model.
+    color_source = candidate.get("color_isolated_oriented") or candidate["color_isolated"]
     audit.audit_paths = [
-        ("保留章色白底图", candidate["color_isolated"]),
+        (
+            "按章型文字旋正后的保留章色图"
+            if candidate.get("color_isolated_oriented")
+            else "保留章色白底图",
+            color_source,
+        ),
         ("圆章/矩形校正图", candidate["unwrapped"]),
     ]
     if (
@@ -58,7 +64,9 @@ def _prepare_server_audit_images(
         )
         try:
             save_round_seal_type_band(
-                candidate["color_isolated"], audit.round_type_band
+                color_source,
+                audit.round_type_band,
+                orientation_aligned=candidate.get("color_isolated_oriented") is not None,
             )
         except Exception:
             audit.round_type_band = None

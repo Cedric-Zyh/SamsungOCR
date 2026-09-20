@@ -78,3 +78,18 @@ def test_mobile_page_keeps_original_resolution(tmp_path, monkeypatch):
 
     assert seen["size"] == (2800, 1400)
     assert seen["path"] == source.resolve()
+
+
+def test_detect_text_boxes_preserves_polygon_and_text_angle(tmp_path, monkeypatch):
+    source = tmp_path / "stamp.png"
+    Image.new("RGB", (1000, 800), "white").save(source)
+    seen = {}
+    monkeypatch.setattr(paddle_ocr, "_pipeline", lambda _variant: FakePipeline(seen))
+
+    rows = paddle_ocr.detect_text_boxes(source, model_variant="mobile")
+
+    assert rows[0]["text"] == "测试"
+    assert rows[0]["points"] == [
+        [140.0, 70.0], [700.0, 70.0], [700.0, 140.0], [140.0, 140.0]
+    ]
+    assert rows[0]["angle"] == 0.0

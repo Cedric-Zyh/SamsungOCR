@@ -5,6 +5,7 @@ from pathlib import Path
 
 import requests
 from .execution import timed
+from .recognition_progress import model_operation
 
 
 DEFAULT_API_KEY_FILE = Path(__file__).resolve().parent.parent / "config" / "seal_api_key"
@@ -56,53 +57,54 @@ class SealApiClient:
 
     @timed('seal_api')
     def recognize(self, image_path: str | Path) -> dict:
-        if not self.enabled:
-            return {
-                "enabled": False,
-                "requested": True,
-                "message": (
-                    "未配置 SEAL_API_KEY 或密钥文件，已回退到本地印章识别"
-                ),
-            }
-        path = Path(image_path)
-        try:
-            with path.open("rb") as handle:
-                response = requests.post(
-                    f"{self.base_url}/api/v1/recognize",
-                    headers={"X-API-Key": self.api_key},
-                    files={"files": (path.name, handle, _mime(path))},
-                    timeout=self.timeout,
-                )
-        except (OSError, requests.RequestException) as exc:
-            return {
+        with model_operation("qingtong", "上传与印章识别"):
+            if not self.enabled:
+                return {
+                    "enabled": False,
+                    "requested": True,
+                    "message": (
+                        "未配置 SEAL_API_KEY 或密钥文件，已回退到本地印章识别"
+                    ),
+                }
+            path = Path(image_path)
+            try:
+                with path.open("rb") as handle:
+                    response = requests.post(
+                        f"{self.base_url}/api/v1/recognize",
+                        headers={"X-API-Key": self.api_key},
+                        files={"files": (path.name, handle, _mime(path))},
+                        timeout=self.timeout,
+                    )
+            except (OSError, requests.RequestException) as exc:
+                return {
+                    "enabled": True,
+                    "requested": True,
+                    "ok": False,
+                    "message": f"清瞳印章 API 调用失败，已保留本地识别：{exc}",
+                }
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {"detail": response.text[:500]}
+            business_code = payload.get("code") if isinstance(payload, dict) else None
+            ok = bool(response.ok and business_code == 200)
+            result = {
                 "enabled": True,
                 "requested": True,
-                "ok": False,
-                "message": f"清瞳印章 API 调用失败，已保留本地识别：{exc}",
+                "ok": ok,
+                "http_status": response.status_code,
+                "business_code": business_code,
+                "response": payload,
             }
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {"detail": response.text[:500]}
-        business_code = payload.get("code") if isinstance(payload, dict) else None
-        ok = bool(response.ok and business_code == 200)
-        result = {
-            "enabled": True,
-            "requested": True,
-            "ok": ok,
-            "http_status": response.status_code,
-            "business_code": business_code,
-            "response": payload,
-        }
-        if not ok:
-            if response.ok and business_code is None:
-                reason = "响应缺少业务状态码"
-            elif response.ok:
-                reason = f"业务状态码 {business_code}"
-            else:
-                reason = f"HTTP {response.status_code}"
-            result["message"] = f"清瞳印章 API 未成功（{reason}），已保留本地识别"
-        return result
+            if not ok:
+                if response.ok and business_code is None:
+                    reason = "响应缺少业务状态码"
+                elif response.ok:
+                    reason = f"业务状态码 {business_code}"
+                else:
+                    reason = f"HTTP {response.status_code}"
+                result["message"] = f"清瞳印章 API 未成功（{reason}），已保留本地识别"
+            return result
 
     @staticmethod
     def skipped() -> dict:

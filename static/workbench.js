@@ -119,10 +119,18 @@ const ReceiptWorkbench = (() => {
         ? (record.processing_artifacts?.[key] || []).filter(item => item.variant === '紧凑区域')
         : (record.processing_artifacts?.[key] || []);
       for (const item of items) {
-        const url = item.orientation?.applied_rotation === 180
+        // Round-stamp OCR is performed on the color-safe image after the
+        // detected stamp-type line has been deskewed.  Make that same image
+        // the primary seal preview; the unrotated crop remains available in
+        // the evidence panel for audit.
+        const oriented = key === 'seals' && item.color_isolated_oriented_url;
+        const corrected = item.orientation?.applied_rotation === 180
           ? item.orientation_corrected_url || item.original_url : item.original_url;
-        if (url && !seen.has(url)) add(url, item.orientation?.applied_rotation === 180
-          ? `${label} ${++index} · 已自动旋转 180°` : `${label} ${++index}`, group);
+        const url = oriented || corrected;
+        if (url && !seen.has(url)) add(url, oriented
+          ? `${label} ${++index} · 按章型文字旋正`
+          : item.orientation?.applied_rotation === 180
+            ? `${label} ${++index} · 已自动旋转 180°` : `${label} ${++index}`, group);
       }
     }
     return sources;

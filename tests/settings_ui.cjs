@@ -18,7 +18,7 @@ function node(dataset = {}) {
     fire(event) { listeners.get(event)?.({target:this}); },
   };
 }
-function harness({saved = null, providers = ['paddle', 'paddle_server', 'paddle_v6', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true} = {}) {
+function harness({saved = null, providers = ['paddle', 'paddle_server', 'paddle_v6', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true, orientationNode = false} = {}) {
   const targets = Object.fromEntries(stages.map(stage => [stage, node({target:stage})]));
   const cards = Object.fromEntries(stages.map(stage => [stage, node()]));
   const statuses = Object.fromEntries(stages.map(stage => [stage, node()]));
@@ -40,6 +40,11 @@ function harness({saved = null, providers = ['paddle', 'paddle_server', 'paddle_
     const match = selector.match(/^\[data-(target|plan-card|plan-status)="([^"]+)"\]$/);
     return match ? ({target:targets, 'plan-card':cards, 'plan-status':statuses}[match[1]][match[2]] || null) : null;
   };
+  if (orientationNode) {
+    ids['seal-orientation-mode'] = node();
+    ids['seal-orientation-mode'].value = 'none';
+    ids['seal-orientation-description'] = node();
+  }
   const $$ = selector => {
     if (selector === '.recognition-plan input') return [...Object.values(targets), ...methods];
     if (selector === '.recognition-plan button, [data-target]') return [...presets, reset, ...Object.values(targets)];
@@ -78,6 +83,27 @@ test('acceptance rules support any, all and no comparison for all three checks',
     seal_match_mode: 'none', date_match_mode: 'none', signature_match_mode: 'none', reject_mode: 'all_mismatch',
     low_confidence_mode: 'check', seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
   });
+});
+
+test('seal orientation defaults preserve old settings and all three modes persist and restore', () => {
+  const old = harness({saved:sealTest(), orientationNode:true});
+  assert.equal(old.controller.readRecognitionPlan().seal_orientation, 'polygon');
+  for (const mode of ['none', 'polygon', 'doc_ori']) {
+    old.ids['seal-orientation-mode'].value = mode;
+    old.ids['seal-orientation-mode'].fire('change');
+    assert.equal(old.writes.at(-1).plan.seal_orientation, mode);
+    const restored = harness({saved:old.writes.at(-1).plan, orientationNode:true});
+    assert.equal(restored.controller.readRecognitionPlan().seal_orientation, mode);
+  }
+  old.state.batchRunning = true;
+  old.controller.updateRecognitionPlan();
+  assert.equal(old.ids['seal-orientation-mode'].disabled, true);
+});
+
+test('orientation alone is not an executable recognition plan', () => {
+  const h = harness({saved:emptyPlan(), orientationNode:true});
+  assert.throws(() => h.controller.readRecognitionPlan(), /至少选择/);
+  assert.equal(h.writes.length, 0);
 });
 
 test('seal test selects only Paddle fields and QingTong seals, and restores its name from the actual saved plan', () => {

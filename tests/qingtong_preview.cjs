@@ -47,6 +47,18 @@ test('local-only receipt previews retain their existing crop',()=>{
   assert.equal(imageSources(item).find(source=>source.group==='seal').url,'/files/artifacts/other-local-stamp.jpg');
 });
 
+test('local round-stamp preview uses the post-rotation color-safe crop',()=>{
+  const item=record(); delete item.seal_check.dual_check;
+  item.processing_artifacts.seals = [{
+    original_url:'/files/artifacts/seal-before.jpg',
+    color_isolated_oriented_url:'/files/artifacts/seal-oriented.png',
+    orientation:{anchor_text:'收货专用章', applied_rotation:58.2},
+  }];
+  assert.deepEqual(imageSources(item).find(source => source.group === 'seal'), {
+    url:'/files/artifacts/seal-oriented.png', label:'印章区域 1 · 按章型文字旋正', group:'seal',
+  });
+});
+
 test('QingTong rectangle preview uses the corrected crop after an automatic 180 degree rotation',()=>{
   const item = record();
   item.processing_artifacts.seals = [{

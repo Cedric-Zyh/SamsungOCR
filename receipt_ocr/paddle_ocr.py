@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from .recognition_progress import model_operation
+
 import os
+import math
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -277,7 +280,7 @@ def recognize_seal_text(image_path: str | Path) -> list[TextObservation]:
     path = Path(image_path).expanduser().resolve()
     with Image.open(path) as image:
         width, height = image.size
-    with _prediction_slot():
+    with model_operation("paddle_seal", "识别印章区域"), _prediction_slot():
         with measure("paddle_seal_model_setup"):
             pipeline = _seal_pipeline()
         with measure("paddle_seal_inference"):
@@ -324,7 +327,7 @@ def recognize_line(
     path = Path(image_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
-    with _prediction_slot():
+    with model_operation(provider_of(model_variant), '识别文字行'), _prediction_slot():
         with measure('paddle_model_setup'):
             recognizer = _line_recognizer(model_variant)
         with measure('paddle_line_inference'):
@@ -393,7 +396,7 @@ def recognize_text(
     # The Paddle pipeline object is reused to avoid repeated model loading, while
     # inference is serialized because the native predictor is not thread-safe.
     try:
-        with _prediction_slot():
+        with model_operation(provider_of(model_variant), '文字检测与识别'), _prediction_slot():
             with measure('paddle_model_setup'):
                 pipeline = _pipeline(model_variant)
             with measure('paddle_text_inference'):
@@ -426,3 +429,79 @@ def recognize_text(
                 height=min(1.0, normalized_height),
             ))
     return sorted(output, key=lambda row: (round(row.y, 3), row.x))
+
+
+def detect_text_boxes(
+    image_path: str | Path,
+    *,
+    model_variant: str = "mobile",
+) -> list[dict]:
+    """Return Paddle text polygons, recognition text and their line angles.
+
+    The regular OCR API intentionally exposes only normalized axis-aligned
+    boxes because most fields do not need polygon geometry.  Seal orientation
+    is different: a round stamp's ``用章``/``专用章`` line is a useful local
+    direction anchor, so keep the original four-point polygon here.
+    """
+    from .recognition_scope import provider_allowed
+
+    provider = provider_of(model_variant)
+    if not provider_allowed(provider):
+        return []
+    path = Path(image_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    from PIL import Image
+
+    with Image.open(path) as image:
+        width, height = image.size
+    if width <= 0 or height <= 0:
+        return []
+
+    with _prediction_slot():
+        with measure("paddle_text_box_setup"):
+            pipeline = _pipeline(model_variant)
+        with measure("paddle_text_box_inference"):
+            results = list(pipeline.predict(input=str(path)))
+
+    output: list[dict] = []
+    for result in results:
+        for text, score, polygon in zip(
+            result.get("rec_texts", []),
+            result.get("rec_scores", []),
+            result.get("rec_polys", []),
+        ):
+            points = polygon.tolist() if hasattr(polygon, "tolist") else polygon
+            if not points or len(points) < 4:
+                continue
+            points = [[float(point[0]), float(point[1])] for point in points]
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            # Paddle's polygon follows the text line, but its starting corner
+            # is not an API guarantee.  Choose the long edge and normalize its
+            # direction to [-90, 90), which is stable for either point order.
+            edges = [
+                (points[(index + 1) % len(points)][0] - points[index][0],
+                 points[(index + 1) % len(points)][1] - points[index][1])
+                for index in range(len(points))
+            ]
+            dx, dy = max(edges, key=lambda edge: edge[0] * edge[0] + edge[1] * edge[1])
+            angle = math.degrees(math.atan2(dy, dx))
+            while angle >= 90:
+                angle -= 180
+            while angle < -90:
+                angle += 180
+            value = str(text).strip()
+            if not value:
+                continue
+            output.append({
+                "text": value,
+                "confidence": max(0.0, min(1.0, float(score))),
+                "points": points,
+                "angle": angle,
+                "x": min(xs) / width,
+                "y": min(ys) / height,
+                "width": (max(xs) - min(xs)) / width,
+                "height": (max(ys) - min(ys)) / height,
+            })
+    return output

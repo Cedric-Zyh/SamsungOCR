@@ -53,6 +53,52 @@ def _collect_primary_region_evidence(
     save_isolated_seal(request.source, evidence.isolated, region)
     evidence.color_isolated = Path(temp_dir) / f"seal-{index}-color-isolated.png"
     save_color_isolated_seal(request.source, evidence.color_isolated, region)
+    evidence.color_isolated_oriented = None
+    evidence.orientation = {}
+    evidence.orientation_anchor_text = ""
+    # A round stamp's outer circle has no direction.  The configured strategy
+    # either keeps the crop unchanged, uses a detected ``用章``/``专用章``
+    # polygon as the direction anchor, or applies Paddle's four-way document
+    # orientation classifier.  Only the color-safe derivative is rotated.
+    if (
+        is_paddle_backend(request.ocr_backend)
+        and request.orientation_mode != "none"
+        and (not evidence.rectangular or request.orientation_mode == "doc_ori")
+    ):
+        try:
+            from .seal_orientation import prepare_round_stamp, prepare_round_stamp_doc_ori
+
+            oriented_path = Path(temp_dir) / f"seal-{index}-color-isolated-oriented.png"
+            if request.orientation_mode == "doc_ori":
+                oriented, evidence.orientation = prepare_round_stamp_doc_ori(
+                    evidence.color_isolated, oriented_path
+                )
+            else:
+                oriented, evidence.orientation = prepare_round_stamp(
+                    evidence.color_isolated,
+                    oriented_path,
+                    model_variant=variant_of(request.ocr_backend) or "mobile",
+                )
+            if oriented is not None and oriented.is_file():
+                evidence.color_isolated_oriented = oriented
+            evidence.orientation_anchor_text = str(
+                evidence.orientation.get("anchor_text", "")
+            ).strip()
+        except Exception as exc:
+            evidence.orientation = {
+                "mode": request.orientation_mode,
+                "status": "印章方向检测失败，保留原方向",
+                "error": str(exc),
+                "applied_rotation": 0.0,
+            }
+    elif request.orientation_mode == "none":
+        evidence.orientation = {
+            "mode": "none",
+            "status": "按设置保留印章原方向",
+            "angle": None,
+            "applied_rotation": 0.0,
+            "confidence": 1.0,
+        }
     evidence.round_type_band = None
     evidence.round_type_band_texts = []
     # Keep the horizontal stamp-type row as a first-class v6 input. The
@@ -61,7 +107,15 @@ def _collect_primary_region_evidence(
     if not evidence.rectangular and is_paddle_backend(request.ocr_backend):
         try:
             evidence.round_type_band = Path(temp_dir) / f"seal-{index}-round-type-band.png"
-            save_round_seal_type_band(evidence.color_isolated, evidence.round_type_band)
+            # The fixed band is meaningful only after the round stamp has
+            # been put into its detected text orientation.  Otherwise the
+            # lower slice can contain an arbitrary arc of the company name.
+            band_source = evidence.color_isolated_oriented or evidence.color_isolated
+            save_round_seal_type_band(
+                band_source,
+                evidence.round_type_band,
+                orientation_aligned=evidence.color_isolated_oriented is not None,
+            )
             from .paddle_ocr import recognize_line
 
             band_rows = recognize_line(
@@ -124,6 +178,31 @@ def _collect_primary_region_evidence(
         pass
     evidence.color_isolated_texts = [row.text for row in color_isolated_rows if row.text]
     evidence.region_texts.extend(evidence.color_isolated_texts)
+    evidence.oriented_texts = []
+    if (
+        evidence.orientation_anchor_text
+        and float(evidence.orientation.get("confidence", 0.0) or 0.0)
+        >= 0.70
+    ):
+        # This is the detector's own pre-rotation recognition, not a
+        # completion from the requirement.  Keep it as evidence because
+        # the re-detection after interpolation can clip the leftmost
+        # ``收`` even though the anchor pass saw the complete phrase.
+        evidence.oriented_texts.append(evidence.orientation_anchor_text)
+    if evidence.color_isolated_oriented is not None:
+        try:
+            evidence.oriented_texts.extend(
+                row.text
+                for row in recognize_text(
+                    evidence.color_isolated_oriented,
+                    backend=request.ocr_backend,
+                    min_text_height=0.012,
+                )
+                if row.text
+            )
+        except Exception:
+            pass
+    evidence.region_texts.extend(evidence.oriented_texts)
     evidence.unwrapped = Path(temp_dir) / f"seal-{index}-unwrapped.png"
     save_unwrapped_seal(request.source, evidence.unwrapped, region)
     evidence.unwrapped_rotated = (
@@ -132,7 +211,7 @@ def _collect_primary_region_evidence(
     evidence.color_isolated_rotations = (
         Path(temp_dir) / f"seal-{index}-color-isolated-rotations.png"
     )
-    if not evidence.rectangular:
+    if not evidence.rectangular and request.orientation_mode != "none":
         # Company lettering and the stamp-type suffix on a round
         # seal can face opposite directions after polar unwrap.
         # Keep the 180-degree derivative visible and reserve it
@@ -196,7 +275,8 @@ def _collect_primary_region_evidence(
     # circular matching evidence.
     evidence.rotated = Path(temp_dir) / f"seal-{index}-rotated-180.png"
     evidence.rotated_texts: list[str] = []
-    if evidence.rectangular and index not in request.orientation_resolved_indices:
+    if (evidence.rectangular and request.orientation_mode == "polygon"
+            and index not in request.orientation_resolved_indices):
         try:
             with Image.open(evidence.isolated) as image:
                 image.rotate(180, expand=False).save(evidence.rotated)
@@ -375,6 +455,14 @@ def _record_region_evidence(
                 "original_url": f"{prefix}/seals/{evidence.original.name}",
                 "isolated_url": f"{prefix}/seals/{evidence.isolated.name}",
                 "color_isolated_url": f"{prefix}/seals/{evidence.color_isolated.name}",
+                "color_isolated_oriented_url": (
+                    f"{prefix}/seals/{evidence.color_isolated_oriented.name}"
+                    if evidence.color_isolated_oriented is not None
+                    and evidence.color_isolated_oriented.is_file()
+                    else ""
+                ),
+                "orientation": evidence.orientation,
+                "orientation_anchor_text": evidence.orientation_anchor_text,
                 "round_type_band_url": (
                     f"{prefix}/seals/{evidence.round_type_band.name}"
                     if evidence.round_type_band is not None
@@ -408,6 +496,7 @@ def _record_region_evidence(
                 "page_text": evidence.whole_text,
                 "isolated_text": evidence.crop_text,
                 "color_isolated_text": " | ".join(evidence.color_isolated_texts),
+                "color_isolated_oriented_text": " | ".join(evidence.oriented_texts),
                 "code_line_text": " | ".join(evidence.code_line_texts),
                 "unwrapped_text": " | ".join(evidence.unwrap_texts),
                 "rotated_text": " | ".join(evidence.rotated_texts),
@@ -435,6 +524,8 @@ def _record_region_evidence(
             "pixel_ratio": float(region.pixel_ratio),
             "isolated": evidence.isolated,
             "color_isolated": evidence.color_isolated,
+            "color_isolated_oriented": evidence.color_isolated_oriented,
+            "orientation": evidence.orientation,
             "code_line": evidence.code_line,
             "unwrapped": evidence.unwrapped,
             "unwrapped_rotated": evidence.unwrapped_rotated,

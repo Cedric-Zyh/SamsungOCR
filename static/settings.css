@@ -34,6 +34,10 @@
 .settings-page .plan-method small { color:var(--archive-muted); font-size:11px; font-weight:400; }
 .settings-page .plan-method:has(input:checked) { color:var(--archive-ink); border-color:#c9b491; background:var(--archive-accent-wash); }
 .settings-page .plan-method:hover:has(input:not(:disabled)) { border-color:var(--archive-accent); }
+.settings-page .seal-orientation-setting { margin:12px 0 0 24px; padding:11px 12px; border:1px solid var(--archive-soft-line); background:#f7f4ee; }
+.settings-page .seal-orientation-setting label { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--archive-text); font-size:12px; }
+.settings-page .seal-orientation-setting select { min-width:190px; padding:5px 7px; border:1px solid var(--archive-line); border-radius:2px; background:var(--archive-paper); color:var(--archive-text); font:inherit; }
+.settings-page .seal-orientation-setting small { display:block; margin-top:6px; color:var(--archive-muted); line-height:1.55; }
 .settings-page .plan-method:has(input:disabled) { cursor:not-allowed; background:#ebe8e1; color:#87897c; border-color:var(--archive-soft-line); }
 .settings-page .plan-card.inactive { color:var(--archive-muted); background:var(--archive-paper); }
 .settings-page .plan-card.inactive .plan-stage-status { color:var(--archive-muted); }

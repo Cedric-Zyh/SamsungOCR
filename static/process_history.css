@@ -21,6 +21,7 @@
   margin:5px 0 0;
   color:var(--muted);
   font-size:12px;
+  line-height:1.6;
 }
 
 .process-history-body {

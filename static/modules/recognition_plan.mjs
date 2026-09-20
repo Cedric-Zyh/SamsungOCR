@@ -1,6 +1,7 @@
 import {escapeHtml, planLabels} from './ui.mjs';
 
 const methodLabels = {paddle:'Paddle Mobile', paddle_server:'Paddle Server', paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
+const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）'};
 const presetLabels = {danzhengtong:'单证通',full:'完整核验', date:'仅日期', seal:'仅印章', 'seal-test':'印章测试'};
 const localMethods = ['paddle', 'paddle_server', 'paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';
@@ -20,7 +21,8 @@ export function createRecognitionPlan({environment, ui, importsState}) {
   const enabled = stage => !!$(`[data-target="${stage}"]`)?.checked;
   const setText = (selector, value) => { const node = $(selector); if (node) node.textContent = value; };
   const show = (selector, visible) => $(selector)?.classList.toggle('hidden', !visible);
-  const samePlan = (left, right) => stages.every(stage => left[stage].length === right[stage].length && left[stage].every(method => right[stage].includes(method)));
+  const samePlan = (left, right) => stages.every(stage => left[stage].length === right[stage].length && left[stage].every(method => right[stage].includes(method)))
+    && (left.seal_orientation || 'polygon') === (right.seal_orientation || 'polygon');
 
   function readRecognitionPlan() {
     const plan = {};
@@ -28,7 +30,13 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       plan[stage] = enabled(stage) ? selected(stage) : [];
       if (enabled(stage) && !plan[stage].length) throw new Error(`请为${planLabels[stage]}选择至少一种识别方式`);
     }
-    if (!Object.values(plan).some(methods => methods.length)) throw new Error('请至少选择一项识别内容');
+    const orientationSelect = $('#seal-orientation-mode');
+    if (orientationSelect) {
+      const orientation = orientationSelect.value;
+      plan.seal_orientation = Object.prototype.hasOwnProperty.call(sealOrientationLabels, orientation)
+        ? orientation : 'polygon';
+    }
+    if (!stages.some(stage => plan[stage].length)) throw new Error('请至少选择一项识别内容');
     plan.acceptance = readAcceptancePolicy();
     return plan;
   }
@@ -58,6 +66,10 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       if (target) target.checked = methods.length > 0;
       stageMethods(stage).forEach(el => el.checked = el.dataset.available === 'true' && methods.includes(el.dataset.method));
     }
+    const orientation = $('#seal-orientation-mode');
+    if (orientation && Object.prototype.hasOwnProperty.call(sealOrientationLabels, plan?.seal_orientation)) {
+      orientation.value = plan.seal_orientation;
+    }
     updateRecognitionPlan({persist});
   }
   function defaultPlan() {
@@ -68,10 +80,12 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       const method = preference.find(method => available(stage, method));
       return method ? [method] : [];
     };
-    return {
+    const plan = {
       fields:choose('fields', localMethods), products:choose('products', localMethods), handwriting:[],
       date:choose('date', ['danzhengtong', 'paddle', 'paddle_server']), seal:choose('seal', ['paddle', 'paddle_server']),
     };
+    if ($('#seal-orientation-mode')) plan.seal_orientation = 'polygon';
+    return plan;
   }
   function presetPlan(name) {
     if (name === 'danzhengtong') return {fields:['danzhengtong'], products:[], handwriting:['danzhengtong'], date:['danzhengtong'], seal:['danzhengtong']};
@@ -91,11 +105,12 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       return missing.join('，');
     }
     const plan = presetPlan(name);
-    return Object.values(plan).some(methods => methods.length) ? '' : '暂无可用的本地识别方式';
+    return Object.values(plan).some(methods => Array.isArray(methods) && methods.length) ? '' : '暂无可用的本地识别方式';
   }
   function updateRecognitionPlan({persist = true} = {}) {
     const locked = !!importsState.batchRunning;
     $$('.recognition-plan button, [data-target]').forEach(el => el.disabled = locked);
+    if ($('#seal-orientation-mode')) $('#seal-orientation-mode').disabled = locked;
     $$('[data-preset]').forEach(button => {
       const reason = presetUnavailable(button.dataset.preset);
       button.disabled = locked || !!reason;
@@ -120,7 +135,15 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     }
     setText('#plan-selected-count', `${selectedCount} / ${stages.length} 项`);
     const list = $('#plan-selection-list');
-    if (list) list.innerHTML = stages.map(stage => `<div class="plan-selection-row${!enabled(stage) ? ' inactive' : ''}"><span>${escapeHtml(planLabels[stage])}</span><strong>${escapeHtml(!enabled(stage) ? '未执行' : current[stage].length ? current[stage].map(method => methodLabels[method]).join(' + ') : '请选择方式')}</strong></div>`).join('');
+    const orientation = $('#seal-orientation-mode')?.value || 'polygon';
+    if (list) list.innerHTML = stages.map(stage => `<div class="plan-selection-row${!enabled(stage) ? ' inactive' : ''}"><span>${escapeHtml(planLabels[stage])}</span><strong>${escapeHtml(!enabled(stage) ? '未执行' : current[stage].length ? current[stage].map(method => methodLabels[method]).join(' + ') : '请选择方式')}</strong></div>`).join('')
+      + `<div class="plan-selection-row"><span>印章方向</span><strong>${escapeHtml(sealOrientationLabels[orientation] || orientation)}</strong></div>`;
+    const orientationDescription = $('#seal-orientation-description');
+    if (orientationDescription) orientationDescription.textContent = orientation === 'none'
+      ? '不改变印章方向，直接识别。'
+      : orientation === 'doc_ori'
+        ? '使用 PP-LCNet_x1_0_doc_ori，按 0/90/180/270° 旋正。'
+        : '使用“用章/专用章”文本检测框的四点坐标估计角度。';
     show('#remote-plan-note', usesRemotePlan());
     show('#plan-multi-note', Object.values(current).some(methods => methods.length > 1));
     show('#plan-requirement-note', (enabled('date') || enabled('seal')) && !enabled('fields'));
@@ -144,7 +167,8 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       $('#plan-save-status')?.setAttribute('data-state', 'invalid');
       return;
     }
-    const summary = Object.entries(plan).filter(([,methods]) => methods.length).map(([stage,methods]) => `${planLabels[stage]}（${methods.map(method => methodLabels[method]).join(' + ')}）`).join('；');
+    const summary = stages.filter(stage => plan[stage].length).map(stage => `${planLabels[stage]}（${plan[stage].map(method => methodLabels[method]).join(' + ')}）`).join('；')
+      + `；印章方向（${sealOrientationLabels[plan.seal_orientation || 'polygon']}）`;
     setText('#plan-summary', `本次配置：${summary}`);
     setText('#import-config', summary);
     let saveStatus = initialSaveStatus || '使用默认方案，修改后自动保存', saveState = initialSaveState;
@@ -161,7 +185,9 @@ export function createRecognitionPlan({environment, ui, importsState}) {
   }
 
   function initialize() {
+    if ($('#seal-orientation-mode')) $('#seal-orientation-mode').value = 'polygon';
     $$('.recognition-plan input').forEach(el => el.addEventListener('change', () => updateRecognitionPlan()));
+    $('#seal-orientation-mode')?.addEventListener('change', () => updateRecognitionPlan());
     $$('[data-acceptance-input], [data-acceptance-reject], [data-acceptance-low-confidence]').forEach(input => input.addEventListener('change', () => {
       try { localStorage.setItem(acceptanceStorageKey, JSON.stringify(readAcceptancePolicy())); } catch (_) { /* browser storage unavailable */ }
       updateRecognitionPlan({persist: false});

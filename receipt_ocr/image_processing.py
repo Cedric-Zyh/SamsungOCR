@@ -70,12 +70,49 @@ def _color_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _ocr_color_mask(crop: np.ndarray, color: str) -> np.ndarray:
-    """Return colored stamp ink without neutral JPEG/table-line bleed."""
-    red, blue = _color_masks(crop)
-    mask = red if color == "red" else blue
+    """Return stamp ink while rejecting neutral form-line fringes.
+
+    ``_color_masks`` is deliberately permissive because it is used to find a
+    faint stamp on a whole page.  That permissiveness is harmful after a
+    customer-stamp crop: antialiased black table rules can acquire a small
+    red-channel bias and survive as horizontal fragments in the OCR image.
+    The OCR derivative therefore uses a stricter chroma gate and removes only
+    long, nearly-horizontal *low-saturation* runs.  Red/blue pixels are never
+    removed by the line pass, so a coloured character crossing a form rule is
+    preserved.
+    """
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    chromatic = cv2.inRange(hsv, (0, 30, 75), (179, 255, 255))
-    return cv2.bitwise_and(mask, chromatic)
+    hue, saturation, value = cv2.split(hsv)
+    if color == "red":
+        hue_match = (hue <= 16) | (hue >= 164)
+    else:
+        hue_match = (hue >= 82) & (hue <= 140)
+    # The reviewed stamp has enough saturation at this threshold, while the
+    # pale/neutral fringes of black table lines do not.
+    mask = (
+        hue_match
+        & (saturation >= 70)
+        & (value >= 65)
+    ).astype(np.uint8) * 255
+
+    if mask.size:
+        # Detect only neutral dark lines.  The long horizontal opening avoids
+        # treating individual Chinese strokes as a form line; the small
+        # dilation clears antialiased edge pixels without touching coloured
+        # ink because the subtraction is restricted to ``mask``.
+        neutral = ((saturation < 55) & (value < 215)).astype(np.uint8) * 255
+        kernel_width = max(24, mask.shape[1] // 14)
+        horizontal = cv2.morphologyEx(
+            neutral,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, 1)),
+        )
+        horizontal = cv2.dilate(
+            horizontal,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)),
+        )
+        mask = cv2.bitwise_and(mask, cv2.bitwise_not(horizontal))
+    return mask
 
 
 def seal_region_is_rectangular(
@@ -1044,13 +1081,17 @@ def save_rectangular_seal_bands(
 def save_round_seal_type_band(
     source: str | Path,
     destination: str | Path,
+    *,
+    orientation_aligned: bool = False,
 ) -> Path:
-    """Save the lower inner text row of a color-isolated round stamp.
+    """Save the inner type row of a color-isolated round stamp.
 
     Reviewed circular customer stamps commonly put the legal company around
-    the rim and a horizontal type such as ``手机售后专用章`` below the star.
-    Whole-stamp detection tends to keep the much larger company arc and drop
-    this faint row.  ``source`` must already be a color-only white-background
+    the rim and a horizontal type such as ``手机售后专用章`` inside it.
+    ``orientation_aligned`` is used after the stamp-type polygon has rotated
+    the crop upright; that layout puts the row around the centre of the
+    expanded canvas.  The legacy lower-inner slice remains the default for
+    unrotated crops.  ``source`` must already be a color-only white-background
     derivative, so the focused band cannot import the black printed signature
     requirement into seal-matching evidence.
     """
@@ -1059,7 +1100,10 @@ def save_round_seal_type_band(
     if height < 40 or width < 40:
         raise ValueError("圆章章类型分带图片过小")
     left, right = round(width * 0.08), round(width * 0.92)
-    top, bottom = round(height * 0.56), round(height * 0.84)
+    if orientation_aligned:
+        top, bottom = round(height * 0.42), round(height * 0.62)
+    else:
+        top, bottom = round(height * 0.56), round(height * 0.84)
     band = image[top:bottom, left:right]
     if band.size == 0:
         raise ValueError("圆章章类型分带为空")

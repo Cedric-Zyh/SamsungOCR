@@ -173,6 +173,7 @@ def execute(context: DocumentContext, request: StageRequest, recognize_seals, se
                 ),
                 requirement=requirement,
                 footer_anchor_y=signature_anchor,
+                orientation_mode=request.seal_orientation_mode,
             )
             seal_texts = _dedupe(seal_texts)
             # Local Paddle evidence is shown and judged with the same strict

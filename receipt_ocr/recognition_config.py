@@ -19,6 +19,12 @@ from .execution import measure, recognition_run
 from .image_processing import SealRegion, annotate_image
 from .seal_provider_policy import combine_seal_provider_checks
 from .seal_local_channel import local_seal_full_match, record_local_channel
+from .recognition_progress import model_stage, progress_context, report_plan, report_model_progress
+from .seal_orientation import (
+    DEFAULT_SEAL_ORIENTATION_MODE,
+    DOC_ORIENTATION_PROVIDER,
+    resolve_seal_orientation_mode,
+)
 
 STAGES = ("fields", "products", "handwriting", "date", "seal")
 LABELS = dict(fields="印刷字段", products="商品明细", handwriting="手写签名", date="签收日期", seal="客户印章")
@@ -27,7 +33,7 @@ LABELS = dict(fields="印刷字段", products="商品明细", handwriting="手�
 def validate_config(config, *, api_enabled=True):
     if config is None:
         return None
-    if not isinstance(config, dict) or set(config) - set(STAGES) - {'acceptance'}:
+    if not isinstance(config, dict) or set(config) - set(STAGES) - {'acceptance', 'seal_orientation'}:
         raise ValueError("识别配置格式不正确")
     available = {row["id"] for row in backend_catalog() if row["available"]}
     cleaned = {}
@@ -53,6 +59,10 @@ def validate_config(config, *, api_enabled=True):
             ):
                 raise ValueError(f"识别方式不可用：{method}")
         cleaned[stage] = methods
+    if "seal_orientation" in config:
+        cleaned["seal_orientation"] = resolve_seal_orientation_mode(
+            config.get("seal_orientation")
+        )
     has_acceptance = 'acceptance' in config
     acceptance = config.get('acceptance') or {}
     if not isinstance(acceptance, dict):
@@ -102,7 +112,7 @@ def _overlap_seal_request(analyzer, source, config):
     """Upload once while local stages run; comparison still waits for fields."""
     recognize = getattr(analyzer.seal_api, "recognize", None)
     has_local_work = any(
-        method != "qingtong" for methods in config.values() for method in methods
+        method != "qingtong" for stage in STAGES for method in config.get(stage, [])
     )
     if (
         "qingtong" not in config["seal"]
@@ -113,8 +123,20 @@ def _overlap_seal_request(analyzer, source, config):
         return
 
     def request_seal():
-        with provider_scope({"qingtong"}):
-            return recognize(source)
+        with progress_context(method='qingtong', method_label='清瞳', target='客户印章',
+                              target_id='seal', channel='parallel'):
+            report_model_progress('seal', 'started', message='并行上传与印章识别')
+            started = time.perf_counter()
+            try:
+                with provider_scope({"qingtong"}):
+                    result = recognize(source)
+            except Exception:
+                report_model_progress('seal', 'failed',
+                                      elapsed_seconds=round(time.perf_counter() - started, 2))
+                raise
+            report_model_progress('seal', 'completed',
+                                  elapsed_seconds=round(time.perf_counter() - started, 2))
+            return result
 
     # Only network I/O runs here. Paddle stays on its existing serialized path.
     # Joining the worker also prevents a completed/failed run leaking work into
@@ -146,7 +168,7 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
     )
     for method in methods:
         try:
-            with provider_scope({method}):
+            with model_stage('routing', method), provider_scope({method}):
                 context.page(method)
             if context.document_type["reliable"]:
                 break
@@ -188,6 +210,9 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                     if method == "qingtong" or (stage == "seal" and method != "danzhengtong")
                     else None,
                     config.get("acceptance") or {},
+                    seal_orientation_mode=config.get(
+                        "seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE
+                    ),
                 )
                 try:
                     stage_scope = {method}
@@ -195,7 +220,11 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                         stage_scope.add(route["page"])
                     if stage == "seal":
                         stage_scope |= seal_audit_providers
-                    with measure(f"stage.{stage}.{method}"), provider_scope(stage_scope):
+                        if config.get("seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE) == "doc_ori":
+                            stage_scope.add(DOC_ORIENTATION_PROVIDER)
+                    reused = method == 'danzhengtong' and 'fixture' in danzhengtong_cache
+                    with model_stage(stage, method, message='复用本张已返回结果' if reused else ''), \
+                            measure(f"stage.{stage}.{method}"), provider_scope(stage_scope):
                         if method == "danzhengtong":
                             from .danzhengtong import stage_result
                             result = stage_result(context, stage, danzhengtong_cache, previous_fields)
@@ -221,6 +250,7 @@ def run_configured(
 ):
     started = time.perf_counter()
     config = validate_config(config, api_enabled=analyzer.seal_api.enabled)
+    report_plan(config)
     previous_fields = deepcopy(previous_fields or {})
     context = DocumentContext(source, filename=kwargs.get("filename"))
     results, errors, output, previous_fields = _recognize_stages(
@@ -461,6 +491,9 @@ def run_configured(
         "qingtong_only"
         if config["seal"] == ["qingtong"]
         else "qingtong" if "qingtong" in config["seal"] else "local"
+    )
+    output["seal_orientation_mode"] = config.get(
+        "seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE
     )
     output["seal_regions"] = preview_regions
     output["preview_date_box"] = preview_date_box

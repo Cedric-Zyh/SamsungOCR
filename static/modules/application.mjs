@@ -7,10 +7,10 @@ import {createRecognitionPlan} from './recognition_plan.mjs?v=20260918-no-vision
 import {createReview} from './review.mjs?v=20260920-view-review-mode';
 import {createReviewEvidence} from './review_evidence.mjs?v=20260918-no-vision';
 import {createReviewQueue} from './review_queue.mjs';
-import {createProgress} from './progress.mjs?v=20260920-view-review-mode';
+import {createProgress} from './progress.mjs?v=20260920-progress-detail';
 import {createReport} from './report.mjs';
 import {createNavigation} from './navigation.mjs';
-import {createProcessHistory} from './process_history.mjs?v=20260916-process-history';
+import {createProcessHistory} from './process_history.mjs?v=20260920-progress-detail';
 
 /** Composition root: controllers communicate through explicit callbacks.
  * Constructing an application performs no requests or event registration. */

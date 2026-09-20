@@ -26,6 +26,30 @@ def test_invalid_or_unavailable_plan():
         validate_config({'seal': ['qingtong']}, api_enabled=False)
 
 
+@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori'])
+def test_seal_orientation_selection_is_validated(mode):
+    cleaned = validate_config({'seal': ['paddle'], 'seal_orientation': mode})
+    assert cleaned['seal_orientation'] == mode
+    with pytest.raises(ValueError, match='印章方向'):
+        validate_config({'seal': ['paddle'], 'seal_orientation': 'unknown'})
+
+
+@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori'])
+def test_seal_orientation_reaches_stage_with_classifier_scope(mode):
+    calls = []
+    class Fake:
+        seal_api = SimpleNamespace(enabled=True)
+
+        def run_stage(self, context, stage, request):
+            calls.append((request.seal_orientation_mode, provider_allowed('paddle_doc_ori')))
+            return {'seal_check': {'recognized': '', 'status': '无法判断', 'reliable': False}}
+
+    result = run_configured(Fake(), 'unused.jpg', None,
+                            config={'seal': ['paddle'], 'seal_orientation': mode})
+    assert calls == [(mode, mode == 'doc_ori')]
+    assert result['seal_orientation_mode'] == mode
+
+
 def test_multimethod_conflict_and_partial_scope(tmp_path):
     calls = []
     class Fake:

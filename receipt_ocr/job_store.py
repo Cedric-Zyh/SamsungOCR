@@ -5,7 +5,7 @@ import json
 import uuid
 
 from .database import now_iso
-from .recognition_progress import public_progress
+from .recognition_progress import public_progress, merge_progress, seconds_between, STAGE_LABELS, MODEL_LABELS
 
 
 ACTIVE = ('awaiting_upload', 'ready', 'queued', 'running')
@@ -122,12 +122,20 @@ class JobStore:
 
     @staticmethod
     def _progress_title(event):
+        if event.get('provider') == 'model':
+            target = event.get('target') or STAGE_LABELS.get(event['stage'], '准备识别')
+            phase = {'started': '开始', 'completed': '完成', 'failed': '失败'}.get(event.get('phase'), '')
+            return f"{target} · {phase}"
         return PROGRESS_STAGE_LABELS.get(event.get('stage'), '识别进度更新')
 
     @staticmethod
     def _progress_detail(event):
         parts = []
-        if event.get('provider') == 'danzhengtong':
+        if event.get('provider') == 'model':
+            parts.append(event.get('method_label') or MODEL_LABELS.get(event.get('method'), '系统'))
+            if event.get('elapsed_seconds') is not None:
+                parts.append(f"耗时 {event['elapsed_seconds']} 秒")
+        elif event.get('provider') == 'danzhengtong':
             parts.append('单证通')
         elif event.get('provider'):
             parts.append(str(event['provider']))
@@ -173,6 +181,10 @@ class JobStore:
             'target_result_id', 'attempt', 'error_message')}
         output['start_requested'] = bool(job['start_requested'])
         output['progress'] = public_progress(job)
+        end = job.get('finished_at') or now_iso()
+        output['processing_seconds'] = seconds_between(job.get('started_at'), end)
+        output['wait_seconds'] = seconds_between(job.get('uploaded_at'), job.get('started_at') or end)
+        output['progress_age_seconds'] = seconds_between(output['progress'].get('updated_at'), end)
         if output['status'] == 'queued' and not output['start_requested']:
             output['status'] = 'ready'
         options = json.loads(job['payload_json'])
@@ -386,16 +398,15 @@ class JobStore:
             if row is None:
                 return False
             previous = json.loads(row['progress_json'])
-            same_stage = previous.get('provider') == event['provider'] and (
-                previous.get('stage') == event['stage']
-                or {previous.get('stage'), event['stage']} <= {'waiting', 'paused'})
-            progress = {**event, 'started_at': previous['started_at'] if same_stage else event['updated_at']}
+            progress, log_event = merge_progress(previous, event)
             con.execute('UPDATE recognition_jobs SET progress_json=? WHERE id=?',
                         (json.dumps(progress, ensure_ascii=False), claimed['id']))
-            if not same_stage:
+            if log_event:
+                phase = event.get('phase')
+                status = 'failed' if phase == 'failed' else 'succeeded' if phase == 'completed' else 'running'
                 self._log(con, claimed['id'], row['task_id'], 'progress',
                           self._progress_title(event), self._progress_detail(event),
-                          'running', event, event_at=event.get('updated_at'))
+                          status, {**event, 'attempt': claimed['attempt']}, event_at=event.get('updated_at'))
         return True
 
     def is_paused(self):
@@ -624,13 +635,16 @@ class JobStore:
         events = [event for _, event in sorted(indexed, key=lambda item: (item[1].get('time') or '', item[0]))]
         filename = result_row['filename'] if result_row is not None else jobs[0]['filename']
         current_status = ''
-        if result_row is not None:
+        if jobs and jobs[-1]['status'] in ACTIVE:
+            current_status = self.public(dict(jobs[-1]))['status']
+        elif result_row is not None:
             current_status = result_row['final_result'] or result_row['overall']
         elif jobs:
             current_status = self.public(dict(jobs[-1]))['status']
         return {'filename': filename, 'job_id': job_id or (jobs[-1]['id'] if jobs else ''),
                 'result_id': result_row['id'] if result_row is not None else result_id,
-                'current_status': current_status, 'events': events}
+                'current_status': current_status, 'events': events,
+                'job': self.public(dict(jobs[-1])) if jobs else None}
 
     def daily(self, day):
         with self.database.connect() as con:

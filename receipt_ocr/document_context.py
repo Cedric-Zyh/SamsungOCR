@@ -21,6 +21,7 @@ class StageRequest:
     seal_mode: str = "local"
     seal_future: object = None
     acceptance: dict = field(default_factory=dict)
+    seal_orientation_mode: str = "polygon"
 
 
 class DocumentContext:

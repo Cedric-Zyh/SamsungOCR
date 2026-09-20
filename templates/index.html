@@ -129,6 +129,16 @@
                   <label class="plan-method" title="生产环境真实识别，每次处理一张，每隔 2 秒查询结果"><input type="checkbox" data-method="danzhengtong" data-stage="{{ key }}" data-available="true"><span>单证通</span><small>远程</small></label>
 {% endif %}
                 </div>
+{% if key == 'seal' %}
+                <div class="seal-orientation-setting">
+                  <label for="seal-orientation-mode"><span>印章方向处理</span><select id="seal-orientation-mode" aria-label="印章方向处理方式">
+{% for mode in seal_orientation_modes %}
+                    <option value="{{ mode.id }}">{{ mode.label }}</option>
+{% endfor %}
+                  </select></label>
+                  <small id="seal-orientation-description"></small>
+                </div>
+{% endif %}
               </section>
 {% endfor %}
             </div>
@@ -298,6 +308,6 @@
   <script src="{{ url_for('static', filename='queue_state.js') }}?v=20260914-workbench-actions"></script>
   <script src="{{ url_for('static', filename='workbench.js') }}?v=20260914-workbench-actions"></script>
   <script src="{{ url_for('static', filename='import_files.js') }}?v=20260910-review-pagination"></script>
-  <script type="module" src="{{ url_for('static', filename='app.js') }}?v=20260920-view-review-mode"></script>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}?v=20260920-progress-detail"></script>
 </body>
 </html>

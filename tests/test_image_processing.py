@@ -144,6 +144,24 @@ def test_round_seal_type_band_keeps_only_lower_inner_row(tmp_path):
     assert round(float(output.mean())) == 90
 
 
+def test_round_seal_type_band_uses_center_row_for_oriented_stamp(tmp_path):
+    import cv2
+
+    source = tmp_path / "round-oriented-color-only.png"
+    image = np.full((1000, 1000, 3), 255, dtype=np.uint8)
+    image[420:620, 80:920] = 90
+    assert cv2.imwrite(str(source), image)
+
+    destination = save_round_seal_type_band(
+        source, tmp_path / "round-oriented-type-band.png", orientation_aligned=True
+    )
+    output = cv2.imread(str(destination))
+
+    assert output is not None
+    assert output.shape[:2] == (200, 840)
+    assert round(float(output.mean())) == 90
+
+
 def test_color_isolated_seal_keeps_red_ink_and_removes_black_form_text(tmp_path):
     import cv2
 
@@ -165,6 +183,31 @@ def test_color_isolated_seal_keeps_red_ink_and_removes_black_form_text(tmp_path)
     center_row = output[output.shape[0] // 2]
     assert np.any(center_row[:, 2] > center_row[:, 1] + 20)
     assert np.percentile(output[:, :60].reshape(-1, 3), 10) > 245
+
+
+def test_color_isolated_seal_rejects_low_saturation_table_line_fringes(tmp_path):
+    import cv2
+
+    image = np.full((200, 300, 3), 255, dtype=np.uint8)
+    # JPEG/scan fringes around a black rule can have a small red-channel bias.
+    image[100:103, 20:280] = (80, 90, 100)
+    cv2.putText(image, "收货专用章", (45, 150), cv2.FONT_HERSHEY_SIMPLEX, .8,
+                (40, 40, 220), 3)
+    source = tmp_path / "fringed-source.jpg"
+    destination = tmp_path / "fringed-color-isolated.png"
+    assert cv2.imwrite(str(source), image)
+
+    save_color_isolated_seal(
+        source,
+        destination,
+        SealRegion(0, 0, 1, 1, "red", "收货客户章", .1),
+    )
+
+    output = cv2.imread(str(destination))
+    assert output is not None
+    # The horizontal neutral fringe is gone, while red ink remains.
+    assert np.percentile(output[100:103, :, :].reshape(-1, 3), 10) > 245
+    assert np.any(output[:, :, 2] > output[:, :, 1] + 20)
 
 
 def test_rectangular_code_line_keeps_lower_digits_and_removes_borders(tmp_path):

@@ -13,6 +13,8 @@ from .parser import product_table_text, LOW_CONFIDENCE_THRESHOLD
 from .recognition_safety import _ocr_model_config
 from .seal_api import resolve_seal_recognition_mode
 
+from .recognition_progress import model_stage, report_plan
+
 STAGES = ("fields", "products", "handwriting", "date", "seal")
 
 
@@ -128,6 +130,8 @@ def run_legacy(
     backend = resolve_backend(ocr_backend)
     route = _route or backend_route(backend)
     mode = resolve_seal_recognition_mode(seal_recognition_mode)
+    plan = {stage: [route['page' if stage in {'fields', 'handwriting', 'products'} else stage]] for stage in STAGES if stage in targets}
+    report_plan(plan)
     context = DocumentContext(source, filename=filename)
     output = empty_result(context, _previous_fields)
     for stage in STAGES:
@@ -141,7 +145,8 @@ def run_legacy(
             mode,
             _seal_api_future,
         )
-        merge_stage(output, analyzer.run_stage(context, stage, request))
+        with model_stage(stage, plan[stage][0]):
+            merge_stage(output, analyzer.run_stage(context, stage, request))
     attach_product_fields(output)
     output.update(context.evidence())
     output.update(
