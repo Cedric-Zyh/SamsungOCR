@@ -78,15 +78,16 @@ export function createNavigation({
   }
   function routePage() {
     const route = location.hash.slice(1) || 'progress';
-    if (reviewState.current && route !== `review/${reviewState.current.id}` && !/^review\/\d+$/.test(route) && !canLeaveReview()) { history.replaceState(null, '', `#review/${reviewState.current.id}`); return; }
+    if (reviewState.current && !/^(review|view)\/\d+$/.test(route) && !canLeaveReview()) { history.replaceState(null, '', `#${reviewState.reviewMode || 'review'}/${reviewState.current.id}`); return; }
     if (route === 'import') { showPage('records'); showImportDialog(); return; }
-    if (/^review\/\d+$/.test(route)) {
+    if (/^(review|view)\/\d+$/.test(route)) {
       const id = Number(route.split('/')[1]);
-      if (reviewState.current?.id === id) showPage('review');
-      else openReview(id).catch(error => {
-        if (location.hash !== `#review/${id}`) return;
+      const mode = route.startsWith('view/') ? 'view' : 'review';
+      if (reviewState.current?.id === id && reviewState.reviewMode === mode) showPage('review');
+      else openReview(id, {mode}).catch(error => {
+        if (location.hash !== `#${mode}/${id}`) return;
         toast(error.message, 'danger');
-        if (reviewState.current) history.replaceState(null, '', `#review/${reviewState.current.id}`);
+        if (reviewState.current) history.replaceState(null, '', `#${reviewState.reviewMode || 'review'}/${reviewState.current.id}`);
         else location.hash = 'records';
       });
     } else {

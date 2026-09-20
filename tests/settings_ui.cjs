@@ -4,7 +4,9 @@ const {createRecognitionPlan} = require('../static/modules/recognition_plan.mjs'
 
 const stages = ['fields', 'products', 'handwriting', 'date', 'seal'];
 const emptyPlan = () => Object.fromEntries(stages.map(stage => [stage, []]));
-const sealTest = () => ({...emptyPlan(), fields:['vision'], seal:['qingtong']});
+const ACCEPTANCE = {seal_match_mode:'any', date_match_mode:'any', signature_match_mode:'any', reject_mode:'none', low_confidence_mode:'check', seal_pass_standard:'any_exact', date_source:'danzhengtong'};
+const withAcceptance = plan => ({...plan, acceptance: ACCEPTANCE});
+const sealTest = () => ({...emptyPlan(), fields:['paddle'], seal:['qingtong'], acceptance: ACCEPTANCE});
 
 function node(dataset = {}) {
   const classes = new Set(), listeners = new Map();
@@ -16,16 +18,19 @@ function node(dataset = {}) {
     fire(event) { listeners.get(event)?.({target:this}); },
   };
 }
-function harness({saved = null, providers = ['vision', 'paddle', 'paddle_server', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true} = {}) {
+function harness({saved = null, providers = ['paddle', 'paddle_server', 'paddle_v6', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true} = {}) {
   const targets = Object.fromEntries(stages.map(stage => [stage, node({target:stage})]));
   const cards = Object.fromEntries(stages.map(stage => [stage, node()]));
   const statuses = Object.fromEntries(stages.map(stage => [stage, node()]));
-  const methods = stages.flatMap(stage => ['vision', 'paddle', 'paddle_server', stage === 'seal' ? 'qingtong' : 'danzhengtong'].map(method => node({stage, method, available:String(providers.includes(method) && !unavailable.includes(`${stage}:${method}`))})));
+  const methods = stages.flatMap(stage => ['paddle', 'paddle_server', 'paddle_v6', stage === 'seal' ? 'qingtong' : 'danzhengtong'].map(method => node({stage, method, available:String(providers.includes(method) && !unavailable.includes(`${stage}:${method}`))})));
   const acceptance = ['seal', 'date', 'signature'].flatMap(stage => ['any', 'all', 'none'].map(mode => {
     const input = node({acceptanceInput:stage}); input.value = mode; input.checked = mode === 'any'; return input;
   }));
   const rejection = ['any_mismatch', 'all_mismatch', 'none'].map(mode => {
     const input = node({acceptanceReject:''}); input.value = mode; input.checked = mode === 'none'; return input;
+  });
+  const lowConfidence = ['check', 'ignore'].map(mode => {
+    const input = node({acceptanceLowConfidence:''}); input.value = mode; input.checked = mode === 'check'; return input;
   });
   const presets = ['full', 'date', 'seal', 'seal-test'].map(preset => node({preset}));
   const reset = node({planReset:''});
@@ -42,7 +47,9 @@ function harness({saved = null, providers = ['vision', 'paddle', 'paddle_server'
     if (selector === '[data-plan-reset]') return [reset];
     if (selector === '[data-acceptance-input]') return acceptance;
     if (selector === '[data-acceptance-reject]') return rejection;
+    if (selector === '[data-acceptance-low-confidence]') return lowConfidence;
     if (selector === '[data-acceptance-input], [data-acceptance-reject]') return [...acceptance, ...rejection];
+    if (selector === '[data-acceptance-input], [data-acceptance-reject], [data-acceptance-low-confidence]') return [...acceptance, ...rejection, ...lowConfidence];
     const acceptanceMatch = selector.match(/^\[data-acceptance-input="([^"]+)"\]$/);
     if (acceptanceMatch) return acceptance.filter(el => el.dataset.acceptanceInput === acceptanceMatch[1]);
     const match = selector.match(/^\[data-stage="([^"]+)"\]$/);
@@ -55,7 +62,7 @@ function harness({saved = null, providers = ['vision', 'paddle', 'paddle_server'
   }}, ui:{$, $$}, importsState:state});
   controller.initialize();
   return {controller, targets, cards, statuses, ids, methods, reset, writes, state,
-    acceptance, rejection,
+    acceptance, rejection, lowConfidence,
     preset:name => presets.find(button => button.dataset.preset === name),
     method:(stage, method) => methods.find(el => el.dataset.stage === stage && el.dataset.method === method),
   };
@@ -69,11 +76,11 @@ test('acceptance rules support any, all and no comparison for all three checks',
   h.rejection.forEach(input => { input.checked = input.value === 'all_mismatch'; });
   assert.deepEqual(h.controller.readAcceptancePolicy(), {
     seal_match_mode: 'none', date_match_mode: 'none', signature_match_mode: 'none', reject_mode: 'all_mismatch',
-    seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
+    low_confidence_mode: 'check', seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
   });
 });
 
-test('seal test selects only Vision fields and QingTong seals, and restores its name from the actual saved plan', () => {
+test('seal test selects only Paddle fields and QingTong seals, and restores its name from the actual saved plan', () => {
   const h = harness();
   h.preset('seal-test').fire('click');
   assert.deepEqual(h.controller.readRecognitionPlan(), sealTest());
@@ -87,17 +94,17 @@ test('seal test selects only Vision fields and QingTong seals, and restores its 
   assert.deepEqual(restored.controller.readRecognitionPlan(), sealTest());
   assert.equal(restored.ids['plan-name'].textContent, '印章测试');
   assert.equal(restored.writes.length, 0, 'opening settings must not rewrite the saved configuration');
-  restored.method('fields', 'paddle').checked = true;
-  restored.method('fields', 'paddle').fire('change');
+  restored.method('fields', 'paddle_server').checked = true;
+  restored.method('fields', 'paddle_server').fire('change');
   assert.equal(restored.ids['plan-name'].textContent, '自定义');
   assert.equal(restored.preset('seal-test').attributes['aria-pressed'], 'false');
-  restored.method('fields', 'paddle').checked = false;
-  restored.method('fields', 'paddle').fire('change');
+  restored.method('fields', 'paddle_server').checked = false;
+  restored.method('fields', 'paddle_server').fire('change');
   assert.equal(restored.ids['plan-name'].textContent, '印章测试');
 });
 
 test('seal test availability is checked on the required stage and a disabled preset cannot change the plan', () => {
-  for (const [unavailable, reason] of [['fields:vision', 'Vision'], ['seal:qingtong', '清瞳']]) {
+  for (const [unavailable, reason] of [['fields:paddle', 'Paddle 不可用'], ['seal:qingtong', '清瞳']]) {
     const h = harness({unavailable:[unavailable]});
     const before = h.controller.readRecognitionPlan();
     assert.equal(h.preset('seal-test').disabled, true);
@@ -111,8 +118,8 @@ test('seal test availability is checked on the required stage and a disabled pre
 test('an enabled stage without a method clears the stale import summary and does not save an invalid plan', () => {
   const h = harness({saved:sealTest()});
   const previousSummary = h.ids['import-config'].textContent;
-  h.method('fields', 'vision').checked = false;
-  h.method('fields', 'vision').fire('change');
+  h.method('fields', 'paddle').checked = false;
+  h.method('fields', 'paddle').fire('change');
   assert.throws(() => h.controller.readRecognitionPlan(), /印刷字段/);
   assert.notEqual(h.ids['import-config'].textContent, previousSummary);
   assert.match(h.ids['import-config'].textContent, /配置未完成/);
@@ -125,7 +132,7 @@ test('an enabled stage without a method clears the stale import summary and does
   assert.equal(h.writes.length, 0);
   h.targets.fields.checked = false;
   h.targets.fields.fire('change');
-  assert.deepEqual(h.controller.readRecognitionPlan(), {...emptyPlan(), seal:['qingtong']});
+  assert.deepEqual(h.controller.readRecognitionPlan(), {...emptyPlan(), seal:['qingtong'], acceptance: ACCEPTANCE});
   assert.equal(h.cards.fields.classList.contains('invalid'), false);
   assert.equal(h.statuses.fields.textContent, '未启用');
   assert.equal(h.ids['plan-requirement-note'].classList.contains('hidden'), false);
@@ -133,10 +140,10 @@ test('an enabled stage without a method clears the stale import summary and does
 });
 
 test('unavailable restored methods require a new selection without replacing the saved browser plan', () => {
-  const h = harness({saved:sealTest(), unavailable:['fields:vision']});
+  const h = harness({saved:sealTest(), unavailable:['fields:paddle']});
   assert.equal(h.targets.fields.checked, true);
-  assert.equal(h.method('fields', 'vision').checked, false);
-  assert.equal(h.method('fields', 'vision').disabled, true);
+  assert.equal(h.method('fields', 'paddle').checked, false);
+  assert.equal(h.method('fields', 'paddle').disabled, true);
   assert.throws(() => h.controller.readRecognitionPlan(), /印刷字段/);
   assert.equal(h.cards.fields.classList.contains('invalid'), true);
   assert.equal(h.writes.length, 0);
@@ -145,10 +152,10 @@ test('unavailable restored methods require a new selection without replacing the
 test('reset preserves normal defaults, falls back to Server, and never silently selects a simulated provider', () => {
   const normal = harness({saved:sealTest()});
   normal.reset.fire('click');
-  assert.deepEqual(normal.controller.readRecognitionPlan(), {fields:['paddle'], products:['paddle'], handwriting:[], date:['vision'], seal:['vision']});
+  assert.deepEqual(normal.controller.readRecognitionPlan(), withAcceptance({fields:['paddle'], products:['paddle'], handwriting:[], date:['danzhengtong'], seal:['paddle']}));
   assert.equal(normal.ids['plan-name'].textContent, '默认方案');
   const server = harness({providers:['paddle_server', 'danzhengtong']});
-  assert.deepEqual(server.controller.readRecognitionPlan(), {fields:['paddle_server'], products:['paddle_server'], handwriting:[], date:['paddle_server'], seal:['paddle_server']});
+  assert.deepEqual(server.controller.readRecognitionPlan(), withAcceptance({fields:['paddle_server'], products:['paddle_server'], handwriting:[], date:['danzhengtong'], seal:['paddle_server']}));
   server.preset('full').fire('click');
   assert.deepEqual(server.controller.readRecognitionPlan().handwriting, ['paddle_server']);
   const none = harness({providers:['danzhengtong']});
@@ -166,35 +173,35 @@ test('storage failure is reported without blocking a valid current selection', (
   assert.deepEqual(h.controller.readRecognitionPlan(), sealTest());
   assert.match(h.ids['plan-save-status'].textContent, /未能保存/);
   assert.equal(h.ids['plan-save-status'].attributes['data-state'], 'error');
-  assert.match(h.ids['import-config'].textContent, /Vision/);
+  assert.match(h.ids['import-config'].textContent, /Paddle/);
   const unreadable = harness({failRead:true});
-  assert.deepEqual(unreadable.controller.readRecognitionPlan(), unreadable.controller.defaultPlan());
+  assert.deepEqual(unreadable.controller.readRecognitionPlan(), withAcceptance(unreadable.controller.defaultPlan()));
   assert.match(unreadable.ids['plan-save-status'].textContent, /未能读取/);
   assert.equal(unreadable.ids['plan-save-status'].attributes['data-state'], 'error');
   assert.equal(unreadable.writes.length, 0);
 });
 
 test('malformed saved values and unknown providers never become executable or rendered markup', () => {
-  const h = harness({saved:{fields:['vision', '<img src=x onerror=alert(1)>', 4, {bad:true}], products:'vision', seal:['qingtong'], unknown:['vision']}});
+  const h = harness({saved:{fields:['paddle', '<img src=x onerror=alert(1)>', 4, {bad:true}], products:'paddle', seal:['qingtong'], unknown:['paddle']}});
   assert.deepEqual(h.controller.readRecognitionPlan(), sealTest());
   assert.doesNotMatch(h.ids['plan-selection-list'].innerHTML, /<img|onerror|undefined/);
   assert.equal(h.writes.length, 0);
-  const outerArray = harness({saved:'["vision"]'});
-  assert.deepEqual(outerArray.controller.readRecognitionPlan(), outerArray.controller.defaultPlan());
+  const outerArray = harness({saved:'["paddle"]'});
+  assert.deepEqual(outerArray.controller.readRecognitionPlan(), withAcceptance(outerArray.controller.defaultPlan()));
   const oldMarkup = harness({optionalNodes:false});
   assert.doesNotThrow(() => oldMarkup.preset('seal-test').fire('click'));
 });
 
 test('multiple providers, disabled stages, and upload locking keep their status consistent', () => {
-  const h = harness({saved:{...emptyPlan(), fields:['vision', 'paddle'], seal:['qingtong']}});
+  const h = harness({saved:{...emptyPlan(), fields:['paddle_v6', 'paddle'], seal:['qingtong']}});
   assert.equal(h.ids['plan-multi-note'].classList.contains('hidden'), false);
-  assert.equal(h.method('date', 'vision').disabled, true);
+  assert.equal(h.method('date', 'paddle_v6').disabled, true);
   h.targets.fields.checked = false;
   h.targets.fields.fire('change');
   assert.equal(h.ids['plan-multi-note'].classList.contains('hidden'), true);
   assert.deepEqual(h.controller.readRecognitionPlan().fields, []);
-  assert.equal(h.method('fields', 'vision').checked, true, 'a temporarily disabled stage retains its choices');
-  assert.equal(h.method('fields', 'vision').disabled, true);
+  assert.equal(h.method('fields', 'paddle_v6').checked, true, 'a temporarily disabled stage retains its choices');
+  assert.equal(h.method('fields', 'paddle_v6').disabled, true);
   h.targets.fields.checked = true;
   h.targets.fields.fire('change');
   assert.equal(h.ids['plan-multi-note'].classList.contains('hidden'), false);
@@ -210,6 +217,26 @@ test('multiple providers, disabled stages, and upload locking keep their status 
   h.state.batchRunning = false;
   h.controller.updateRecognitionPlan();
   assert.equal(h.preset('seal-test').disabled, false);
-  assert.equal(h.method('date', 'vision').disabled, true);
-  assert.equal(h.method('fields', 'vision').disabled, false);
+  assert.equal(h.method('date', 'paddle_v6').disabled, true);
+  assert.equal(h.method('fields', 'paddle_v6').disabled, false);
+});
+
+test('the PP-OCRv6 tier is selectable, counts as a local method, and renders its own label', () => {
+  const h = harness();
+  assert.equal(h.method('date', 'paddle_v6').disabled, false);
+  h.targets.date.checked = true;
+  h.methods.forEach(el => { if (el.dataset.stage === 'date') el.checked = false; });
+  h.method('date', 'paddle_v6').checked = true;
+  h.method('date', 'paddle_v6').fire('change');
+  assert.deepEqual(h.controller.readRecognitionPlan().date, ['paddle_v6']);
+  assert.match(h.ids['import-config'].textContent, /Paddle v6 Small/);
+  assert.doesNotMatch(h.ids['plan-selection-list'].innerHTML, /undefined/);
+  assert.equal(h.ids['plan-page-note'].classList.contains('hidden'), false);
+  assert.equal(h.controller.usesRemotePlan(), false);
+  const saved = h.writes.at(-1).plan;
+  const restored = harness({saved});
+  assert.deepEqual(restored.controller.readRecognitionPlan().date, ['paddle_v6']);
+  const oldBrowser = harness({saved:{...emptyPlan(), date:['paddle', 'paddle_v6']}, unavailable:['date:paddle_v6']});
+  assert.deepEqual(oldBrowser.controller.readRecognitionPlan().date, ['paddle']);
+  assert.throws(() => harness({saved:{...emptyPlan(), date:['paddle_v6']}, unavailable:['date:paddle_v6']}).controller.readRecognitionPlan(), /签收日期/);
 });

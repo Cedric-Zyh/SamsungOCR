@@ -421,7 +421,7 @@ if (process.argv.includes('--render-samples')) {
     const form=h.$('#review-form');
     for(const name of ['actual_date','actual_date_confirmed','seal_text','seal_confirmed_match','human_note','error_type','save_ground_truth','truth_seal_should_match']) form[name]=h.$(`[name=${name}]`);
     form.seal_text.value='客户收货章';form.human_note.value='只补充备注';
-    h.context.setupDateConfirmation({...row(1),fields:{要求到货:'2025-03-31'},date_check:{actual:'2025-03-31',status:'匹配',reliable:false,source:'vision'}},{});
+    h.context.setupDateConfirmation({...row(1),fields:{要求到货:'2025-03-31'},date_check:{actual:'2025-03-31',status:'匹配',reliable:false,source:'paddle'}},{});
     h.state.current.review_revision='original-revision';
     const payloads=[];
     h.context.api=async (_url, options)=>{payloads.push(options.json);return {...row(1),review_revision:'saved-revision'};};

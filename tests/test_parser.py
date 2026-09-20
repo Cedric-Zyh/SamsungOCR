@@ -177,6 +177,39 @@ def test_receipt_date_does_not_invent_required_date_without_ocr_evidence():
     assert found == date(2025, 1, 13)
 
 
+def test_receiving_date_band_follows_a_low_signature_footer():
+    """7330644044: footer at 0.736, receiving date at 0.814."""
+    rows = [TextObservation("2026年2月4日", 0.95, 0.87, 0.814, 0.10, 0.015)]
+
+    assert find_receipt_date(rows, "2026-02-04")[0] is None
+    found, _ = find_receipt_date(rows, "2026-02-04", anchor_y=0.7362)
+    assert found == date(2026, 2, 4)
+
+
+def test_receiving_date_band_keeps_every_date_the_absolute_band_accepted():
+    """The anchor band is a superset, so no existing acceptance is lost."""
+    rows = [
+        TextObservation("2026年2月4日", 0.95, 0.87, 0.500, 0.10, 0.015),
+        TextObservation("2026年2月4日", 0.94, 0.86, 0.600, 0.10, 0.015),
+        TextObservation("2026年2月4日", 0.93, 0.85, 0.690, 0.10, 0.015),
+    ]
+    expected = date(2026, 2, 4)
+
+    assert find_receipt_date(rows, "2026-02-04")[0] == expected
+    for anchor in (0.470, 0.471, 0.520, 0.600, 0.7362):
+        assert find_receipt_date(rows, "2026-02-04", anchor_y=anchor)[0] == expected
+
+
+def test_receiving_date_band_still_rejects_off_footer_rows():
+    far_below = [TextObservation("2026年2月4日", 0.95, 0.87, 0.980, 0.10, 0.015)]
+    left_side = [TextObservation("2026年2月4日", 0.95, 0.30, 0.800, 0.10, 0.015)]
+    above_footer = [TextObservation("2026年2月4日", 0.95, 0.87, 0.700, 0.10, 0.015)]
+
+    assert find_receipt_date(far_below, "2026-02-04", anchor_y=0.7362)[0] is None
+    assert find_receipt_date(left_side, "2026-02-04", anchor_y=0.7362)[0] is None
+    assert find_receipt_date(above_footer, "2026-02-04", anchor_y=0.7362)[0] is None
+
+
 def test_truncated_two_digit_receipt_day_cannot_become_reliable_mismatch():
     rows = [
         TextObservation("202年2月2日", .99, .82, .61, .14, .02),

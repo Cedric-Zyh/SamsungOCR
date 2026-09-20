@@ -5,6 +5,7 @@ import re
 from datetime import date
 from .parser import parse_date, parse_receipt_date
 from .ocr_types import TextObservation
+from .paddle_ocr import is_lightweight_backend as _is_lightweight_line_backend
 from .date_fragments import (
     _parse_compact_full_date_audit_candidate,
     _parse_date_slot_digit,
@@ -286,9 +287,9 @@ def _missing_month_day_component_prefilter_from_artifacts(
                 elif (
                     "Mobile" in preprocessing
                     or group_name == "secondary_ocr_variants"
-                    or (
+                    or                     (
                         group_name == "date_line_ocr_variants"
-                        and "mobile" in date_line_backend.lower()
+                        and _is_lightweight_line_backend(date_line_backend)
                     )
                 ):
                     model = "mobile"

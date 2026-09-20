@@ -196,3 +196,5 @@ body[data-active-page="progress"] .hero .subtitle { color:#748399; font-size:13p
   [data-page="progress"] .queue-item:has(>button) { grid-template-columns:30px minmax(0,1fr) auto; }
   [data-page="progress"] .queue-item>button { grid-column:2 / -1; justify-self:start; }
 }
+.artifact-ocr-text { margin: 6px 0 0; color: var(--ink); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.artifact-group > h4 small { display: none; }

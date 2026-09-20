@@ -26,7 +26,9 @@ def _select_complete_dates(
     evidence: DateStageEvidence, decision: DateDecision, consensus: DateConsensus
 ) -> None:
     decision.actual_date, decision.date_row = find_receipt_date(
-        evidence.combined_rows, evidence.fields.get("要求到货", "")
+        evidence.combined_rows,
+        evidence.fields.get("要求到货", ""),
+        anchor_y=evidence.anchor_y,
     )
     if decision.actual_date is None:
         decision.actual_date, decision.date_row = _find_confirmed_far_lower_date(

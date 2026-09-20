@@ -66,5 +66,5 @@ def probe_date_slots(
             _prepare_slot_probe(run, probe)
             _collect_slot_variants(run, probe, recognize_line)
             _select_slot_date(run, probe)
-            _recover_unparsed_slot_date(run, probe, recognize_line)
+            _recover_unparsed_slot_date(run, probe)
             _publish_slot_probe(run, probe)

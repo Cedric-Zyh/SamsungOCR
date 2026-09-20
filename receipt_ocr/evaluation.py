@@ -290,7 +290,7 @@ def evaluate_backends(results: list[dict], ground_truth: dict) -> list[dict]:
         if backend:
             groups.setdefault(backend, []).append(result)
     order = {name: index for index, name in enumerate(
-        ("vision", "paddle", "paddle_server", "hybrid", "hybrid_server")
+        ("paddle", "paddle_v6", "paddle_server", "hybrid_server")
     )}
     output = []
     for backend, group in groups.items():

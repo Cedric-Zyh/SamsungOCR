@@ -27,7 +27,5 @@ def test_simulated_windows_smoke_writes_auditable_report(tmp_path, monkeypatch):
         "date": "paddle",
         "seal": "paddle",
     }
-    assert next(
-        backend for backend in report["backends"]
-        if backend["id"] == "vision"
-    )["available"] is False
+    # The macOS Vision backend is gone: it must not appear in the catalog at all.
+    assert all(backend["id"] != "vision" for backend in report["backends"])

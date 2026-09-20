@@ -9,8 +9,6 @@ from .image_processing import save_receipt_date_crop
 from .ocr_backends import backend_label, recognize_text
 from .date_evidence import (
     _save_date_line_crop,
-    _recognize_date_slot_with_vision,
-    _recognize_date_line_vision_consensus,
 )
 from .date_crop_state import DateCropRun, DateCropServices
 from .date_crop_workflow import collect_date_regions
@@ -27,8 +25,8 @@ from .date_crop_color_confirmation import (
 from .date_crop_final_audits import (
     _confirm_missing_year_separator,
     _confirm_nondestructive_cross_year,
-    _audit_original_color_handwriting,
 )
+from .date_fragments import normalize_date_only_rows, sanitize_date_artifacts
 
 
 @timed("date_recognition")
@@ -66,8 +64,6 @@ def _recognize_receipt_date(
                 save_date_line_crop=_save_date_line_crop,
                 recognize_text=recognize_text,
                 backend_label=backend_label,
-                recognize_date_slot_with_vision=_recognize_date_slot_with_vision,
-                recognize_date_line_vision_consensus=_recognize_date_line_vision_consensus,
             ),
         )
         if run.required_text:
@@ -86,5 +82,8 @@ def _recognize_receipt_date(
         run_low_confidence_date_audit(run)
         _confirm_missing_year_separator(run)
         _confirm_nondestructive_cross_year(run)
-        _audit_original_color_handwriting(run)
-        return run.output, run.artifacts
+        # Local date OCR is date-only at the decision boundary.  This also
+        # cleans supplemental line/slot evidence that was collected by the
+        # audit modules after the main tight/wide crops.
+        run.output = normalize_date_only_rows(run.output)
+        return run.output, sanitize_date_artifacts(run.artifacts)

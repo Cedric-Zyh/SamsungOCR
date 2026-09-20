@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from receipt_ocr.field_schema import OUTPUT_FIELDS, project_fields, recognition_fields
 from receipt_ocr.requested_fields import printed_extras, handwritten_candidates
+from receipt_ocr.field_schema import derive_signature_check
 from receipt_ocr.ocr_types import TextObservation as Row
 from receipt_ocr import stage_handwriting
 
@@ -29,6 +30,17 @@ def test_printed_contact_is_not_handwritten_receiver():
             row("仓库接收人：李四", y=.8)]
     assert printed_extras(rows)["仓库联系人"] == "张三"
     assert handwritten_candidates(rows) == {"仓库接收人": "李四"}
+
+
+def test_printed_contact_skips_landline_label_and_keeps_multiple_names():
+    rows = [row("座机0755-29042475/徐华送13421366591/张15999596126/13302481972", y=.32),
+            row("发货单位：三星", y=.35)]
+    assert printed_extras(rows)["仓库联系人"] == "徐华送、张"
+
+
+def test_signature_matches_when_one_of_multiple_contacts_matches():
+    assert derive_signature_check({"仓库联系人": "徐华送、张", "仓库接收人": "张"})["status"] == "匹配"
+    assert derive_signature_check({"仓库联系人": "徐华送、李", "仓库接收人": "张"})["status"] == "不匹配"
 
 
 def test_contact_never_uses_receipt_address_or_signature_as_fallback():

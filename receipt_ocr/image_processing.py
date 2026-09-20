@@ -8,6 +8,17 @@ import numpy as np
 from .execution import timed
 
 
+class DateCropOutOfRange(ValueError):
+    """A date-crop window lies entirely outside the image.
+
+    The date crops are offsets from the signature-requirement anchor.  On a
+    layout whose signature row already sits near the page bottom, an offset
+    lands past the edge and the slice comes back empty.  ``cv2.imencode``
+    asserts on an empty image, which used to abort the whole date stage over
+    an audit region that simply had no room to exist.
+    """
+
+
 @dataclass(frozen=True)
 class SealRegion:
     x: float
@@ -17,9 +28,13 @@ class SealRegion:
     color: str
     role: str
     pixel_ratio: float
+    qingtong_cls: str = ""
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        value = asdict(self)
+        if not self.qingtong_cls:
+            value.pop("qingtong_cls")
+        return value
 
 
 def _read_image(path: str | Path) -> np.ndarray:
@@ -75,6 +90,8 @@ def seal_region_is_rectangular(
     and retain the historical aspect-ratio fallback only when no usable
     contour survives the chroma gate.
     """
+    if region.qingtong_cls:
+        return region.qingtong_cls == "rectangle"
     image = _read_image(source)
     height, width = image.shape[:2]
     x1, y1 = int(region.x * width), int(region.y * height)
@@ -666,6 +683,46 @@ def save_region_crop(
     encoded.tofile(str(destination))
 
 
+def read_image_size(path: str | Path) -> tuple[int, int]:
+    """Return the source image ``(width, height)`` as the crop writers see it.
+
+    EXIF rotation is already applied by the decoder, so the numbers here are in
+    the same frame as :func:`save_region_crop` and the pixel boxes an external
+    service reports.
+    """
+    image = _read_image(path)
+    height, width = image.shape[:2]
+    return width, height
+
+
+def save_pixel_region_crop(
+    source: str | Path,
+    destination: str | Path,
+    box: tuple[float, float, float, float],
+) -> None:
+    """Write the absolute pixel box ``(x1, y1, x2, y2)`` of the source image.
+
+    :class:`SealRegion` carries page fractions because that is the currency of
+    our own detection.  A box returned by an external service already *is*
+    geometry, so it is written directly instead of being round-tripped through
+    fractions first, which would move the corners by up to a pixel each.
+    """
+    image = _read_image(source)
+    height, width = image.shape[:2]
+    x1, y1, x2, y2 = (int(round(float(value))) for value in box)
+    x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
+    y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
+    crop = image[y1:y2, x1:x2]
+    if crop.size == 0:
+        raise ValueError("印章区域超出图片范围")
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", crop)
+    if not ok:
+        raise ValueError("印章区域编码失败")
+    encoded.tofile(str(destination))
+
+
 @timed('date_crop_generation')
 def save_receipt_date_crop(
     source: str | Path,
@@ -693,15 +750,37 @@ def save_receipt_date_crop(
     x1, x2 = int(x1n * width), int(x2n * width)
     y1, y2 = int(y1n * height), int(y2n * height)
     crop = image[y1:y2, x1:x2]
+    if crop.size == 0:
+        raise DateCropOutOfRange(
+            f"日期裁剪区域超出页面范围：横向 {x1n:.3f}~{x2n:.3f}、"
+            f"纵向 {y1n:.3f}~{y2n:.3f}（图片 {width}x{height}）"
+        )
     if raw_destination:
         _write_stage_image(raw_destination, crop, ".jpg")
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    colored = cv2.inRange(hsv, (0, 42, 35), (179, 255, 255))
-    cleaned = crop.copy()
-    cleaned[colored > 0] = (255, 255, 255)
+    # A broad HSV mask treats a dark handwritten stroke underneath a red
+    # stamp as red as well, so it erases the very pixels needed by OCR.  Keep
+    # the luminance of all dark ink and suppress only bright, strongly red
+    # pixels.  This leaves a little pale stamp residue when the two inks are
+    # physically fused, but it does not manufacture or delete handwriting.
+    blue, green, red = (channel.astype(np.int16) for channel in cv2.split(crop))
+    red_excess = red - np.maximum(green, blue)
+    bright_red = (
+        (red_excess >= 35)
+        & (np.minimum(green, blue) >= 140)
+        & (red >= 160)
+    )
+    cleaned_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    cleaned_gray[bright_red] = 255
+    # The displayed derivative can remove the complete red chroma mask.  It
+    # is intentionally separate from ``cleaned_gray``: the latter is kept for
+    # OCR so dark handwriting at a stamp intersection is not erased merely to
+    # make the preview look cleaner.
+    red_mask, _ = _color_masks(crop)
+    visual_cleaned = crop.copy()
+    visual_cleaned[red_mask > 0] = (255, 255, 255)
     if color_clean_destination:
-        _write_stage_image(color_clean_destination, cleaned, ".png")
-    gray = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+        _write_stage_image(color_clean_destination, visual_cleaned, ".png")
+    gray = cleaned_gray
     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     _, ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
     horizontal = cv2.morphologyEx(

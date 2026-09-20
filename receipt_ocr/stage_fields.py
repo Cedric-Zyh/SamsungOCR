@@ -31,6 +31,7 @@ def execute(context: DocumentContext, request: StageRequest):
     qr_text = context.qr()
     field_fallbacks, contextual_corrections, fixed_phrase_corrections = {}, {}, {}
     detail_page_rows = []
+    requirement_artifacts = []
     detail_backend = stage_backends["date"]
     invalid_note_original, template_note = "", ""
     if context.document_type["type"] != "receipt":
@@ -48,9 +49,10 @@ def execute(context: DocumentContext, request: StageRequest):
         )
         if template_note:
             fields["签收说明"] = template_note
-        # Vision sometimes recognizes handwriting and stamp-adjacent text only in
-        # the full-page context. Hybrid mode therefore runs one supplementary
-        # detail-page pass instead of relying exclusively on the small crops.
+        # A second stage backend sometimes recognizes handwriting and
+        # stamp-adjacent text only in the full-page context. Whenever the date
+        # stage runs on another backend, run one supplementary detail-page pass
+        # instead of relying exclusively on the small crops.
         detail_page_rows = []
         detail_backend = stage_backends["date"]
         if detail_backend != stage_backends["page"]:
@@ -71,7 +73,7 @@ def execute(context: DocumentContext, request: StageRequest):
                     "source": f"{stage_labels['date']} 整页回退",
                 }
             # Long stamp requirements are often split into multiple boxes or
-            # lose one/two glyphs in Paddle. Prefer Vision only when it is a
+            # lose one/two glyphs. Prefer the detail pass only when it is a
             # demonstrably fuller version of the same text, or the primary
             # value is semantically unusable. Unrelated alternatives are never
             # substituted.
@@ -85,7 +87,7 @@ def execute(context: DocumentContext, request: StageRequest):
                     "source": f"{stage_labels['seal']} 整页回退",
                 }
             # The receipt note is a printed fixed-template field.  If Paddle
-            # misses the whole line under a stamp, retain Vision's actual OCR
+            # misses the whole line under a stamp, retain the detail OCR
             # reading first; ``standardize_fixed_phrases`` below will only
             # normalize it when it is sufficiently similar to the known text.
             if (
@@ -107,6 +109,9 @@ def execute(context: DocumentContext, request: StageRequest):
             fields.get("签章要求", ""),
             stage_backends["page"],
             customer=fields.get("客户名称", ""),
+            artifact_dir=request.artifact_dir,
+            artifact_url_prefix=request.artifact_url_prefix,
+            artifacts=requirement_artifacts,
         )
         if requirement_line:
             original_requirement = fields.get("签章要求", "")
@@ -194,6 +199,8 @@ def execute(context: DocumentContext, request: StageRequest):
         if low:
             reasons.append("关键字段低置信度：" + "、".join(low))
     return {
+        **({"processing_artifacts": {"signature_requirement": requirement_artifacts}}
+           if requirement_artifacts else {}),
         "fields": fields,
         "field_metadata": {k: v for k, v in field_metadata.items() if k in PRINTED_FIELDS and fields.get(k)},
         "field_fallbacks": field_fallbacks,

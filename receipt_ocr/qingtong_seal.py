@@ -51,6 +51,7 @@ def compare_qingtong_seal(requirement, external, match_mode="any"):
         best_channel = 'template' if seal_text_comparison_rank(template_check) > seal_text_comparison_rank(ocr_check) else 'ocr'
         comparison = template_check if best_channel == 'template' else ocr_check
         candidates.append({
+            'cls': str(seal.get('cls') or '').lower(),
             'index': index, 'xyxy': seal.get('xyxy'), 'match_count': count, 'complete': complete,
             'best_channel': best_channel, 'comparison': comparison, 'status': comparison['status'],
             'template': {'matched': template_matches, 'status': template_check['status'], 'label': label, 'similarity': similarity,

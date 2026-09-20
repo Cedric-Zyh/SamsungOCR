@@ -22,6 +22,7 @@ class SealCropRequest:
     secondary_ocr_backend: str | None
     requirement: str
     footer_anchor_y: float | None
+    orientation_resolved_indices: frozenset[int] = frozenset()
 
 
 @dataclass
@@ -40,6 +41,8 @@ class SealRegionEvidence:
     whole_text: str = ""
     isolated: Path | None = None
     color_isolated: Path | None = None
+    round_type_band: Path | None = None
+    round_type_band_texts: list[str] = field(default_factory=list)
     code_line: Path | None = None
     code_line_texts: list[str] = field(default_factory=list)
     crop_text: str = ""
@@ -77,6 +80,13 @@ class SealAuditRoute:
     overlapping_repair_route: bool = False
     company_only_requirement: bool = False
     audit_limit: int = 0
+    # Resolved by ``seal_audit_policy``: which provider actually reads the
+    # colour-isolated derivatives, and whether the bands are read by a
+    # genuinely different model tier.
+    audit_backend: str | None = None
+    audit_band_backend: str | None = None
+    audit_skip_reason: str = ""
+    audit_mode: str = "auto"
 
 
 @dataclass

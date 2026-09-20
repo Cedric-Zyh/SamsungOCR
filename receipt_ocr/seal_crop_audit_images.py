@@ -68,6 +68,7 @@ def _prepare_server_audit_images(
         request.artifact_dir
         and audit_position == 0
         and route.robust_round_shop
+        and route.audit_band_backend
         and not candidate["rectangular"]
     ):
         audit.robust_unwrapped = Path(candidate["unwrapped"]).with_name(
@@ -107,7 +108,7 @@ def _prepare_server_audit_images(
                     row.text
                     for row in recognize_text(
                         band_path,
-                        backend="paddle",
+                        backend=route.audit_band_backend,
                         min_text_height=0.012,
                     )
                     if row.text

@@ -1,10 +1,12 @@
 """Recognize region and line variants, retaining unconfirmed evidence."""
 
 from __future__ import annotations
+import re
 from .parser import parse_date, parse_receipt_date
 from .ocr_types import TextObservation
 from .date_evidence import _conflicting_receipt_dates, _trailing_numeric_month_day
 from .date_crop_state import DateCropRun, DateCropRegion
+from .date_fragments import normalize_date_only_rows
 
 
 def _recognize_region_variants(run: DateCropRun, region: DateCropRegion) -> None:
@@ -30,6 +32,7 @@ def _recognize_region_variants(run: DateCropRun, region: DateCropRegion) -> None
             )
         except Exception:
             candidate_rows = []
+        candidate_rows = normalize_date_only_rows(candidate_rows)
         region.evidence.variant_rows.extend(candidate_rows)
         region.evidence.ocr_variants.append(
             {
@@ -46,6 +49,7 @@ def _recognize_region_variants(run: DateCropRun, region: DateCropRegion) -> None
                 )
             except Exception:
                 secondary_rows = []
+            secondary_rows = normalize_date_only_rows(secondary_rows)
             region.evidence.secondary_raw_rows.extend(secondary_rows)
             required = parse_date(run.required_text)
             # Secondary OCR is supporting evidence in Hybrid mode.
@@ -88,22 +92,25 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
     # The Server pipeline has already run detection+recognition on
     # these date candidates. Loading a second Server recognition-
     # only predictor can exceed local memory, so the detector-
-    # bypass path is reserved for the lightweight Mobile model.
-    region.evidence.line_backend = (
-        "paddle"
-        if run.secondary_ocr_backend == "paddle" or run.ocr_backend == "paddle"
-        else ""
+    # bypass path is reserved for the lightweight tiers.
+    from .paddle_ocr import is_lightweight_backend, variant_of
+    region.evidence.line_backend = next(
+        (
+            backend
+            for backend in (run.secondary_ocr_backend, run.ocr_backend)
+            if is_lightweight_backend(backend)
+        ),
+        "",
     )
     region.evidence.line_rows = []
     region.evidence.accepted_line_rows = []
     region.evidence.line_variants = []
+    region.evidence.display_line_variants = []
     region.evidence.cross_model_month_day_confirmed = False
     if region.evidence.line_backend:
         from .paddle_ocr import recognize_line
 
-        model_variant = (
-            "server" if region.evidence.line_backend == "paddle_server" else "mobile"
-        )
+        model_variant = variant_of(region.evidence.line_backend) or "mobile"
         for preprocessing, candidate, strict_only in (
             ("日期行原图", region.images.line_raw, False),
             ("日期行去印章色", region.images.line_color_clean, False),
@@ -113,6 +120,7 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
                 current_rows = recognize_line(candidate, model_variant=model_variant)
             except Exception:
                 current_rows = []
+            current_rows = normalize_date_only_rows(current_rows)
             region.evidence.line_rows.extend(current_rows)
             if run.secondary_ocr_backend:
                 required = parse_date(run.required_text)
@@ -147,6 +155,32 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
                     "accepted_texts": [row.text for row in accepted],
                 }
             )
+        # The third user-facing image is the outer-frame-cleaned line. OCR it
+        # for display only; it never enters the date decision.
+        candidate = region.images.line_positioned_frame_clean
+        if candidate is not None:
+            try:
+                display_rows = (
+                    recognize_line(candidate, model_variant=model_variant)
+                    if region.evidence.line_backend
+                    else run.services.recognize_text(
+                        candidate,
+                        backend=run.ocr_backend,
+                        min_text_height=0.012,
+                    )
+                )
+            except Exception:
+                display_rows = []
+            display_rows = normalize_date_only_rows(display_rows)
+            region.evidence.display_line_variants.append(
+                {
+                    "preprocessing": "日期行去外框",
+                    "ocr_texts": [row.text for row in display_rows if row.text],
+                }
+            )
+        # Do not promote a single-model narrow-slot guess.  In particular,
+        # the ambiguous day in this form has produced both ``0`` and ``5``;
+        # without an independent model agreement it must remain blank.
         # The upper-row note is promoted only when Mobile and
         # Server independently read the printed required date.
         # One model or one preprocessing variant is deliberately

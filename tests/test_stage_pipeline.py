@@ -62,7 +62,7 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(document_context, "recognize_text", page)
     monkeypatch.setattr(document_context, "decode_qr", qr)
-    monkeypatch.setattr(pipeline, "resolve_backend", lambda value: value or "vision")
+    monkeypatch.setattr(pipeline, "resolve_backend", lambda value: value or "paddle")
     monkeypatch.setattr(
         pipeline,
         "backend_route",
@@ -71,7 +71,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(
         recognition_config,
         "backend_catalog",
-        lambda: [dict(id=x, available=True) for x in ("vision", "paddle")],
+        lambda: [dict(id=x, available=True) for x in ("paddle", "paddle_v6")],
     )
     monkeypatch.setattr(stage_fields, "parse_fields", lambda rows: deepcopy(FIELDS))
     monkeypatch.setattr(stage_fields, "enrich_fields", lambda fields, qr: fields)
@@ -123,14 +123,14 @@ def test_both_entries_route_same_document_and_preserve_evidence(harness, kind):
     engine, state = harness
     state.kind = kind
     direct = engine.analyze(
-        "document.jpg", ocr_backend="vision", seal_recognition_mode="local"
+        "document.jpg", ocr_backend="paddle", seal_recognition_mode="local"
     )
     configured = run_configured(
         engine,
         "document.jpg",
         None,
-        config={stage: ["vision"] for stage in pipeline.STAGES},
-        ocr_backend="vision",
+        config={stage: ["paddle"] for stage in pipeline.STAGES},
+        ocr_backend="paddle",
     )
     assert (
         direct["document_type"]["type"] == configured["document_type"]["type"] == kind
@@ -166,7 +166,7 @@ def test_configured_dispatch_never_calls_legacy_analyze(harness, monkeypatch):
         engine,
         "document.jpg",
         None,
-        config={stage: ["vision"] for stage in pipeline.STAGES},
+        config={stage: ["paddle"] for stage in pipeline.STAGES},
     )
     assert result["recognition_status"] == {
         stage: "已执行" for stage in pipeline.STAGES
@@ -182,7 +182,7 @@ def test_partial_retry_only_executes_selected_stage(harness, stage):
         engine,
         "continuation.jpg",
         None,
-        config={stage: ["vision"]},
+        config={stage: ["paddle"]},
         previous_fields=FIELDS,
     )
     assert bool(state.dates) == (stage == "date")
@@ -201,8 +201,8 @@ def test_nonstandard_plan_never_prefetches_remote_seal(harness, kind):
         engine,
         "other.jpg",
         None,
-        config={"fields": ["vision"], "seal": ["qingtong"]},
-        ocr_backend="vision",
+        config={"fields": ["paddle"], "seal": ["qingtong"]},
+        ocr_backend="paddle",
     )
     assert state.api == []
     assert result["overall"] == "需人工复核"
@@ -226,9 +226,9 @@ def test_multiple_field_providers_share_qr_but_keep_independent_pages(harness):
         engine,
         "document.jpg",
         None,
-        config={"fields": ["vision", "paddle"], "products": ["vision", "paddle"]},
+        config={"fields": ["paddle_v6", "paddle"], "products": ["paddle_v6", "paddle"]},
     )
-    assert [backend for _, backend in state.pages] == ["vision", "paddle"]
+    assert [backend for _, backend in state.pages] == ["paddle_v6", "paddle"]
     assert state.qr == 1
 
 
@@ -240,22 +240,22 @@ def test_selected_provider_recovers_unknown_routing_before_date_and_remote_seal(
 
     def page(source, *, backend):
         state.pages.append((str(source), backend))
-        return deepcopy(first_rows if backend == "vision" else PAGES["receipt"])
+        return deepcopy(first_rows if backend == "paddle_v6" else PAGES["receipt"])
 
     monkeypatch.setattr(document_context, "recognize_text", page)
     monkeypatch.setattr(
         recognition_config, "backend_route",
-        lambda _: dict(page="vision", date="vision", seal="vision"),
+        lambda _: dict(page="paddle", date="paddle", seal="paddle"),
     )
     result = run_configured(
         engine, "document.jpg", None,
-        config={"fields": ["vision", "paddle"], "date": ["paddle"], "seal": ["qingtong"]},
+        config={"fields": ["paddle_v6", "paddle"], "date": ["paddle"], "seal": ["qingtong"]},
     )
 
     assert result["document_type"]["type"] == "receipt"
     assert result["ocr_stage_backends"]["page"]["id"] == "paddle"
     assert "出库单" in result["raw_text"]
-    assert [backend for _, backend in state.pages] == ["vision", "paddle"]
+    assert [backend for _, backend in state.pages] == ["paddle_v6", "paddle"]
     assert len(state.dates) == len(state.api) == 1
 
 
@@ -265,26 +265,26 @@ def test_unknown_routing_cannot_use_unselected_provider(harness):
     _, state = harness
     state.kind = "unknown"
     context = DocumentContext("document.jpg")
-    with provider_scope({"vision"}):
-        context.page("vision")
+    with provider_scope({"paddle_v6"}):
+        context.page("paddle_v6")
         state.kind = "receipt"
         with pytest.raises(ValueError, match="未授权"):
             context.page("paddle")
 
     assert context.document_type["type"] == "unknown"
-    assert [backend for _, backend in state.pages] == ["vision"]
+    assert [backend for _, backend in state.pages] == ["paddle_v6"]
 
 
 def test_reliable_nonreceipt_routing_stays_fixed_with_another_provider(harness):
     _, state = harness
     state.kind = "warehouse_authorization"
     context = DocumentContext("document.jpg")
-    context.page("vision")
+    context.page("paddle")
     state.kind = "receipt"
     context.page("paddle")
 
     assert context.document_type["type"] == "warehouse_authorization"
-    assert context.primary_backend == "vision"
+    assert context.primary_backend == "paddle"
     assert not context.allows_remote_seal
 
 
@@ -297,7 +297,7 @@ def test_explicit_other_month_cannot_pass_date_stage(harness, observations):
     result = engine.run_stage(
         DocumentContext("document.jpg"), "date",
         StageRequest(
-            dict(page="vision", date="vision", seal="vision"),
+            dict(page="paddle", date="paddle", seal="paddle"),
             {**FIELDS, "要求到货": "2025-05-11", "制单日期": "2025-05-01"},
         ),
     )
@@ -324,7 +324,7 @@ def test_seal_reference_runs_before_verdict_with_original_filename(harness):
     result = engine.analyze(
         "uuid-upload.jpg",
         filename="original.jpg",
-        ocr_backend="vision",
+        ocr_backend="paddle",
         reference_matcher=SimpleNamespace(match=match),
     )
     assert calls == ["original.jpg"]
@@ -339,7 +339,7 @@ def test_stage_result_has_no_final_verdict_or_unselected_stage(harness):
     result = engine.run_stage(
         context,
         "fields",
-        StageRequest(dict(page="vision", date="vision", seal="vision")),
+        StageRequest(dict(page="paddle", date="paddle", seal="paddle")),
     )
     assert "fields" in result and "stage_review_reasons" in result
     assert not {"overall", "date_check", "seal_check", "product_table"} & result.keys()
@@ -348,13 +348,13 @@ def test_stage_result_has_no_final_verdict_or_unselected_stage(harness):
 def test_direct_stage_context_reuses_page_without_outer_decorator(harness):
     engine, state = harness
     context = DocumentContext("document.jpg")
-    request = StageRequest(dict(page="vision", date="vision", seal="vision"))
+    request = StageRequest(dict(page="paddle", date="paddle", seal="paddle"))
     engine.run_stage(context, "fields", request)
     engine.run_stage(context, "products", request)
     assert len(state.pages) == 1
-    copy = context.page("vision")
+    copy = context.page("paddle")
     copy.clear()
-    assert context.page("vision")
+    assert context.page("paddle")
 
 
 @pytest.mark.parametrize("low_field, expected_reasons", [
@@ -389,12 +389,12 @@ def test_low_confidence_field_uses_same_review_policy_for_both_entries(
             "stage_review_reasons": [],
         },
     )
-    direct = engine.analyze("document.jpg", ocr_backend="vision")
+    direct = engine.analyze("document.jpg", ocr_backend="paddle")
     configured = run_configured(
         engine,
         "document.jpg",
         None,
-        config={stage: ["vision"] for stage in pipeline.STAGES},
+        config={stage: ["paddle"] for stage in pipeline.STAGES},
     )
     for result in (direct, configured):
         assert result["overall"] == ("需人工复核" if expected_reasons else "通过")

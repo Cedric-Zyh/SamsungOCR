@@ -8,7 +8,9 @@ from pathlib import Path
 import time
 
 from .ocr_backends import backend_catalog, backend_route, backend_label
+from .paddle_ocr import PADDLE_BACKENDS, SEAL_BACKENDS
 from .recognition_scope import provider_scope
+from .seal_audit_policy import seal_audit_providers_for_plan
 from .document_context import DocumentContext, StageRequest
 from .pipeline import attach_product_fields, complete_result
 from .field_schema import PRINTED_FIELDS
@@ -16,6 +18,7 @@ from .recognition_safety import _ocr_model_config
 from .execution import measure, recognition_run
 from .image_processing import SealRegion, annotate_image
 from .seal_provider_policy import combine_seal_provider_checks
+from .seal_local_channel import local_seal_full_match, record_local_channel
 
 STAGES = ("fields", "products", "handwriting", "date", "seal")
 LABELS = dict(fields="印刷字段", products="商品明细", handwriting="手写签名", date="签收日期", seal="客户印章")
@@ -41,8 +44,11 @@ def validate_config(config, *, api_enabled=True):
             if method == "qingtong":
                 if stage != "seal" or not api_enabled:
                     raise ValueError("清瞳仅支持印章识别，且需要配置接口密钥")
+            elif method in SEAL_BACKENDS:
+                if stage != "seal" or method not in available:
+                    raise ValueError(f"识别方式不可用：{method}")
             elif (
-                method not in {"vision", "paddle", "paddle_server"}
+                method not in PADDLE_BACKENDS
                 or method not in available
             ):
                 raise ValueError(f"识别方式不可用：{method}")
@@ -64,6 +70,10 @@ def validate_config(config, *, api_enabled=True):
             'reject_mode': acceptance.get('reject_mode') if acceptance.get('reject_mode') in {'any_mismatch', 'all_mismatch', 'none'} else 'none',
             'seal_pass_standard': seal_standard,
             'date_source': 'danzhengtong',
+            # ``check`` preserves the historical blocking behavior. ``ignore``
+            # keeps low-confidence evidence visible but does not block pass.
+            'low_confidence_mode': acceptance.get('low_confidence_mode')
+            if acceptance.get('low_confidence_mode') in {'check', 'ignore'} else 'check',
         }
     if not any(cleaned.get(stage) for stage in STAGES):
         raise ValueError("请至少选择一项识别内容及识别方式")
@@ -119,6 +129,11 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
     errors = []
     output = None
     danzhengtong_cache = {}
+    # The seal stage may run a bounded second-model audit.  That audit is denied
+    # before it starts unless its provider is authorised, so an explicit
+    # ``SEAL_AUDIT_MODE`` widens the seal scope on purpose.  ``auto`` never
+    # widens it, keeping the default behaviour unchanged.
+    seal_audit_providers = seal_audit_providers_for_plan(config)
     # Route the document before any optional remote request. A failed provider
     # cannot prevent another selected provider from supplying page evidence.
     methods = list(
@@ -126,7 +141,7 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
             method
             for stage in STAGES
             for method in config[stage]
-            if method not in {"qingtong", "danzhengtong"}
+            if method not in {"qingtong", "danzhengtong"} and method not in SEAL_BACKENDS
         )
     )
     for method in methods:
@@ -141,10 +156,20 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
     with _overlap_seal_request(analyzer, context.source, remote_config) as seal_future:
         for stage in STAGES:
             for method in config[stage]:
+                dedicated_seal = stage == "seal" and method in SEAL_BACKENDS
                 backend = (
                     method
                     if method != "qingtong"
                     else backend_route(base_backend)["page"]
+                )
+                route = (
+                    dict(
+                        page=context.primary_backend or backend_route(base_backend)["page"],
+                        date=context.primary_backend or backend_route(base_backend)["date"],
+                        seal=method,
+                    )
+                    if dedicated_seal
+                    else dict(page=backend, date=backend, seal=backend)
                 )
                 directory = kwargs.get("artifact_dir")
                 prefix = kwargs.get("artifact_url_prefix", "")
@@ -152,16 +177,25 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                     directory = Path(directory) / f"{stage}-{method}"
                     prefix = prefix.rstrip("/") + f"/{stage}-{method}"
                 request = StageRequest(
-                    dict(page=backend, date=backend, seal=backend),
+                    route,
                     deepcopy(previous_fields),
                     directory,
                     prefix,
                     "qingtong_only" if method == "qingtong" else "local",
-                    seal_future if method == "qingtong" else None,
+                    # A local seal run reuses the request QingTong already made
+                    # so it can read inside the API's own stamp box.
+                    seal_future
+                    if method == "qingtong" or (stage == "seal" and method != "danzhengtong")
+                    else None,
                     config.get("acceptance") or {},
                 )
                 try:
-                    with measure(f"stage.{stage}.{method}"), provider_scope({method}):
+                    stage_scope = {method}
+                    if dedicated_seal:
+                        stage_scope.add(route["page"])
+                    if stage == "seal":
+                        stage_scope |= seal_audit_providers
+                    with measure(f"stage.{stage}.{method}"), provider_scope(stage_scope):
                         if method == "danzhengtong":
                             from .danzhengtong import stage_result
                             result = stage_result(context, stage, danzhengtong_cache, previous_fields)
@@ -273,6 +307,13 @@ def run_configured(
             output["fields"] = primary.get("fields", {})
             output["field_metadata"] = primary.get("field_metadata", {})
             output["field_fallbacks"] = primary.get("field_fallbacks", {})
+            requirement_artifacts = [
+                artifact for variant in successful
+                for artifact in variant["result"].get("processing_artifacts", {})
+                .get("signature_requirement", [])
+            ]
+            if requirement_artifacts:
+                output["processing_artifacts"]["signature_requirement"] = requirement_artifacts
         elif stage == "handwriting":
             output["fields"].update(primary.get("handwriting_fields", {}))
             output["field_metadata"].update(primary.get("handwriting_metadata", {}))
@@ -295,6 +336,23 @@ def run_configured(
                 preview_regions = primary.get("seal_regions", [])
                 if provider_seal is not None:
                     output['seal_check'] = provider_seal
+                if stage == 'seal':
+                    # A local reading taken inside QingTong's own stamp box is
+                    # independent evidence for that same stamp, so an exact
+                    # match there decides the verdict under ``any``.
+                    local_winner = next(
+                        (
+                            v["result"].get("seal_check")
+                            for v in successful
+                            if local_seal_full_match(v["result"].get("seal_check"))
+                        ),
+                        None,
+                    )
+                    if local_winner is not None:
+                        output['seal_check'] = record_local_channel(
+                            output['seal_check'], local_winner,
+                            acceptance.get('seal_match_mode', 'any'),
+                        )
             if stage == 'date' and acceptance.get('date_match_mode') == 'none':
                 output['date_check'].update(status='未核对', reliable=True, message='按设置跳过签收日期核对')
             if stage == 'seal' and acceptance.get('seal_match_mode') == 'none':

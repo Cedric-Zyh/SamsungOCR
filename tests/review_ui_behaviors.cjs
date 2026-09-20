@@ -59,7 +59,21 @@ test('single-provider seal evidence works without variants and preserves simulat
     /单证通 · 印章文字 OCR/);
   assert.match(sealEvidenceMarkup({seal_check: {recognition_mode: 'danzhengtong', simulated: true,
     recognized: '客户公司', status: '匹配'}}), /单证通（模拟） · 印章文字 OCR/);
-  assert.equal(sealEvidenceMarkup({seal_check: {backend: '本地', recognized: '客户公司'}}), '');
+  assert.match(sealEvidenceMarkup({seal_check: {backend: '本地 PaddleOCR PP-OCRv6 Small', recognized: '客户公司', status: '匹配', reliable: false}}),
+    /本地 PaddleOCR PP-OCRv6 Small · 印章文字 OCR/);
+  assert.match(sealEvidenceMarkup({seal_check: {backend: '本地 PaddleOCR PP-OCRv6 Small', recognized: '客户公司', status: '匹配', reliable: false}}),
+    /pill warning">匹配待确认/);
+});
+
+test('strict exact local seal matches display as matched without auxiliary warning', () => {
+  const markup = sealEvidenceMarkup({seal_check: {
+    backend: '本地 PaddleOCR PP-OCRv6 Small', recognized: '北京集中维修中心业务章(3)',
+    status: '匹配', reliable: true, comparison_policy: 'strict_text',
+    region_source: '清瞳印章区域', confidence: .68
+  }});
+  assert.match(markup, /pill success">匹配/);
+  assert.match(markup, /独立对照本单签章要求/);
+  assert.doesNotMatch(markup, /匹配待确认|单模型辅助证据/);
 });
 
 test('QingTong evidence remains visible when the selected result comes from Danzhengtong', () => {

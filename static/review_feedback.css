@@ -1,5 +1,5 @@
 /* Keep cached application templates connected to the complete review theme. */
-@import url("./review_archive.css?v=20260910-check-summary");
+@import url("./review_archive.css?v=20260919-image-source-buttons");
 
 .review-image-feedback { display:flex; min-height:240px; margin:0; padding:30px 20px; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
 .review-image-feedback strong { color:#34465f; font-size:14px; font-weight:600; }

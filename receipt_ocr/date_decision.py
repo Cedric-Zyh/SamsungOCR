@@ -13,6 +13,10 @@ class DateStageEvidence:
     date_rows: list[TextObservation]
     date_artifacts: list[dict]
     has_receipt_footer: bool
+    # y of the signature-requirement row. The receiving-date band is an offset
+    # from it, so a footer that sits lower than the usual 0.47 must carry the
+    # band with it instead of losing every read.
+    anchor_y: float | None = None
     rejected_date_evidence: list[dict] = field(default_factory=list)
 
 

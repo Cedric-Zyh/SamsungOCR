@@ -39,7 +39,7 @@ def _plan_server_audit_route(
     # A long service-station number is highly discriminative and is
     # often the easiest part of a faint rectangular stamp for the
     # Server model to recover.  Permit a color-only audit even when
-    # Mobile/Vision similarity is low; the normal matcher still needs
+    # Cross-provider similarity is low; the normal matcher still needs
     # both enough stamp text and the complete number before it can
     # become reliable.  This does not apply to generic company or
     # stamp-type requirements.
@@ -60,7 +60,7 @@ def _plan_server_audit_route(
     # Two common customer-master templates do not end in a legal
     # company suffix and often have no explicit ``专用章`` token:
     # ``...服务总汇`` and ``...客户服务中心``.  Their pale circular
-    # stamps can leave Mobile/Vision just below the reliable matcher
+    # stamps can leave the detail pass just below the reliable matcher
     # boundary even though the crop contains a long distinctive
     # organization name.  Route only already-similar candidates to
     # the color-only Server audit.  The final matcher thresholds and

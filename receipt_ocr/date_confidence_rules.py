@@ -10,7 +10,7 @@ def _score_primary_evidence(
     evidence: DateStageEvidence, decision: DateDecision, consensus: DateConsensus
 ) -> None:
     # Confidence must come from the dedicated, user-visible date crops.
-    # The supplementary full-page Vision pass observes the same pixels and
+    # The supplementary full-page pass observes the same pixels and
     # is useful for finding a candidate, but counting it as independent
     # corroboration created a false 21→25 automatic match.
     decision.date_confidence = estimate_date_confidence(

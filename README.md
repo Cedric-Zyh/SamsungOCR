@@ -1570,6 +1570,35 @@ python app.py
 
 本次长表测试中 1800 比 1400 多匹配 5 个商品单元格，但平均耗时从 76.48 秒增加到 154.94 秒，且仍不及 Mobile；因此 1400 保持为低内存安全默认值。
 
+### PP-OCR 推理引擎（`PADDLE_OCR_ENGINE`）
+
+本地 PP-OCR 默认通过 ONNX Runtime 推理。同一张 1647×2392 回单整页识别由 9.8 秒降到约 1.7 秒，印章彩色隔离裁剪图约 3 倍加速，逐字输出与默认内核一致。首次使用会把每个模型转换一次并缓存在模型目录下的 `*_onnx` 子目录，此后加载约 0.4 秒；未安装 onnxruntime 的机器会自动回落到默认内核，不受影响。
+
+```bash
+export PADDLE_OCR_ENGINE=off      # 回到 Paddle 默认 CPU 内核
+export PADDLE_OCR_ENGINE=onnxruntime   # 显式启用（默认值）
+```
+
+### 印章二次审计（`SEAL_AUDIT_MODE`）
+
+印章识别在常规读取之外，还会对只保留章色墨水的衍生图做一次二次审计（补读浅色章、被表格线切断的章、错一字的章型）。它可能加载识别方案未选择的模型，因此由本开关统一决定：
+
+| 取值 | 行为 | 单张印章识别耗时 |
+| --- | --- | --- |
+| `auto`（默认） | 识别方案已允许 Server 时用它做跨模型审计，否则跳过并在结果里写明原因 | 命中 0.5～1.5 秒，未命中不加载 |
+| `server` | 始终用 PP-OCRv5 Server 跨模型审计，并为其放开阶段授权 | 约 11 秒（ONNX 引擎下） |
+| `local` | 改用本地轻量模型复算，不加载 Server | 约 2～4 秒 |
+| `off` | 完全跳过 | 约 1.5 秒 |
+
+默认 `auto` 与历史行为一致：命令行 `analyzer.analyze`（不设授权范围）会执行审计，网页端识别方案在未勾选 Server 时跳过。**注意该支路不是可有可无的兜底**——在 `数据/7266220440.jpg` 上，跳过审计时印章判定为「无法判断」，执行审计后才正确判为「匹配」（真值 `seal_should_match = true`）。批量场景若更看重吞吐，可显式设为 `local` 或 `off`。
+
+审计的实际后端、模式、是否参与匹配、以及被跳过的原因都会写入回单记录页的印章证据：`server_audit_backend` / `server_audit_mode` / `server_audit_used_for_matching` / `server_audit_skipped_reason`。
+
+```bash
+export SEAL_AUDIT_MODE=server     # 打开完整的跨模型审计
+export SEAL_AUDIT_MODE=local      # 省时档：只用本地轻量模型复算
+```
+
 Windows 首次运行建议先执行专项自检；它会核对当前解释器、Paddle/PaddleOCR
 版本、默认后端、阶段路由和模型目录写权限：
 

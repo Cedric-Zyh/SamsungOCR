@@ -7,8 +7,6 @@ specific stage under test directly. This helper is only for old shared mocks.
 from importlib import import_module
 
 DEPENDENCIES = {
-    "_recognize_date_line_vision_consensus": ["date_crops", "date_evidence"],
-    "_recognize_date_slot_with_vision": ["date_crops", "date_evidence"],
     "_recover_signature_requirement": ["field_rules", "stage_fields"],
     "_save_date_line_crop": ["date_crops", "date_evidence"],
     "backend_label": [

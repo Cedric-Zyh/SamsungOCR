@@ -1,4 +1,5 @@
 import {localToday} from './ui.mjs';
+import {confirmInline} from './inline_confirm.mjs';
 
 export function createImports({
   environment, ui, importsState, recordsState, progressState = {}, api, ReceiptImport, readRecognitionPlan, readAcceptancePolicy,
@@ -104,7 +105,7 @@ export function createImports({
   }
 
   async function retryOne(id, button) {
-    if (usesRemotePlan() && !window.confirm('重新识别会将这张完整回单上传至所选远程识别服务。是否继续？')) return;
+    if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: '重新识别会将这张完整回单上传至所选远程识别服务。'})) return;
     if (button) button.disabled = true;
     try {
       const task = await api(`/api/results/${id}/retry`, {method: 'POST', json: {background: true,
@@ -116,8 +117,8 @@ export function createImports({
 
   async function bulkRetry() {
     if (!recordsState.selected.size) return toast('请先勾选回单', 'warning');
-    if (usesRemotePlan() && !window.confirm(`批量重新识别会将 ${recordsState.selected.size} 张完整回单上传至所选远程识别服务。是否继续？`)) return;
     const button = $('#bulk-retry'); button.disabled = true;
+    if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: `批量重新识别会将 ${recordsState.selected.size} 张完整回单上传至所选远程识别服务。`})) { button.disabled = false; return; }
     try {
       const task = await api('/api/results/bulk-retry', {method: 'POST', json: {background: true,
         ids: [...recordsState.selected], ocr_backend: importsState.ocrBackend, seal_recognition_mode: importsState.sealRecognitionMode, recognition_config: readRecognitionPlan(), acceptance_policy: readAcceptancePolicy?.()}});

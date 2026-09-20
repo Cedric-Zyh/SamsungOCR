@@ -64,6 +64,9 @@ from .parsing_products import (
 from .parsing_dates import (
     parse_date as parse_date,
     parse_receipt_date as parse_receipt_date,
+    extract_date_components as extract_date_components,
+    format_partial_date as format_partial_date,
+    compare_partial_date_components as compare_partial_date_components,
     find_receipt_date as find_receipt_date,
     compare_dates as compare_dates,
     estimate_date_confidence as estimate_date_confidence,

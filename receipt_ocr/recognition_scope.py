@@ -10,6 +10,12 @@ def provider_allowed(provider):
     return allowed is None or provider in allowed
 
 
+def allowed_providers():
+    """Current request's allowlist, or ``None`` while the run is unrestricted."""
+    allowed = _allowed.get()
+    return None if allowed is None else frozenset(allowed)
+
+
 @contextmanager
 def provider_scope(providers):
     token = _allowed.set(set(providers))

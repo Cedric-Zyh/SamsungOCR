@@ -32,8 +32,6 @@ from .date_images import (
 )
 from .date_slot_ocr import (
     _recognize_adaptive_day_slot_variants,
-    _recognize_date_line_vision_consensus,
-    _recognize_date_slot_with_vision,
     _recognize_day_slot_variants,
 )
 from .date_strict_evidence import (
@@ -120,8 +118,6 @@ __all__ = [
     "_partial_year_missing_month_business_consensus_from_artifacts",
     "_partial_year_month_day",
     "_recognize_adaptive_day_slot_variants",
-    "_recognize_date_line_vision_consensus",
-    "_recognize_date_slot_with_vision",
     "_recognize_day_slot_variants",
     "_reject_date_before_creation",
     "_repeated_server_required_date_from_artifacts",

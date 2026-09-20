@@ -14,8 +14,6 @@ class DateCropServices:
     save_date_line_crop: Callable
     recognize_text: Callable
     backend_label: Callable
-    recognize_date_slot_with_vision: Callable
-    recognize_date_line_vision_consensus: Callable
 
 
 @dataclass
@@ -36,6 +34,9 @@ class DateCropRun:
     pending_line_evidence: list[dict] = field(default_factory=list)
     pending_mismatch_evidence: list[dict] = field(default_factory=list)
     date_crop_entries: list[dict] = field(default_factory=list)
+    # Decision-grade observations from the only approved (tight) crop.
+    # Other date geometries are not generated in the current recognition flow.
+    primary_rows: list[TextObservation] = field(default_factory=list)
     custom_words: list[str] = field(default_factory=list)
 
 
@@ -51,6 +52,7 @@ class DateCropImages:
     line_raw: Path | None = None
     line_color_clean: Path | None = None
     line_table_clean: Path | None = None
+    line_positioned_frame_clean: Path | None = None
     line_box: tuple[float, float, float, float] | None = None
     line_table_clean_upscaled: Path | None = None
     line_autocontrast_upscaled: Path | None = None
@@ -73,6 +75,13 @@ class DateRegionEvidence:
     line_rows: list[TextObservation] = field(default_factory=list)
     accepted_line_rows: list[TextObservation] = field(default_factory=list)
     line_variants: list[dict] = field(default_factory=list)
+    # OCR shown under derivative images only; never consumed by date rules.
+    display_line_variants: list[dict] = field(default_factory=list)
+    # A component-wise reading from the same compact line.  It is built only
+    # from OCR-owned year/month/day votes and a private narrow day crop; no
+    # required-date value is copied into it.
+    component_candidate: str = ""
+    component_candidate_confidence: float = 0.0
     cross_model_month_day_confirmed: bool = False
     far_lower_cross_model_date: date | None = None
     far_lower_server_variants: list[dict] = field(default_factory=list)

@@ -35,6 +35,8 @@ from receipt_ocr.evaluation import (
     save_ground_truth_entry,
 )
 from receipt_ocr.ocr_backends import backend_catalog, backend_label, default_backend, resolve_backend
+from receipt_ocr.paddle_ocr import paddle_engine
+from receipt_ocr.seal_audit_policy import describe_seal_audit
 from receipt_ocr.seal_reference import SealReferenceMatcher
 from receipt_ocr.qingtong_preview import render_selected_seal
 from receipt_ocr.seal_api import (
@@ -189,6 +191,14 @@ def ocr_backends():
     return jsonify({
         "default": selected,
         "backends": backend_catalog(),
+        # Operational settings that change how the local models are run.  They
+        # are environment-driven, so surfacing them here is how a caller can see
+        # which strategy a deployment is actually using.
+        "engine": {
+            "id": paddle_engine(),
+            "env": "PADDLE_OCR_ENGINE",
+        },
+        "seal_audit": describe_seal_audit(),
     })
 
 

@@ -32,6 +32,7 @@ from .parsing_constants import (
 )
 from .parsing_dates import parse_date
 from .parsing_text import normalize_text
+from .requested_fields import contact_confidence_metadata
 
 
 def _strip_label(text: str, label: str) -> str:
@@ -301,6 +302,9 @@ def estimate_field_confidences(
     metadata: dict[str, dict] = {}
     qr_fields = {"客户订单号", "二维码业务编号"} if qr_text else set()
     for name, value in fields.items():
+        if name == "仓库联系人":
+            metadata[name] = contact_confidence_metadata(value, rows)
+            continue
         source = "OCR"
         if name in qr_fields:
             confidence, source = 0.99, "二维码"

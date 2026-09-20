@@ -27,7 +27,9 @@ body[data-active-page="review"] .review-preview { background:#dfdcd5; border-col
 
 .review-page .image-toolbar { background:var(--archive-paper); border-color:var(--archive-line); }
 .review-page .image-source-label { color:var(--archive-muted); font-size:12px; }
-.review-page .image-source-label select { background:var(--archive-paper); border-color:var(--archive-line); border-radius:2px; color:var(--archive-ink); font-size:13px; }
+.review-page .image-source-buttons .mini-button { background:var(--archive-paper); border-color:var(--archive-line); border-radius:2px; color:var(--archive-text); font-size:12px; }
+.review-page .image-source-buttons .mini-button[aria-pressed="true"] { border-color:#c9b491; background:var(--archive-accent-wash); color:var(--archive-ink); }
+.review-page .image-source-buttons .mini-button:disabled { opacity:.4; }
 .review-page .image-zoom-controls [data-zoom-label] { color:var(--archive-muted); font-size:12px; }
 .review-page .image-viewport { background:#dfdcd5; scrollbar-width:thin; scrollbar-color:#aaa99b transparent; }
 .review-page [data-preview] { background:#fff; border-color:#c5c2b8; }

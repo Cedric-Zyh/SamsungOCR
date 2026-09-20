@@ -14,10 +14,12 @@ from .image_processing import (
     save_isolated_seal,
     save_rectangular_seal_code_line,
     save_region_crop,
+    save_round_seal_type_band,
     save_unwrapped_seal,
     seal_region_is_rectangular,
 )
 from .ocr_backends import backend_label, recognize_text
+from .paddle_ocr import is_paddle_backend, variant_of
 from .recognition_utils import _dedupe
 from .seal_rules import (
     _reconstruct_exact_company_stamp_from_region,
@@ -38,13 +40,39 @@ def _collect_primary_region_evidence(
     evidence.rectangular = seal_region_is_rectangular(request.source, region)
     evidence.original = Path(temp_dir) / f"seal-{index}-original.jpg"
     save_region_crop(request.source, evidence.original, region)
+    # Keep the full-page OCR text for the audit artifact below.  For a local
+    # Paddle pass, do not feed it into seal matching: these page rows may be
+    # black form labels, dates, or the printed ``签章要求`` that overlap the
+    # QingTong box.  Paddle is deliberately driven by the colour-safe
+    # derivatives below.  Non-Paddle legacy routes retain the old page-text
+    # fallback because they do not have this local colour-isolation path.
     evidence.whole_text = extract_region_text(request.rows, region)
-    if evidence.whole_text:
+    if evidence.whole_text and not is_paddle_backend(request.ocr_backend):
         evidence.region_texts.append(evidence.whole_text)
     evidence.isolated = Path(temp_dir) / f"seal-{index}-isolated.png"
     save_isolated_seal(request.source, evidence.isolated, region)
     evidence.color_isolated = Path(temp_dir) / f"seal-{index}-color-isolated.png"
     save_color_isolated_seal(request.source, evidence.color_isolated, region)
+    evidence.round_type_band = None
+    evidence.round_type_band_texts = []
+    # Keep the horizontal stamp-type row as a first-class v6 input. The
+    # circular company name remains read from the polar-unwrapped image below;
+    # this band prevents the two geometries from competing in one detector.
+    if not evidence.rectangular and is_paddle_backend(request.ocr_backend):
+        try:
+            evidence.round_type_band = Path(temp_dir) / f"seal-{index}-round-type-band.png"
+            save_round_seal_type_band(evidence.color_isolated, evidence.round_type_band)
+            from .paddle_ocr import recognize_line
+
+            band_rows = recognize_line(
+                evidence.round_type_band,
+                model_variant=variant_of(request.ocr_backend) or "mobile",
+            )
+            evidence.round_type_band_texts = [row.text for row in band_rows if row.text]
+            evidence.region_texts.extend(evidence.round_type_band_texts)
+        except Exception:
+            evidence.round_type_band = None
+            evidence.round_type_band_texts = []
     evidence.code_line = None
     evidence.code_line_texts: list[str] = []
     if evidence.rectangular and re.search(r"\d{6,12}", request.requirement):
@@ -168,7 +196,7 @@ def _collect_primary_region_evidence(
     # circular matching evidence.
     evidence.rotated = Path(temp_dir) / f"seal-{index}-rotated-180.png"
     evidence.rotated_texts: list[str] = []
-    if evidence.rectangular:
+    if evidence.rectangular and index not in request.orientation_resolved_indices:
         try:
             with Image.open(evidence.isolated) as image:
                 image.rotate(180, expand=False).save(evidence.rotated)
@@ -202,8 +230,8 @@ def _collect_secondary_region_evidence(
     if request.secondary_ocr_backend:
         # Circular seals frequently split the company name and the
         # stamp-type suffix across different transforms.  In
-        # Hybrid mode retain Paddle and Vision as independent OCR
-        # evidence, then combine only text actually recognized.
+        # Retain both providers as independent OCR evidence, then
+        # combine only text actually recognized.
         try:
             evidence.secondary_original_texts = [
                 row.text
@@ -347,6 +375,13 @@ def _record_region_evidence(
                 "original_url": f"{prefix}/seals/{evidence.original.name}",
                 "isolated_url": f"{prefix}/seals/{evidence.isolated.name}",
                 "color_isolated_url": f"{prefix}/seals/{evidence.color_isolated.name}",
+                "round_type_band_url": (
+                    f"{prefix}/seals/{evidence.round_type_band.name}"
+                    if evidence.round_type_band is not None
+                    and evidence.round_type_band.is_file()
+                    else ""
+                ),
+                "round_type_band_text": " | ".join(evidence.round_type_band_texts),
                 "code_line_url": (
                     f"{prefix}/seals/{evidence.code_line.name}"
                     if evidence.code_line is not None and evidence.code_line.is_file()

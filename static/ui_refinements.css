@@ -25,8 +25,7 @@
 .records-section .record-filter-note { min-height:36px; }
 .records-section .selection-toolbar { flex-wrap:wrap; gap:8px; }
 .record-filter-table { isolation:isolate; }
-.record-filter-table .records-table { min-width:1000px; }
-.record-filter-table col.action-col { width:102px; }
+/* 列宽与 min-width 统一由 workspace.css 的 8 列 colgroup 声明定义，此处不再覆盖 */
 .record-filter-table th:last-child,.record-filter-table td:last-child { position:sticky; right:0; z-index:2; box-shadow:-5px 0 8px #253d600a; border-left:1px solid #e8edf4; background:#fff; }
 .record-filter-table th:last-child { z-index:4; background:#f7f9fc; }
 .record-filter-table .pending-row { background:#fff; }
@@ -41,7 +40,6 @@
 .records-table .check-status.danger { color:#b4433c; font-weight:600; }
 .record-filter-table .date-cell>.check-status { padding:0; }
 .record-filter-table .date-cell .date-difference { color:#b4433c; font-weight:600; }
-.record-filter-table .time-cell { color:#8190a4; font-size:11px; }
 .records-section.is-compact .record-filter-table td { padding-top:9px; padding-bottom:9px; line-height:1.5; }
 .records-section.is-compact .record-filter-table td small { margin-top:2px; }
 .records-section.is-compact .record-filter-table .file-cell strong { font-size:12px; }
@@ -112,12 +110,8 @@ body[data-active-page="review"] .review-form { padding:12px; }
 [data-review-readiness][data-tone="ready"] { color:#267555; }
 [data-review-shortcuts] { padding-top:3px; color:#8190a4; font-size:10px; line-height:1.5; }
 
-@media(max-width:1280px) {
-  .record-filter-table .records-table { min-width:860px; }
-  .record-filter-table col.time-col { display:none; width:0; }
-  .record-filter-table th:nth-child(7),.record-filter-table td:nth-child(7) { display:none; }
-  .record-filter-table col.date-col { width:205px; }
-  .record-filter-table col.file-col { width:20%; }
+@media(max-width:1180px) {
+  .records-command-bar { align-items:stretch; flex-wrap:wrap; }
 }
 @media(max-width:1040px) {
   .records-command-bar { align-items:stretch; flex-wrap:wrap; }

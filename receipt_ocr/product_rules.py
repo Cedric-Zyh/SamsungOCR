@@ -196,7 +196,7 @@ def _recover_missing_product_grades(
 
 
 def _fuse_product_material(primary: str, detail: str) -> str:
-    """Keep Paddle's model code while taking a fuller Vision CJK description."""
+    """Keep the page model's code while taking a fuller detail-page description."""
     pattern = re.compile(
         r"^(?P<code>[A-Z0-9/\-]+)(?P<description>[\u4e00-\u9fff]+)"
         r"\s*(?P<capacity>\d+(?:G|TB))$",
@@ -247,13 +247,13 @@ def _fuse_product_descriptions(primary_table: dict, detail_table: dict) -> None:
         if not fused or fused == original:
             continue
         row.setdefault("original_values", {}).setdefault("物料编号", original)
-        row["original_values"]["物料编号_Vision"] = detail_value
+        row["original_values"]["物料编号_整页回退"] = detail_value
         values["物料编号"] = fused
         primary_confidence = float(row.get("confidences", {}).get("物料编号", 0))
         detail_confidence = float(detail_row.get("confidences", {}).get("物料编号", 0))
         confidence = round(min(primary_confidence, detail_confidence), 3)
         row.setdefault("confidences", {})["物料编号"] = confidence
-        row.setdefault("sources", {})["物料编号"] = "Paddle编码 + Vision商品描述补全"
+        row.setdefault("sources", {})["物料编号"] = "Paddle编码 + 整页商品描述补全"
         low_columns = set(row.get("low_confidence_columns", []))
         if confidence < LOW_CONFIDENCE_THRESHOLD:
             low_columns.add("物料编号")

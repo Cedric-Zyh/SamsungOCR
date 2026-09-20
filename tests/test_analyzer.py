@@ -98,10 +98,6 @@ def isolate_native_ocr_models(monkeypatch):
 
     monkeypatch.setattr(paddle_ocr, "_pipeline", unavailable)
     monkeypatch.setattr(paddle_ocr, "_line_recognizer", unavailable)
-    monkeypatch.setitem(
-        sys.modules, "receipt_ocr.vision_ocr",
-        SimpleNamespace(recognize_text=lambda *args, **kwargs: []),
-    )
 
 
 def test_server_model_config_is_exposed_in_result_payload(monkeypatch):
@@ -1930,7 +1926,7 @@ def test_cross_model_windows_server_route_keeps_reliable_evidence():
     assert seal_check["reliable"] is True
 
 
-def test_windows_hybrid_end_to_end_never_auto_passes_single_model_evidence(
+def test_windows_hybrid_end_to_end_accepts_strict_exact_single_model_evidence(
     tmp_path, monkeypatch
 ):
     from PIL import Image
@@ -1974,9 +1970,9 @@ def test_windows_hybrid_end_to_end_never_auto_passes_single_model_evidence(
 
     assert result["date_check"]["status"] == "匹配"
     assert result["seal_check"]["status"] == "匹配"
-    assert result["date_check"]["reliable"] is False
-    assert result["seal_check"]["reliable"] is False
-    assert result["review_status"] == "待复核"
+    assert result["date_check"]["reliable"] is True
+    assert result["seal_check"]["reliable"] is True
+    assert result["review_status"] != "待复核"
     assert "单一 Paddle" in result["safety_policy"]
 
 
@@ -2521,8 +2517,8 @@ def test_same_ean_product_fusion_keeps_code_and_adds_vision_description():
 
     row = primary["rows"][0]
     assert row["values"]["物料编号"] == "SM-S9180ZKHCHC悠远黑512G"
-    assert row["original_values"]["物料编号_Vision"] == "SM-S918OZKIICIIC悠远黑 512G"
-    assert row["sources"]["物料编号"] == "Paddle编码 + Vision商品描述补全"
+    assert row["original_values"]["物料编号_整页回退"] == "SM-S918OZKIICIIC悠远黑 512G"
+    assert row["sources"]["物料编号"] == "Paddle编码 + 整页商品描述补全"
     assert "物料编号" in row["low_confidence_columns"]
 
 
@@ -2626,6 +2622,32 @@ def test_signature_retry_cannot_worsen_customer_entity_reading(tmp_path, monkeyp
     )
 
     assert recovered is None
+
+
+def test_signature_retry_restores_stamp_company_from_clean_line(tmp_path, monkeypatch):
+    from PIL import Image
+
+    source = tmp_path / "receipt.jpg"
+    Image.new("RGB", (1000, 1600), "white").save(source)
+    monkeypatch.setattr(
+        "receipt_ocr.paddle_ocr.recognize_line",
+        lambda *_args, **_kwargs: [
+            TextObservation(
+                "签章要求：大连市旅顺区星为电子销售有限公司售后服务专用章实收数量",
+                .93, 0, 0, 1, 1,
+            )
+        ],
+    )
+
+    recovered = _recover_signature_requirement(
+        source,
+        [],
+        "大连市国空炫物疗容旅顺□区星为电子销售有限公司售后服务专用章",
+        "paddle",
+        customer="大连市旅顺口区星为电子销售有限公司",
+    )
+
+    assert recovered["value"] == "大连市旅顺口区星为电子销售有限公司售后服务专用章"
 
 
 def test_signature_retry_cannot_replace_complete_numbered_service_center(tmp_path, monkeypatch):
@@ -4660,53 +4682,6 @@ def test_fixed_template_slots_expose_cross_model_candidate_but_never_reliable(
     assert "仅供人工复核" in tight["date_slot_acceptance_note"]
 
 
-def test_fixed_template_slots_promote_only_strict_required_date_consensus(
-    tmp_path, monkeypatch,
-):
-    from datetime import date
-    from PIL import Image
-
-    source = tmp_path / "receipt.jpg"
-    Image.new("RGB", (1000, 1600), "white").save(source)
-    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
-
-    def line_ocr(path, *, model_variant="mobile", **_kwargs):
-        name = str(path)
-        if "date-slot-year_full-max-channel-line-clean" in name:
-            return [TextObservation("2025年4", .94, 0, 0, 1, 1)]
-        if (
-            model_variant == "server"
-            and "date-slot-year_full-max-channel.png" in name
-        ):
-            return [TextObservation("2025年4", .96, 0, 0, 1, 1)]
-        if "date-slot-month_day-max-channel" in name:
-            return [TextObservation("年4月3日", .95, 0, 0, 1, 1)]
-        return []
-
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
-    monkeypatch.setattr(
-        "receipt_ocr.paddle_ocr.recognize_text", lambda *_a, **_k: []
-    )
-    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
-        source, .47, "2025-04-03", tmp_path / "artifacts", "/x",
-        "vision", secondary_ocr_backend="paddle",
-    )
-
-    actual, _ = find_receipt_date(rows, "2025-04-03")
-    assert actual == date(2025, 4, 3)
-    assert estimate_date_confidence(rows, "2025-04-03", actual) >= .72
-    tight = next(item for item in artifacts if item["variant"] == "紧凑区域")
-    assert tight["date_slot_reliable"] is True
-    assert tight["date_slot_candidate"] == "2025-04-03"
-    assert tight["date_slot_year_line_clean_url"].endswith(
-        "date-slot-year_full-max-channel-line-clean.png"
-    )
-    assert tight["date_slot_month_day_line_clean_url"].endswith(
-        "date-slot-month_day-max-channel-line-clean.png"
-    )
-    assert "可自动核验" in tight["date_slot_acceptance_note"]
-
-
 def test_cross_model_slot_required_date_rejects_mismatch_or_conflict():
     years = [
         {"model": "mobile", "ocr_texts": ["2025年4"]},
@@ -4728,117 +4703,6 @@ def test_cross_model_slot_required_date_rejects_mismatch_or_conflict():
     assert _cross_model_slot_required_date(
         years[:1], month_days, "2025-04-03", []
     ) is None
-
-
-def test_vision_month_day_slot_exposes_only_low_confidence_review_candidate(
-    tmp_path, monkeypatch,
-):
-    from datetime import date
-    from PIL import Image
-
-    from receipt_ocr.parser import estimate_date_confidence, find_receipt_date
-
-    source = tmp_path / "receipt.jpg"
-    Image.new("RGB", (1000, 1600), "white").save(source)
-    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
-
-    def line_ocr(path, *, model_variant="mobile", **_kwargs):
-        if "date-slot-year_full-max-channel-white" in str(path):
-            return [TextObservation("2025年", .95, 0, 0, 1, 1)]
-        return []
-
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
-    patch_dependency(monkeypatch, '_recognize_date_slot_with_vision', lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)])
-    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
-        source, .47, "2025-08-25", tmp_path / "artifacts", "/x",
-        "vision", secondary_ocr_backend="paddle",
-    )
-
-    actual, _ = find_receipt_date(rows, "2025-08-25")
-    assert actual == date(2025, 8, 24)
-    assert estimate_date_confidence(rows, "2025-08-25", actual) < .72
-    tight = next(item for item in artifacts if item["variant"] == "紧凑区域")
-    assert tight["date_slot_candidate"] == "2025-08-24"
-    assert tight["date_slot_candidate_source"] == (
-        "Paddle 双模型年份 + Vision 单路径月日"
-    )
-    assert tight["date_slot_year_white_url"].endswith(
-        "date-slot-year_full-max-channel-white.png"
-    )
-    assert tight["date_slot_month_day_vision_url"].endswith(
-        "date-slot-month_day-crop-first-max-channel-white.png"
-    )
-    assert "必须人工复核" in tight["date_slot_acceptance_note"]
-
-
-def test_vision_month_day_slot_rejects_disagreeing_paddle_years(
-    tmp_path, monkeypatch,
-):
-    from PIL import Image
-
-    source = tmp_path / "receipt.jpg"
-    Image.new("RGB", (1000, 1600), "white").save(source)
-    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
-
-    def line_ocr(path, *, model_variant="mobile", **_kwargs):
-        if "date-slot-year_full-max-channel-white" in str(path):
-            year = "2025年" if model_variant == "mobile" else "2024年"
-            return [TextObservation(year, .95, 0, 0, 1, 1)]
-        return []
-
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_line", line_ocr)
-    patch_dependency(monkeypatch, '_recognize_date_slot_with_vision', lambda *_a, **_k: [TextObservation("年8月24日", .88, 0, 0, 1, 1)])
-    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
-        source, .47, "2025-08-25", tmp_path / "artifacts", "/x",
-        "vision", secondary_ocr_backend="paddle",
-    )
-
-    assert not any("2025年8月24日" == row.text for row in rows)
-    tight = next(item for item in artifacts if item["variant"] == "紧凑区域")
-    assert tight["date_slot_candidate"] == ""
-    assert "未形成" in tight["date_slot_acceptance_note"]
-
-
-def test_vision_original_white_line_exposes_stable_review_candidate(
-    tmp_path, monkeypatch,
-):
-    from datetime import date
-    from PIL import Image
-
-    from receipt_ocr.parser import estimate_date_confidence, find_receipt_date
-
-    source = tmp_path / "receipt.jpg"
-    Image.new("RGB", (1000, 1600), "white").save(source)
-    patch_dependency(monkeypatch, 'recognize_text', lambda *_a, **_k: [])
-    monkeypatch.setattr(
-        "receipt_ocr.paddle_ocr.recognize_line", lambda *_a, **_k: []
-    )
-    variants = [{
-        "preprocessing": "原日期行白底标准化 Vision 中英关闭纠错 人工候选",
-        "ocr_texts": ["_2025年3月7E"],
-        "accepted_texts": ["_2025年3月7E"],
-        "acceptance_note": "三种配置一致，仅供人工复核",
-    }]
-    patch_dependency(monkeypatch, '_recognize_date_line_vision_consensus', lambda *_a, **_k: (variants, {date(2025, 3, 7)}))
-    rows, artifacts = ReceiptAnalyzer()._recognize_receipt_date(
-        source, .47, "2025-03-07", tmp_path / "artifacts", "/x",
-        "vision", secondary_ocr_backend="paddle",
-    )
-
-    actual, _ = find_receipt_date(rows, "2025-03-07")
-    assert actual == date(2025, 3, 7)
-    assert estimate_date_confidence(rows, "2025-03-07", actual) < .72
-    tight = next(item for item in artifacts if item["variant"] == "紧凑区域")
-    assert tight["date_slot_candidate"] == ""
-    assert tight["date_line_white_candidate"] == "2025-03-07"
-    assert tight["date_line_white_standardized_url"].endswith(
-        "date-tight-line-original-white-standardized.png"
-    )
-    assert "置信度封顶 20%" in tight["date_line_white_acceptance_note"]
-    assert any(
-        item.get("preprocessing", "").startswith("原日期行白底标准化")
-        for item in tight["date_line_ocr_variants"]
-    )
 
 
 def test_business_rejected_date_evidence_keeps_original_ocr_texts():

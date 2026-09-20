@@ -1,5 +1,7 @@
 """The nine requested output fields, grouped by recognition responsibility."""
 
+import re
+
 OUTPUT_FIELDS = (
     "仓库联系人", "拒收数量", "实收数量", "仓库接收人", "签收日期",
     "签章要求", "合计数量", "客户名称", "要求到货",
@@ -7,6 +9,17 @@ OUTPUT_FIELDS = (
 PRINTED_FIELDS = ("仓库联系人", "拒收数量", "实收数量", "合计数量", "客户名称", "要求到货", "签章要求")
 HANDWRITTEN_FIELDS = ("仓库接收人",)
 PENDING_PROVIDER_FIELDS = ("拒收数量", "实收数量")
+
+
+def _contact_names(value):
+    """Return the separately recognized contact names in a field value."""
+    text = str(value or "").strip()
+    if not text:
+        return []
+    # The extractor uses 、; accept common separators too for old records or
+    # manually edited values.
+    parts = re.split(r"[、,，/／;；|]+", text)
+    return [part.strip() for part in parts if part.strip()]
 
 
 def derive_signature_check(fields, previous=None):
@@ -28,7 +41,12 @@ def derive_signature_check(fields, previous=None):
         return {**prior, "contact": contact, "receiver": receiver}
     normalized = lambda value: "".join(str(value).split())
     if contact and receiver:
-        status = "匹配" if normalized(contact) == normalized(receiver) else "不匹配"
+        receiver_name = normalized(receiver)
+        contact_names = [normalized(name) for name in _contact_names(contact)]
+        # Multiple contacts are common on a dispatch line.  One exact name
+        # match is sufficient; do not require every contact to match the
+        # handwritten receiver.
+        status = "匹配" if receiver_name in contact_names else "不匹配"
         reliable = True
     else:
         status = "未识别"
@@ -52,7 +70,13 @@ def project_fields(result):
         result["fields"], result.get("signature_check")
     )
     # One source of truth for date recognition and human correction.
-    result["fields"]["签收日期"] = str((result.get("date_check") or {}).get("actual") or "")
+    date_check = result.get("date_check") or {}
+    # Keep a complete ISO date in ``date_check.actual`` for business logic,
+    # while exposing OCR-owned partial components (for example
+    # ``2026-02-__``) instead of collapsing them to a blank field.
+    result["fields"]["签收日期"] = str(
+        date_check.get("actual_display") or date_check.get("actual") or ""
+    )
     for key in ("field_metadata", "field_fallbacks"):
         result[key] = {k: v for k, v in (result.get(key) or {}).items() if k in OUTPUT_FIELDS}
     for variant in result.get("recognition_variants", {}).get("fields", []):

@@ -7,6 +7,125 @@ from .parser import parse_date, parse_receipt_date
 from .ocr_types import TextObservation
 
 
+_DATE_ONLY_TRANSLATION = str.maketrans(
+    {
+        "Ｏ": "0",
+        "０": "0",
+        "１": "1",
+        "２": "2",
+        "３": "3",
+        "４": "4",
+        "５": "5",
+        "６": "6",
+        "７": "7",
+        "８": "8",
+        "９": "9",
+        "O": "0",
+        "o": "0",
+        "〇": "0",
+    }
+)
+
+
+def normalize_date_only_text(text: str) -> str:
+    """Keep only date characters from local OCR output.
+
+    This is intentionally a light normalization layer, not a date guesser:
+    it removes stamp/label text, keeps OCR-owned digits and ``年月日``, and
+    converts an explicit numeric date separator into the same unit form used
+    by the date parser.  Missing components remain missing.
+    """
+    compact = re.sub(r"\s+", "", str(text or "")).translate(_DATE_ONLY_TRANSLATION)
+    # Keep the units and numeric separators long enough to normalize a common
+    # local-OCR form such as ``盖章2026-02-06`` after the non-date prefix is
+    # removed below.
+    filtered = "".join(
+        char for char in compact if char.isdigit() or char in "年月日-./"
+    )
+    full_numeric = re.search(
+        r"(?<!\d)(20\d{2})[-./](\d{1,2})[-./](\d{1,2})(?!\d)",
+        filtered,
+    )
+    if full_numeric:
+        year, month, day = full_numeric.groups()
+        return f"{year}年{int(month)}月{int(day)}日"
+    return filtered
+
+
+def normalize_date_only_rows(rows: list[TextObservation]) -> list[TextObservation]:
+    """Return OCR observations whose text is restricted to date characters."""
+    normalized: list[TextObservation] = []
+    for row in rows:
+        text = normalize_date_only_text(row.text)
+        if not text:
+            continue
+        normalized.append(
+            type(row)(
+                text=text,
+                confidence=row.confidence,
+                x=row.x,
+                y=row.y,
+                width=row.width,
+                height=row.height,
+            )
+        )
+    return normalized
+
+
+def sanitize_date_artifacts(artifacts: list[dict]) -> list[dict]:
+    """Restrict persisted local-date OCR text to digits and date units."""
+    variant_keys = (
+        "ocr_variants",
+        "secondary_ocr_variants",
+        "date_line_ocr_variants",
+        "date_line_display_ocr_variants",
+        "date_slot_ocr_variants",
+        "date_slot_day_ocr_variants",
+        "date_slot_day_inner_ocr_variants",
+    )
+    for artifact in artifacts:
+        artifact["ocr_texts"] = [
+            value
+            for value in (
+                normalize_date_only_text(text)
+                for text in artifact.get("ocr_texts") or []
+            )
+            if value
+        ]
+        rows = []
+        for row in artifact.get("decision_rows") or []:
+            if not isinstance(row, dict):
+                continue
+            value = normalize_date_only_text(row.get("text", ""))
+            if not value:
+                continue
+            copied = dict(row)
+            copied["text"] = value
+            rows.append(copied)
+        if "decision_rows" in artifact:
+            artifact["decision_rows"] = rows
+        for key in variant_keys:
+            for variant in artifact.get(key) or []:
+                variant["ocr_texts"] = [
+                    value
+                    for value in (
+                        normalize_date_only_text(text)
+                        for text in variant.get("ocr_texts") or []
+                    )
+                    if value
+                ]
+                if "accepted_texts" in variant:
+                    variant["accepted_texts"] = [
+                        value
+                        for value in (
+                            normalize_date_only_text(text)
+                            for text in variant.get("accepted_texts") or []
+                        )
+                        if value
+                    ]
+    return artifacts
+
+
 def _trailing_numeric_month_day(text: str, required) -> bool:
     """Return whether OCR safely exposes the required trailing ``M.D``.
 

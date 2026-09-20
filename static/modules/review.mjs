@@ -92,8 +92,12 @@ export function createReview({
   function setReviewImage(index, note = '', options = {}) {
     const source = reviewState.reviewImages?.[index], content = $('#review-content');
     reviewState.reviewImageIndex = index; reviewState.reviewZoom = 1;
-    if (source) $('[data-image-source]', content).value = String(index);
-    $('[data-image-source]', content).disabled = !source;
+    $$('[data-image-source-group]', content).forEach(button => {
+      const group = button.dataset.imageSourceGroup;
+      const available = reviewState.reviewImages?.some(image => image.group === group);
+      button.disabled = !available;
+      button.setAttribute('aria-pressed', String(!!source && group === source.group));
+    });
     $$('[data-focus-image]', content).forEach(button => button.setAttribute('aria-pressed', String(button.dataset.focusImage === source?.group)));
     reviewPreview.show(source, {
       caption: note || (source?.group === 'page' ? '整页回单 · 拖动查看，按住 ⌘ / Ctrl 滚轮缩放' : source ? `${source.label} · 原色裁剪图，可拖动与缩放` : '当前记录没有保存可用的预览图片'),
@@ -116,7 +120,8 @@ export function createReview({
     for (let parent = element; parent && parent !== content; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.open = true; }
     if (element) { element.scrollIntoView({block:'nearest'}); if (element.matches('input,textarea')) element.focus({preventScroll:true}); }
   }
-  async function openReview(id) {
+  async function openReview(id, {mode = 'review'} = {}) {
+    mode = mode === 'view' ? 'view' : 'review';
     if (!canLeaveReview({discard:false})) {
       if (reviewState.current && document.body.dataset.activePage === 'review') history.replaceState(null, '', `#review/${reviewState.current.id}`);
       return;
@@ -136,8 +141,13 @@ export function createReview({
       return;
     }
     ensureReviewScope(item);
-    reviewState.current = item; reviewState.reviewDirty = false;
+    reviewState.current = item; reviewState.reviewDirty = false; reviewState.reviewMode = mode;
     $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
+    $('#review-dialog').dataset.reviewMode = mode;
+    $('#review-dialog-title').textContent = mode === 'view' ? '查看回单' : '人工复核';
+    $('#toggle-review-queue').classList.toggle('hidden', mode === 'view');
+    $('#review-session-progress').classList.toggle('hidden', mode === 'view');
+    $('.review-workspace').classList.toggle('view-mode', mode === 'view');
     $('#review-title').textContent = filenameParts(item.filename).name;
     $('#review-title').title = item.filename;
     $('#review-subtitle').textContent = [item.fields?.['客户名称'], item.document_type?.label, item.page_group?.page_count > 1 ? `共 ${item.page_group.page_count} 页` : ''].filter(Boolean).join(' · ');
@@ -154,7 +164,7 @@ export function createReview({
     renderProductTable(item.product_table, content);
     $('[data-product-count]', content).textContent = item.product_table?.status === '未执行' ? '未开启识别' : `${item.product_table?.rows?.length || 0} 行`;
     $('[data-date-comparison]', content).innerHTML = `<span>要求到货 <b>${escapeHtml(item.fields?.['要求到货'] || item.date_check?.required || '未提供')}</b></span>`;
-    $('[data-date-result]', content).innerHTML = `<span>识别到的签收日期</span><b>${escapeHtml(item.date_check?.actual || '未识别')}</b>`;
+    $('[data-date-result]', content).innerHTML = `<span>识别到的签收日期</span><b>${escapeHtml(item.date_check?.actual_display || item.date_check?.actual || '未识别')}</b>`;
     $('[data-seal-comparison]', content).innerHTML = `<span>签章要求 <b>${escapeHtml(item.fields?.['签章要求'] || '未提供')}</b></span>`;
     $('[data-seal-result]', content).textContent = item.seal_check?.message || '';
     for (const key of ['date', 'seal', 'signature']) {
@@ -176,9 +186,11 @@ export function createReview({
     setupSignatureConfirmation(item, content);
     $('[name=human_note]', content).value = item.human_note || '';
     $('[name=error_type]', content).value = item.error_type || '';
+    applyReviewMode(mode, id, content);
     reviewState.reviewImages = ReceiptWorkbench.imageSources(item);
-    $('[data-image-source]', content).innerHTML = reviewState.reviewImages.map((image,index) => `<option value="${index}">${escapeHtml(image.label)}</option>`).join('') || '<option>暂无图片</option>';
-    $('[data-image-source]', content).addEventListener('change', event => setReviewImage(Number(event.target.value)));
+    $$('[data-image-source-group]', content).forEach(button => {
+      button.addEventListener('click', () => focusReviewImage(button.dataset.imageSourceGroup));
+    });
     reviewImage.attach(content);
     reviewPreview.attach(content, {
       retry: () => setReviewImage(reviewState.reviewImageIndex, '', {retry: true}),
@@ -205,14 +217,36 @@ export function createReview({
     $('#review-form', content).addEventListener('submit', event => event.preventDefault());
     syncReviewReadiness();
     // Switching receipts stays inside a single modal history entry.
-    if (document.body.dataset.activePage === 'review' || /^#review/.test(location.hash)) history.replaceState(null, '', `#review/${id}`);
-    else history.pushState(null, '', `#review/${id}`);
+    const route = `${mode}/${id}`;
+    if (document.body.dataset.activePage === 'review' || /^#(review|view)\//.test(location.hash)) history.replaceState(null, '', `#${route}`);
+    else history.pushState(null, '', `#${route}`);
     showPage('review');
     if (replaceFocusedForm) {
       $('#review-title').setAttribute('tabindex', '-1');
       $('#review-title').focus({preventScroll: true});
     }
     await Promise.allSettled([renderHistory(), renderGroundTruth(), loadReviewQueue(false)]);
+  }
+
+  function applyReviewMode(mode, id, content) {
+    const view = mode === 'view';
+    content.dataset.reviewMode = mode;
+    const note = $('[data-review-mode-note]', content);
+    if (note) note.textContent = view ? '只读查看模式 · 如需修改或提交，请进入复核' : '';
+    $('[data-review-readiness]', content).classList.toggle('hidden', view);
+    $('[data-review-shortcuts]', content).classList.toggle('hidden', view);
+    $('[data-enter-review]', content).classList.toggle('hidden', !view);
+    for (const selector of ['[data-retry]', '[data-save-pending]', '[data-confirm-fail]', '[data-confirm-pass]']) {
+      $(selector, content).classList.toggle('hidden', view);
+    }
+    if (!view) return;
+    for (const element of $$('input, textarea, select', content)) element.disabled = true;
+    for (const selector of [
+      '[data-date-choice]', '[data-date-accept]', '[data-date-change]',
+      '[data-seal-choice]', '[data-seal-change]',
+      '[data-signature-choice]', '[data-signature-change]'
+    ]) $(selector, content)?.setAttribute('disabled', 'disabled');
+    $('[data-enter-review]', content).addEventListener('click', () => openReview(id, {mode: 'review'}));
   }
 
   function setupDateConfirmation(item, content) {
@@ -422,6 +456,10 @@ export function createReview({
       if (!action) return;
       event.preventDefault();
       if (reviewState.reviewSaving) return;
+      if (reviewState.reviewMode === 'view' && ['save', 'pass'].includes(action)) {
+        toast('当前为只读查看模式，请先进入复核。', 'warning');
+        return;
+      }
       if (action === 'save') submitReview('待复核', '需人工复核');
       else if (action === 'pass') {
         if (currentReadiness().ready) submitReview('确认通过', '通过');

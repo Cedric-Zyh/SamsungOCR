@@ -44,8 +44,8 @@ def _collect(*, write_check: bool) -> tuple[dict, list[str]]:
             failures.append(f"Windows 默认后端应为 paddle，实际为 {default or '空'}")
         if set(route.values()) != {"paddle"}:
             failures.append(f"Windows Hybrid 应全部回退 Paddle Mobile，实际为 {route}")
-        if not indexed.get("hybrid", {}).get("safety_policy"):
-            failures.append("Windows Hybrid 未声明单模型人工复核安全策略")
+        if not indexed.get("hybrid_server", {}).get("safety_policy"):
+            failures.append("Windows 混合 OCR 未声明单模型人工复核安全策略")
 
     model_home = paddle_model_home()
     writable = None
@@ -112,8 +112,8 @@ def main() -> int:
             return real_find_spec(name)
 
         with (
-            patch.object(ocr_backends.platform, "system", lambda: "Windows"),
-            patch.object(ocr_backends.importlib.util, "find_spec", simulated_spec),
+            patch.object(platform, "system", lambda: "Windows"),
+            patch.object(importlib.util, "find_spec", simulated_spec),
             patch.dict(os.environ, {"OCR_BACKEND": ""}, clear=False),
         ):
             report, failures = _collect(write_check=False)

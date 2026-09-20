@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .ocr_backends import backend_label, recognize_text
 from .recognition_utils import _dedupe
+from .seal_audit_policy import variant_for_audit_backend
 from .seal_rules import (
     _reconstruct_business_acceptance_from_audit,
     _reconstruct_exact_company_stamp_from_region,
@@ -23,8 +24,18 @@ from .seal_crop_types import (
 )
 
 
-def _read_server_audit_evidence(audit: SealAuditEvidence) -> None:
-    """Keep audit-only model readings separate from accepted matching text."""
+def _read_server_audit_evidence(
+    audit: SealAuditEvidence, route: SealAuditRoute
+) -> None:
+    """Keep audit-only model readings separate from accepted matching text.
+
+    The provider comes from the resolved policy rather than a literal, so the
+    call can never be denied by the request scope without the caller knowing.
+    """
+    backend = route.audit_backend
+    if not backend:
+        return
+    variant = variant_for_audit_backend(backend)
     audit.audit_variant_texts: dict[str, list[str]] = {}
     for audit_label, audit_path in audit.audit_paths:
         if not audit_path or not Path(audit_path).is_file():
@@ -34,12 +45,12 @@ def _read_server_audit_evidence(audit: SealAuditEvidence) -> None:
                 from .paddle_ocr import recognize_line
 
                 audit_rows = recognize_line(
-                    audit_path, model_variant="server"
+                    audit_path, model_variant=variant
                 )
             else:
                 audit_rows = recognize_text(
                     audit_path,
-                    backend="paddle_server",
+                    backend=backend,
                     min_text_height=0.012,
                 )
             current_audit_texts = [
@@ -78,10 +89,16 @@ def _reconstruct_server_audit_evidence(
             for text in values
         ]
     )
-    audit.robust_shared_suffix = _shared_long_organization_suffix(
-        request.requirement,
-        audit.robust_mobile_texts,
-        audit.robust_server_texts,
+    audit.robust_shared_suffix = (
+        _shared_long_organization_suffix(
+            request.requirement,
+            audit.robust_mobile_texts,
+            audit.robust_server_texts,
+        )
+        # Only meaningful when the bands were read by a different tier from the
+        # audit model; otherwise this would be a model corroborating itself.
+        if route.audit_band_backend
+        else ""
     )
     if audit.robust_shared_suffix:
         audit.audit_texts.append(audit.robust_shared_suffix)
@@ -171,7 +188,11 @@ def _record_server_audit_artifact(
     """Retain all URLs, OCR variants, confidence and acceptance explanations."""
     if candidate["index"] < len(collection.artifacts):
         collection.artifacts[candidate["index"]].update(
-            server_audit_backend=backend_label("paddle_server"),
+            server_audit_backend=backend_label(route.audit_backend or ""),
+            server_audit_mode=route.audit_mode,
+            server_audit_independent=bool(
+                route.audit_backend and route.audit_backend != request.ocr_backend
+            ),
             server_audit_text=" | ".join(audit.audit_texts),
             server_audit_combined_text=audit.combined_audit,
             server_audit_used_for_matching=(audit.server_audit_used_for_matching),
@@ -250,7 +271,7 @@ def _record_server_audit_artifact(
                     for path in audit.robust_band_paths
                     if path.is_file()
                 ],
-                robust_mobile_backend=backend_label("paddle"),
+                robust_mobile_backend=backend_label(route.audit_band_backend or ""),
                 robust_mobile_text=" | ".join(audit.robust_mobile_texts),
                 robust_mobile_variants=audit.robust_mobile_variants,
                 robust_server_text=" | ".join(audit.robust_server_texts),

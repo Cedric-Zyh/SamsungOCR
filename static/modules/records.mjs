@@ -284,7 +284,14 @@ export function createRecords({
       if (focusTarget) $(focusTarget, body)?.focus({preventScroll: true});
       if (!scrollToTable) { table.scrollTop = previousScroll.top; table.scrollLeft = previousScroll.left; }
       $$('.record-select', body).forEach(input => input.addEventListener('change', () => toggleSelected(Number(input.value), input.checked)));
-      $$('[data-open-review]', body).forEach(button => button.addEventListener('click', () => startRecordsReview('filtered', Number(button.dataset.openReview))));
+      $$('[data-open-review]', body).forEach(button => button.addEventListener('click', () => {
+        const id = Number(button.dataset.openReview);
+        if (button.dataset.reviewMode === 'view') {
+          location.hash = `view/${id}`;
+          return;
+        }
+        startRecordsReview('filtered', id);
+      }));
       $$('[data-process-result]', body).forEach(button => button.addEventListener('click', () => openProcessHistory({
         resultId: Number(button.dataset.processResult),
         filename: button.dataset.filename || ''
@@ -306,7 +313,6 @@ export function createRecords({
     const fields = item.fields || {}, date = item.date_check || {};
     const providerFailed = ReceiptWorkbench.hasProviderFailure(item);
     const file = filenameParts(item.filename);
-    const timestamp = (item.updated_at || item.created_at || '').replace('T', ' ').replace(/([+-]\d{2}:\d{2}|Z)$/, '').split(' ');
     const pageInfo = item.page_group?.page_count > 1 ? `第 ${Number(item.page_index || 0) + 1} 页 / 共 ${item.page_group.page_count} 页` : '';
     const expected = fields['要求到货'] || date.required || '';
     const warehouseReceiver = fields['仓库接收人'] || item.internal_fields?.['仓库接收人'] || '';
@@ -320,6 +326,8 @@ export function createRecords({
     const fileMeta = [order ? `订单 ${order}` : file.folder, pageInfo].filter(Boolean).join(' · ');
     const verdict = providerFailed ? '识别失败' : item.final_result || item.overall || '';
     const verdictLabel = ({'需人工复核': '待复核', '通过': '已通过'})[verdict] || verdict || '—';
+    // 单元格内的核验徽章若与整行结论文案相同（如整行「识别失败」时日期列也显示「识别失败」），就不再重复渲染
+    const checkLabel = status => (String(status || '') === verdict ? '' : checkStatusLabel(status));
     const redundantReview = providerFailed || item.review_status === '无需复核'
       || (verdict === '需人工复核' && item.review_status === '待复核')
       || (verdict === '通过' && item.review_status === '确认通过')
@@ -327,20 +335,19 @@ export function createRecords({
     const reviewDetail = item.review_status && !redundantReview ? `<small>${escapeHtml(item.review_status)}</small>` : '';
     const verdictTitle = providerFailed ? verdict : [verdict, item.review_status].filter(Boolean).join(' · ');
     const errors = [...new Set([item.error_message, ...providerErrors(item)].filter(Boolean))];
+    const needsReview = item.review_status === '待复核';
     const primaryAction = providerFailed
-      ? `<button type="button" class="mini-button row-review" data-retry-row="${item.id}">重试</button>`
-      : `<button type="button" class="mini-button row-review" data-open-review="${item.id}">${item.review_status === '待复核' ? '复核' : '查看'}</button>`;
-    const processAction = `<button type="button" class="mini-button row-process" data-process-result="${item.id}" data-filename="${escapeHtml(item.filename)}" aria-label="查看 ${escapeHtml(file.name)} 的流程记录">流程</button>`;
+      ? `<button type="button" class="mini-button row-review row-primary" data-retry-row="${item.id}">重试</button>`
+      : `<button type="button" class="mini-button row-review ${needsReview ? 'row-primary' : 'row-secondary'}" data-open-review="${item.id}" data-review-mode="${needsReview ? 'review' : 'view'}">${needsReview ? '复核' : '查看'}</button>`;
     return `<tr class="${providerFailed ? 'failed-row' : item.review_status === '待复核' ? 'pending-row' : ''}">
       <td><input class="record-select" type="checkbox" value="${item.id}" ${recordsState.selected.has(Number(item.id)) ? 'checked' : ''} aria-label="选择 ${escapeHtml(item.filename)}"></td>
-      <td class="file-cell" title="${escapeHtml(item.filename)}"><button type="button" class="record-file-link" data-open-review="${item.id}" aria-label="查看回单 ${escapeHtml(item.filename)}"><strong>${escapeHtml(file.name)}</strong></button>${fileMeta ? `<small class="record-file-meta" title="${escapeHtml(fileMeta)}">${escapeHtml(fileMeta)}</small>` : ''}${errors.map(message => `<small class="error-text" title="${escapeHtml(message)}">${escapeHtml(message)}</small>`).join('')}</td>
+      <td class="file-cell" title="${escapeHtml(item.filename)}"><button type="button" class="record-file-link" data-open-review="${item.id}" data-review-mode="view" aria-label="查看回单 ${escapeHtml(item.filename)}"><strong>${escapeHtml(file.name)}</strong></button>${fileMeta ? `<small class="record-file-meta" title="${escapeHtml(fileMeta)}">${escapeHtml(fileMeta)}</small>` : ''}</td>
       <td class="customer-cell" title="${escapeHtml(fields['客户名称'] || '')}"><span>${escapeHtml(fields['客户名称'] || '—')}</span></td>
-      <td class="signature-cell" title="仓库联系人：${escapeHtml(warehouseContact)}；仓库接收人：${escapeHtml(warehouseReceiver)}"><div><span><em>仓库联系人</em>${escapeHtml(warehouseContact || '—')}</span><small><span><em>仓库接收人</em>${escapeHtml(warehouseReceiver || '未识别')}</span>${checkStatusLabel(signatureStatus)}</small></div></td>
-      <td><div class="date-cell"><div><span><em>要求</em>${escapeHtml(expected || '—')}</span><small class="date-actual${dateDifferent ? ' date-difference' : ''}"><span><em>签收</em>${escapeHtml(date.actual || '未识别')}</span>${checkStatusLabel(ReceiptWorkbench.checkStatus(item, 'date'))}</small></div></div></td>
-      <td>${checkStatusLabel(ReceiptWorkbench.checkStatus(item, 'seal'))}</td>
-      <td class="verdict-cell" title="${escapeHtml(verdictTitle)}"><span class="pill ${statusClass(verdict)}">${escapeHtml(verdictLabel)}</span>${reviewDetail}</td>
-      <td class="time-cell"><span>${escapeHtml(timestamp[0] || '—')}</span><small>${escapeHtml(timestamp[1] || '')}</small></td>
-      <td><div class="row-actions">${primaryAction}${processAction}<button class="mini-button row-more" data-more-record="${item.id}" aria-label="${escapeHtml(file.name)} 更多操作" aria-expanded="false" aria-controls="record-more-menu">···</button></div></td></tr>`;
+      <td class="signature-cell" title="仓库联系人：${escapeHtml(warehouseContact)}；仓库接收人：${escapeHtml(warehouseReceiver)}"><div><span><em>仓库联系人</em>${escapeHtml(warehouseContact || '—')}</span><small><span><em>仓库接收人</em>${escapeHtml(warehouseReceiver || '未识别')}</span>${checkLabel(signatureStatus)}</small></div></td>
+      <td><div class="date-cell"><div><span><em>要求</em>${escapeHtml(expected || '—')}</span><small class="date-actual${dateDifferent ? ' date-difference' : ''}"><span><em>签收</em>${escapeHtml(date.actual || '未识别')}</span>${checkLabel(ReceiptWorkbench.checkStatus(item, 'date'))}</small></div></div></td>
+      <td>${checkLabel(ReceiptWorkbench.checkStatus(item, 'seal'))}</td>
+      <td class="verdict-cell" title="${escapeHtml(verdictTitle)}"><span class="pill ${statusClass(verdict)}">${escapeHtml(verdictLabel)}</span>${reviewDetail}${errors.map(message => `<small class="error-text" title="${escapeHtml(message)}">${escapeHtml(message)}</small>`).join('')}</td>
+      <td><div class="row-actions">${primaryAction}<button type="button" class="mini-button row-more row-icon-action" data-more-record="${item.id}" data-more-filename="${escapeHtml(item.filename)}" aria-label="${escapeHtml(file.name)} 更多操作" aria-expanded="false" aria-controls="record-more-menu" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></svg></button></div></td></tr>`;
   }
 
   function toggleSelected(id, checked) { checked ? recordsState.selected.add(id) : recordsState.selected.delete(id); updateSelectionToolbar(); }
@@ -470,7 +477,14 @@ export function createRecords({
       const button = event.target.closest('[data-more-record]');
       if (!button) return;
       $('#record-more-menu').dataset.recordId = button.dataset.moreRecord;
+      $('#record-more-menu').dataset.filename = button.dataset.moreFilename || '';
       showTablePopover($('#record-more-menu'), button);
+    });
+    $('[data-menu-process]').addEventListener('click', () => {
+      const menu = $('#record-more-menu'), id = Number(menu.dataset.recordId);
+      const item = recordsState.records.find(record => Number(record.id) === id);
+      closeTablePopover();
+      openProcessHistory({resultId: id, filename: menu.dataset.filename || item?.filename || ''});
     });
     $('[data-menu-retry]').addEventListener('click', () => {
       const id = Number($('#record-more-menu').dataset.recordId);

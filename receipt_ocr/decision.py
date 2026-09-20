@@ -85,6 +85,7 @@ def decide_overall(
 ) -> str:
     """Never auto-pass or auto-fail when date/seal evidence itself is unreliable."""
     acceptance = acceptance or {}
+    low_confidence_mode = acceptance.get("low_confidence_mode", "check")
     date_enabled = acceptance.get("date_match_mode") != "none"
     seal_enabled = acceptance.get("seal_match_mode") != "none"
     signature_enabled = acceptance.get("signature_match_mode") in {"any", "all"}
@@ -97,6 +98,8 @@ def decide_overall(
         seal_check = {"status": "未核对", "reliable": True}
         review_reasons = [reason for reason in review_reasons if not re.search(r"印章|签章", str(reason))]
     review_reasons = blocking_review_reasons(review_reasons)
+    if low_confidence_mode == "ignore":
+        review_reasons = [reason for reason in review_reasons if "低置信度" not in str(reason)]
     if (
         review_reasons
         or not date_check.get("reliable")
@@ -127,7 +130,8 @@ def decide_overall(
 def finalize_result(result: dict) -> dict:
     """Write every machine verdict field from the completed stage evidence."""
     reasons = blocking_review_reasons(list(result.get("review_reasons", [])))
-    if any(
+    acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
+    if acceptance.get("low_confidence_mode", "check") == "check" and any(
         meta.get("low_confidence")
         for name, meta in result.get("field_metadata", {}).items()
         if name != "仓库接收人"

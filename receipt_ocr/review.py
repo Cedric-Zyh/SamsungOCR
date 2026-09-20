@@ -168,7 +168,8 @@ def apply_human_edits(current, payload):
         return project_fields(result)
     # Saving a draft is not acknowledgement of unrelated routing/field warnings.
     reasons = [] if confirm_fields else list(current.get("review_reasons") or [])
-    if any(meta.get("low_confidence") for name, meta in result["field_metadata"].items()
+    acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
+    if acceptance.get("low_confidence_mode", "check") == "check" and any(meta.get("low_confidence") for name, meta in result["field_metadata"].items()
            if name != "仓库接收人"):
         reasons.append("存在低置信度字段")
     if not date.get("reliable"):

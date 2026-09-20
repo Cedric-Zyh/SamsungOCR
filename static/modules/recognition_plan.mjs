@@ -1,8 +1,8 @@
 import {escapeHtml, planLabels} from './ui.mjs';
 
-const methodLabels = {paddle:'Paddle Mobile', paddle_server:'Paddle Server', vision:'Vision', qingtong:'清瞳', danzhengtong:'单证通'};
+const methodLabels = {paddle:'Paddle Mobile', paddle_server:'Paddle Server', paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
 const presetLabels = {danzhengtong:'单证通',full:'完整核验', date:'仅日期', seal:'仅印章', 'seal-test':'印章测试'};
-const localMethods = ['paddle', 'vision', 'paddle_server'];
+const localMethods = ['paddle', 'paddle_server', 'paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';
 const acceptanceStorageKey = 'receipt-acceptance-policy';
 
@@ -15,7 +15,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
 
   const stageMethods = stage => $$(`[data-stage="${stage}"]`);
   const available = (stage, method) => stageMethods(stage).some(el => el.dataset.method === method && el.dataset.available === 'true');
-  const supported = (stage, method) => localMethods.includes(method) || (stage === 'seal' && method === 'qingtong') || (stage !== 'products' && method === 'danzhengtong');
+  const supported = (stage, method) => (method === 'paddle_seal' ? stage === 'seal' : localMethods.includes(method)) || (stage === 'seal' && method === 'qingtong') || (stage !== 'products' && method === 'danzhengtong');
   const selected = stage => stageMethods(stage).filter(el => el.checked && el.dataset.available === 'true' && supported(stage, el.dataset.method)).map(el => el.dataset.method);
   const enabled = stage => !!$(`[data-target="${stage}"]`)?.checked;
   const setText = (selector, value) => { const node = $(selector); if (node) node.textContent = value; };
@@ -43,6 +43,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       date_match_mode: readMode('date'),
       signature_match_mode: readMode('signature'),
       reject_mode: ['any_mismatch', 'all_mismatch', 'none'].includes(selectedReject) ? selectedReject : 'none',
+      low_confidence_mode: $$('[data-acceptance-low-confidence]').find(input => input.checked)?.value === 'ignore' ? 'ignore' : 'check',
       // Keep legacy keys for tasks/settings written by older versions.
       seal_pass_standard: 'any_exact',
       date_source: 'danzhengtong',
@@ -61,20 +62,23 @@ export function createRecognitionPlan({environment, ui, importsState}) {
   }
   function defaultPlan() {
     const choose = (stage, preference) => {
+      // Do not silently create a remote-only default when no local OCR is
+      // available at all; the user must explicitly choose that route.
+      if (stage === 'date' && !localMethods.some(method => available(stage, method))) return [];
       const method = preference.find(method => available(stage, method));
       return method ? [method] : [];
     };
     return {
       fields:choose('fields', localMethods), products:choose('products', localMethods), handwriting:[],
-      date:choose('date', ['danzhengtong', 'vision', 'paddle', 'paddle_server']), seal:choose('seal', ['vision', 'paddle', 'paddle_server']),
+      date:choose('date', ['danzhengtong', 'paddle', 'paddle_server']), seal:choose('seal', ['paddle', 'paddle_server']),
     };
   }
   function presetPlan(name) {
     if (name === 'danzhengtong') return {fields:['danzhengtong'], products:[], handwriting:['danzhengtong'], date:['danzhengtong'], seal:['danzhengtong']};
-    if (name === 'seal-test') return {fields:['vision'], products:[], handwriting:[], date:[], seal:['qingtong']};
+    if (name === 'seal-test') return {fields:['paddle'], products:[], handwriting:[], date:[], seal:['qingtong']};
     const plan = defaultPlan();
     if (name === 'full') {
-      const method = ['vision', 'paddle', 'paddle_server'].find(method => available('handwriting', method));
+      const method = ['paddle', 'paddle_server'].find(method => available('handwriting', method));
       plan.handwriting = method ? [method] : [];
     } else for (const stage of stages) if (stage !== name) plan[stage] = [];
     return plan;
@@ -82,7 +86,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
   function presetUnavailable(name) {
     if (name === 'seal-test') {
       const missing = [];
-      if (!available('fields', 'vision')) missing.push('Vision 不可用');
+      if (!available('fields', 'paddle')) missing.push('Paddle 不可用');
       if (!available('seal', 'qingtong')) missing.push('清瞳尚未配置');
       return missing.join('，');
     }
@@ -158,7 +162,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
 
   function initialize() {
     $$('.recognition-plan input').forEach(el => el.addEventListener('change', () => updateRecognitionPlan()));
-    $$('[data-acceptance-input], [data-acceptance-reject]').forEach(input => input.addEventListener('change', () => {
+    $$('[data-acceptance-input], [data-acceptance-reject], [data-acceptance-low-confidence]').forEach(input => input.addEventListener('change', () => {
       try { localStorage.setItem(acceptanceStorageKey, JSON.stringify(readAcceptancePolicy())); } catch (_) { /* browser storage unavailable */ }
       updateRecognitionPlan({persist: false});
     }));
@@ -190,6 +194,8 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       }
       const rejectMode = ['any_mismatch', 'all_mismatch', 'none'].includes(policy?.reject_mode) ? policy.reject_mode : 'none';
       $$('[data-acceptance-reject]').forEach(input => { input.checked = input.value === rejectMode; });
+      const lowConfidenceMode = policy?.low_confidence_mode === 'ignore' ? 'ignore' : 'check';
+      $$('[data-acceptance-low-confidence]').forEach(input => { input.checked = input.value === lowConfidenceMode; });
     } catch (_) { /* use defaults */ }
   }
 

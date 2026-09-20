@@ -192,6 +192,7 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
             "line_rows": list(region.evidence.line_rows),
             "line_raw": region.images.line_raw,
             "line_table_clean_upscaled": region.images.line_table_clean_upscaled,
+            "line_positioned_frame_clean": region.images.line_positioned_frame_clean,
             "line_autocontrast_upscaled": region.images.line_autocontrast_upscaled,
             "line_max_channel_upscaled": region.images.line_max_channel_upscaled,
             "line_otsu_upscaled": region.images.line_otsu_upscaled,
@@ -228,7 +229,7 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
         for row in region.evidence.accepted_line_rows
     )
     region.evidence.variant_rows.extend(region.evidence.secondary_variant_rows)
-    run.output.extend(
+    normalized_rows = [
         type(row)(
             text=row.text,
             confidence=row.confidence,
@@ -238,7 +239,13 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
             height=row.height * region.images.height,
         )
         for row in region.evidence.variant_rows
-    )
+    ]
+    # The tight crop is the only geometry used for the live date decision.
+    # Keep its normalized observations on the artifact so the stage can
+    # select them without confusing overlapping wide-crop coordinates.
+    if region.crop_key == "tight" and not region.audit_only:
+        run.primary_rows = list(normalized_rows)
+    run.output.extend(normalized_rows)
     if region.audit_only:
         # Only strict four-digit dates survive this evidence path.
         # Keep the candidate visible but capped below every
@@ -293,6 +300,12 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
                 "date_line_original_url": f"{prefix}/date/{region.images.line_raw.name}",
                 "date_line_color_clean_url": f"{prefix}/date/{region.images.line_color_clean.name}",
                 "date_line_table_clean_url": f"{prefix}/date/{region.images.line_table_clean.name}",
+                "date_line_positioned_frame_clean_url": (
+                    f"{prefix}/date/{region.images.line_positioned_frame_clean.name}"
+                    if region.images.line_positioned_frame_clean is not None
+                    and region.images.line_positioned_frame_clean.is_file()
+                    else ""
+                ),
                 "date_line_table_clean_upscaled_url": (
                     f"{prefix}/date/{region.images.line_table_clean_upscaled.name}"
                     if region.images.line_table_clean_upscaled is not None
@@ -334,6 +347,11 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
                     else ""
                 ),
                 "ocr_texts": [row.text for row in artifact_variant_rows],
+                "decision_rows": (
+                    [row.to_dict() for row in run.primary_rows]
+                    if region.crop_key == "tight" and not region.audit_only
+                    else []
+                ),
                 "ocr_variants": region.evidence.ocr_variants,
                 "secondary_ocr_variants": region.evidence.secondary_ocr_variants,
                 "date_line_ocr_backend": (
@@ -342,6 +360,13 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
                     else ""
                 ),
                 "date_line_ocr_variants": region.evidence.line_variants,
+                "date_line_display_ocr_variants": (
+                    region.evidence.display_line_variants
+                ),
+                "date_line_component_candidate": region.evidence.component_candidate,
+                "date_line_component_confidence": (
+                    region.evidence.component_candidate_confidence
+                ),
                 "far_lower_cross_model_candidate": (
                     region.evidence.far_lower_cross_model_date.isoformat()
                     if region.evidence.far_lower_cross_model_date
