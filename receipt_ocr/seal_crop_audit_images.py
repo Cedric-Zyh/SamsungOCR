@@ -67,11 +67,19 @@ def _prepare_server_audit_images(
                 color_source,
                 audit.round_type_band,
                 orientation_aligned=candidate.get("color_isolated_oriented") is not None,
+                focus_box=(candidate.get("orientation") or {}).get("oriented_type_row_box"),
             )
         except Exception:
             audit.round_type_band = None
         if audit.round_type_band is not None:
-            audit.audit_paths.append(("圆章章类型横向分带", audit.round_type_band))
+            audit.audit_paths.append(
+                (
+                    "旋正后圆章章型横向分带"
+                    if candidate.get("color_isolated_oriented")
+                    else "圆章章类型横向分带",
+                    audit.round_type_band,
+                )
+            )
     if (
         request.artifact_dir
         and audit_position == 0

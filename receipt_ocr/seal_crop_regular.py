@@ -115,6 +115,7 @@ def _collect_primary_region_evidence(
                 band_source,
                 evidence.round_type_band,
                 orientation_aligned=evidence.color_isolated_oriented is not None,
+                focus_box=evidence.orientation.get("oriented_type_row_box"),
             )
             from .paddle_ocr import recognize_line
 

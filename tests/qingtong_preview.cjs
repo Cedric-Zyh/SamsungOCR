@@ -24,6 +24,20 @@ test('the any-channel matching policy preserves the selected QingTong stamp prev
   assert.equal(imageSources(item).filter(source => source.group === 'seal').length, 0);
 });
 
+test('QingTong preview prefers the selected local oriented derivative when present',()=>{
+  const item = record();
+  item.processing_artifacts.seals = [{
+    index: 1,
+    api_index: 1,
+    original_url:'/files/artifacts/seal-before.jpg',
+    color_isolated_oriented_url:'/files/artifacts/seal-oriented.png',
+    orientation:{anchor_text:'收货专用章', applied_rotation:52.4},
+  }];
+  assert.deepEqual(imageSources(item).find(source => source.group === 'seal'), {
+    url:'/files/artifacts/seal-oriented.png', label:'印章区域 · 按章型文字旋正', group:'seal',
+  });
+});
+
 test('missing or malformed selection does not substitute an unrelated local stamp',()=>{
   for(const box of [null,[],[1,2,3],[3,0,2,5],[0,0,2,Infinity],['0',0,2,5]]) {
     const item=record(); item.seal_check.dual_check.selected.xyxy=box;

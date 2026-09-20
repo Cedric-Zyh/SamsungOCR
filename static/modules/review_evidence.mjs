@@ -213,7 +213,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
       label === '印章原始区域' ? (item.isolated_text || item.secondary_original_text || '') :
       label === '颜色分离高对比图' ? (item.isolated_text || '') :
       label === '保留章色白底图' ? [item.color_isolated_text, item.secondary_color_isolated_text].filter(Boolean).join(' | ') :
-      label === '圆章章类型横向分带' ? (item.round_type_band_text || '') :
+      label === '圆章章类型横向分带' || label === '旋正后圆章章型横向分带' ? (item.round_type_band_text || '') :
       label === '矩形编号章数字行' ? [item.code_line_text, item.secondary_code_line_text].filter(Boolean).join(' | ') :
       label === '圆章环形文字展开图' || label === '矩形印章校正图' ? [item.unwrapped_text, item.secondary_unwrapped_text, item.server_audit_text].filter(Boolean).join(' | ') :
       label === '圆章展开 180° 图' || label === '矩形印章 180° 旋转图' ? [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ') :

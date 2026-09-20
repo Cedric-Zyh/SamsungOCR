@@ -31,7 +31,14 @@ export function createProcessHistory({environment, ui, api}) {
   function render(data) {
     const file = filenameParts(data.filename || '');
     $('#process-history-title').textContent = file.name || '流程记录';
-    $('#process-history-subtitle').textContent = [data.current_status ? `当前：${data.current_status}` : '', data.result_id ? `记录 #${data.result_id}` : '']
+    const job = data.job || {};
+    const progress = job.progress || {};
+    const timing = job.processing_seconds != null ? `处理 ${job.processing_seconds} 秒` : '';
+    const waiting = job.wait_seconds ? `排队 ${job.wait_seconds} 秒` : '';
+    const current = progress.provider === 'model'
+      ? `${progress.method_label || progress.method || '识别模型'} · ${progress.target || '识别中'}`
+      : progress.provider === 'danzhengtong' ? `单证通 · ${progress.stage || '处理中'}` : '';
+    $('#process-history-subtitle').textContent = [data.current_status ? `当前：${data.current_status}` : '', current, waiting, timing, data.result_id ? `记录 #${data.result_id}` : '']
       .filter(Boolean).join(' · ');
     const events = data.events || [];
     $('#process-history-content').innerHTML = events.length ? `

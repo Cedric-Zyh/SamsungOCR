@@ -162,6 +162,27 @@ def test_round_seal_type_band_uses_center_row_for_oriented_stamp(tmp_path):
     assert round(float(output.mean())) == 90
 
 
+def test_round_seal_type_band_can_use_detected_oriented_row_box(tmp_path):
+    import cv2
+
+    source = tmp_path / "round-focused-color-only.png"
+    image = np.full((1000, 1000, 3), 255, dtype=np.uint8)
+    image[430:570, 220:780] = 90
+    assert cv2.imwrite(str(source), image)
+
+    destination = save_round_seal_type_band(
+        source,
+        tmp_path / "round-focused-type-band.png",
+        orientation_aligned=True,
+        focus_box=[200, 400, 800, 600],
+    )
+    output = cv2.imread(str(destination))
+
+    assert output is not None
+    assert output.shape[:2] == (200, 600)
+    assert round(float(output.mean())) == 90
+
+
 def test_color_isolated_seal_keeps_red_ink_and_removes_black_form_text(tmp_path):
     import cv2
 

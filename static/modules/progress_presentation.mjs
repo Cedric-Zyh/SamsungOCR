@@ -1,6 +1,6 @@
 /** Compact workbench copy; the shared review policy still decides eligibility. */
 import {providerErrorIssues} from './provider_errors.mjs';
-import {providerProgress} from './provider_progress.mjs';
+import {providerProgress} from './provider_progress.mjs?v=20260920-progress-detail';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -38,7 +38,7 @@ export function workbenchAttention(item, {workbench, paused, uploading}) {
   if (item.status === 'ready') return {primary: '待开始', secondary: '图片已保存在本地，点击“开始识别”后处理'};
   if (item.status === 'queued') return {primary: paused ? '已暂停，等待继续' : '等待后台识别', secondary: ''};
   if (item.status === 'running') return providerProgress(job, {paused})
-    || {primary: paused ? '正在完成当前图片' : '正在识别', secondary: paused ? '保存结果后暂停' : ''};
+    || {primary: paused ? '正在完成当前图片' : '正在识别', secondary: job?.processing_seconds ? `已运行 ${job.processing_seconds} 秒` : paused ? '保存结果后暂停' : ''};
   if (item.status === 'failed') return {primary: '识别失败', secondary: job?.error_message || record.error_message || '可以重新尝试识别', danger: true};
   const issues = workbenchIssues(record, workbench);
   if (issues.length) return {

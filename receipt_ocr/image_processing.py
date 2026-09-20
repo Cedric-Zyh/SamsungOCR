@@ -1083,6 +1083,7 @@ def save_round_seal_type_band(
     destination: str | Path,
     *,
     orientation_aligned: bool = False,
+    focus_box: list[float] | tuple[float, float, float, float] | None = None,
 ) -> Path:
     """Save the inner type row of a color-isolated round stamp.
 
@@ -1099,11 +1100,17 @@ def save_round_seal_type_band(
     height, width = image.shape[:2]
     if height < 40 or width < 40:
         raise ValueError("圆章章类型分带图片过小")
-    left, right = round(width * 0.08), round(width * 0.92)
-    if orientation_aligned:
-        top, bottom = round(height * 0.42), round(height * 0.62)
+    if focus_box and len(focus_box) == 4:
+        left = max(0, round(float(focus_box[0])))
+        top = max(0, round(float(focus_box[1])))
+        right = min(width, round(float(focus_box[2])))
+        bottom = min(height, round(float(focus_box[3])))
     else:
-        top, bottom = round(height * 0.56), round(height * 0.84)
+        left, right = round(width * 0.08), round(width * 0.92)
+        if orientation_aligned:
+            top, bottom = round(height * 0.42), round(height * 0.62)
+        else:
+            top, bottom = round(height * 0.56), round(height * 0.84)
     band = image[top:bottom, left:right]
     if band.size == 0:
         raise ValueError("圆章章类型分带为空")

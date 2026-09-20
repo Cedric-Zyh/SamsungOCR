@@ -3,6 +3,8 @@ const stages = {
   paused: '已暂停查询', completed: '结果已返回', failed: '识别失败',
 };
 
+const modelPhases = {started: '正在运行', completed: '已完成', failed: '失败', pending: '等待中'};
+
 function duration(value) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
   if (seconds < 60) return `${seconds} 秒`;
@@ -12,8 +14,23 @@ function duration(value) {
 
 export function providerProgress(job, {paused = false} = {}) {
   const progress = job?.progress;
-  if (job?.status !== 'running' || progress?.provider !== 'danzhengtong' || !stages[progress.stage]) return null;
+  if (job?.status !== 'running' || !progress) return null;
+  if (progress.provider === 'model') {
+    const label = progress.method_label || progress.method || '识别模型';
+    const target = progress.target || '识别内容';
+    const seconds = duration(progress.elapsed_seconds);
+    const parts = [modelPhases[progress.phase] || '处理中', `已运行 ${seconds}`];
+    if (job.wait_seconds > 0) parts.push(`排队 ${duration(job.wait_seconds)}`);
+    if (progress.message) parts.push(progress.message);
+    if (progress.operation) parts.push(`当前调用：${progress.operation.method_label} · ${progress.operation.action} · ${duration(progress.operation.elapsed_seconds)}`);
+    if (progress.parallel?.provider === 'danzhengtong') {
+      parts.push(`并行：单证通${progress.parallel.stage === 'waiting' ? '等待结果' : '处理中'}`);
+    }
+    return {primary: `${label} · ${target}`, secondary: parts.join(' · '), danger: progress.phase === 'failed'};
+  }
+  if (progress.provider !== 'danzhengtong' || !stages[progress.stage]) return null;
   const parts = [];
+  if (job.wait_seconds > 0) parts.push(`排队 ${duration(job.wait_seconds)}`);
   if (['waiting', 'paused'].includes(progress.stage)) {
     parts.push(`已等待 ${duration(progress.elapsed_seconds)}`);
     if (progress.timeout_seconds > 0) parts.push(`等待上限 ${duration(progress.timeout_seconds)}`);

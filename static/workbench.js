@@ -101,7 +101,15 @@ const ReceiptWorkbench = (() => {
     add(record.preview_url, '整页回单', 'page');
     for (const [key, group, label] of [['date', 'date', '日期区域'], ['seals', 'seal', '印章区域']]) {
       if (key === 'seals' && ['qingtong_template_and_ocr', 'qingtong_any_channel', 'qingtong_all_channel'].includes(record.seal_check?.dual_check?.policy)) {
-        const corrected = (record.processing_artifacts?.seals || []).find(item =>
+        const sealArtifacts = record.processing_artifacts?.seals || [];
+        const selectedIndex = record.seal_check.dual_check.selected?.index;
+        const selectedArtifact = sealArtifacts.find(item =>
+          item.api_index === selectedIndex || item.index === selectedIndex
+        ) || (Number.isInteger(selectedIndex) ? sealArtifacts[selectedIndex] : null);
+        const oriented = selectedArtifact?.color_isolated_oriented_url ||
+          sealArtifacts.find(item => item.color_isolated_oriented_url)?.color_isolated_oriented_url;
+        if (oriented) add(oriented, '印章区域 · 按章型文字旋正', 'seal');
+        const corrected = !oriented && sealArtifacts.find(item =>
           item.orientation?.applied_rotation === 180 && item.orientation_corrected_url);
         if (corrected) add(corrected.orientation_corrected_url, '印章区域 · 已自动旋转 180°', 'seal');
         const box = record.seal_check.dual_check.selected?.xyxy;
