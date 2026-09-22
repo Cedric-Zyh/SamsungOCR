@@ -3,6 +3,8 @@ __pycache__/
 .idea/
 .DS_Store
 .playwright-cli/
+.workbuddy/
+previews/
 .pytest_cache/
 .env
 config/seal_api_key
