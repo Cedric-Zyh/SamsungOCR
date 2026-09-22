@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
 
 
@@ -29,6 +30,11 @@ for package in ("paddle", "paddleocr", "paddlex"):
     datas += collect_data_files(package, include_py_files=False)
     binaries += collect_dynamic_libs(package)
     hiddenimports += collect_submodules(package)
+
+# The application checks the installed PaddleOCR version before advertising
+# the PP-OCRv6 backend. PyInstaller does not bundle distribution metadata by
+# default, so include it or the frozen app reports that no OCR engine exists.
+datas += copy_metadata("paddleocr")
 
 datas += collect_data_files("cv2", include_py_files=False)
 binaries += collect_dynamic_libs("cv2")
