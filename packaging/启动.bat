@@ -4,6 +4,7 @@ set "APP_ROOT=%~dp0"
 set "DATA_ROOT=%LOCALAPPDATA%\SamsungReceipt"
 if not exist "%DATA_ROOT%" mkdir "%DATA_ROOT%"
 set "SAMSUNG_RECEIPT_DATA_DIR=%DATA_ROOT%"
+set "PADDLE_MODEL_HOME=%DATA_ROOT%\models"
 
 start "三星回单核验台" "%APP_ROOT%SamsungReceipt\SamsungReceipt.exe"
 timeout /t 3 /nobreak >nul
