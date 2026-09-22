@@ -44,18 +44,29 @@ jobs:
         shell: pwsh
         run: |
           $workdir = (Resolve-Path dist/SamsungReceipt).Path
-          $process = Start-Process -FilePath "$workdir\SamsungReceipt.exe" -WorkingDirectory $workdir -PassThru
+          $stdoutPath = Join-Path $workdir "smoke.stdout.log"
+          $stderrPath = Join-Path $workdir "smoke.stderr.log"
+          $process = Start-Process -FilePath "$workdir\SamsungReceipt.exe" -WorkingDirectory $workdir -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
           $ready = $false
           try {
             1..60 | ForEach-Object {
               if ($ready) { return }
+              if ($process.HasExited) {
+                $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
+                $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
+                throw "打包后的程序提前退出（退出码 $($process.ExitCode)）。标准输出：`n$stdout`n标准错误：`n$stderr"
+              }
               Start-Sleep -Seconds 2
               try {
                 $response = Invoke-WebRequest -Uri http://127.0.0.1:5001/ -UseBasicParsing -TimeoutSec 5
                 if ($response.StatusCode -eq 200) { $ready = $true }
               } catch { }
             }
-            if (-not $ready) { throw "打包后的程序未能在 120 秒内提供首页" }
+            if (-not $ready) {
+              $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
+              $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
+              throw "打包后的程序未能在 120 秒内提供首页。标准输出：`n$stdout`n标准错误：`n$stderr"
+            }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
