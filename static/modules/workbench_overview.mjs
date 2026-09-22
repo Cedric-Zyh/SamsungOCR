@@ -1,6 +1,16 @@
 export const WORK_FILTERS = {all: '全部', ready: '待开始', running: '处理中', processing: '待开始 / 处理中', review: '待复核', passed: '通过', rejected: '不通过', failed: '失败'};
 export const DOCUMENT_TYPES = {receipt: '三星出库回单', product_continuation: '商品明细续页', warehouse_authorization: '仓库货物接收委托书', unknown: '未知文档', unclassified: '待分类'};
 const pending = new Set(['awaiting_upload', 'ready', 'queued']);
+
+// The workbench filter used to be a single string. Keep accepting that shape
+// for persisted state and callers, while allowing the UI to pass a set of
+// statuses when several cards are selected.
+export function workFilterValues(filter) {
+  const values = Array.isArray(filter) ? filter : filter ? [filter] : [];
+  const order = ['ready', 'running', 'review', 'passed', 'rejected', 'failed'];
+  return [...new Set(values.flatMap(value => value === 'processing' ? ['ready', 'running'] : value === 'all' ? [] : [value]))]
+    .filter(value => order.includes(value)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
 export function overviewStatus(item, workbench) {
   return pending.has(item.status) ? 'ready' : item.status === 'running' ? 'running' : workbench.category(item);
 }
@@ -15,7 +25,8 @@ export function overviewCustomer(item) {
 export function matchesOverview(item, filter, workbench, type = '', query = '') {
   const status = overviewStatus(item, workbench);
   if (status === 'cancelled') return false;
-  if (filter !== 'all' && !(filter === 'processing' ? ['ready', 'running'].includes(status) : status === filter)) return false;
+  const filters = workFilterValues(filter);
+  if (filters.length && !filters.includes(status)) return false;
   if (type && overviewCustomer(item) !== type) return false;
   query = query.trim().toLocaleLowerCase();
   return !query || [item.filename, item.record?.fields?.['客户订单号']].some(value => String(value || '').toLocaleLowerCase().includes(query));

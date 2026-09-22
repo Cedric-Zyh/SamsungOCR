@@ -74,6 +74,10 @@ class DateRegionEvidence:
     line_backend: str = ""
     line_rows: list[TextObservation] = field(default_factory=list)
     accepted_line_rows: list[TextObservation] = field(default_factory=list)
+    # OCR rows from the third user-facing image (the outer-frame-cleaned
+    # date line).  They are kept separate from the legacy table-line probe so
+    # the live decision can use exactly the three images shown in the UI.
+    display_line_rows: list[TextObservation] = field(default_factory=list)
     line_variants: list[dict] = field(default_factory=list)
     # OCR shown under derivative images only; never consumed by date rules.
     display_line_variants: list[dict] = field(default_factory=list)

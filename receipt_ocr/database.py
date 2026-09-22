@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager, nullcontext
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
@@ -13,6 +13,9 @@ from .decision import has_provider_failure
 
 
 REVIEW_STATUSES = {"无需复核", "待复核", "确认通过", "确认不通过"}
+DEFAULT_RETENTION_DAYS = 7
+MIN_RETENTION_DAYS = 1
+MAX_RETENTION_DAYS = 3650
 
 
 def now_iso() -> str:
@@ -126,6 +129,20 @@ class Database:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """INSERT OR IGNORE INTO app_settings(key,value,updated_at)
+                   VALUES('retention_days',?,?)""",
+                (str(DEFAULT_RETENTION_DAYS), now_iso()),
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS batch_tasks (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -183,6 +200,127 @@ class Database:
                             AND results.review_status='待复核')
                 END"""
             )
+
+    @staticmethod
+    def normalize_retention_days(value: object) -> int:
+        """Validate the number of days that should remain in local storage."""
+        if isinstance(value, bool):
+            raise ValueError("保留天数必须是整数")
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("保留天数必须是整数") from None
+        if str(value).strip() != str(days):
+            raise ValueError("保留天数必须是整数")
+        if not MIN_RETENTION_DAYS <= days <= MAX_RETENTION_DAYS:
+            raise ValueError(f"保留天数必须在 {MIN_RETENTION_DAYS} 至 {MAX_RETENTION_DAYS} 天之间")
+        return days
+
+    def get_retention_days(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_settings WHERE key='retention_days'"
+            ).fetchone()
+        try:
+            return self.normalize_retention_days(row["value"] if row else DEFAULT_RETENTION_DAYS)
+        except ValueError:
+            return DEFAULT_RETENTION_DAYS
+
+    def set_retention_days(self, value: object) -> int:
+        days = self.normalize_retention_days(value)
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO app_settings(key,value,updated_at) VALUES('retention_days',?,?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at""",
+                (str(days), now_iso()),
+            )
+        return days
+
+    def purge_expired(self, retention_days: object | None = None, *, now: datetime | None = None) -> dict:
+        """Remove rows older than the configured window.
+
+        Active queue jobs keep their target result alive so a worker cannot
+        finish into a record that was deleted while it was processing.
+        ``records`` contains the removed rows' storage names for the caller to
+        clean up previews, uploads and artifact directories.
+        """
+        days = self.get_retention_days() if retention_days is None else self.normalize_retention_days(retention_days)
+        current = now or datetime.now().astimezone()
+        if current.tzinfo is None:
+            current = current.astimezone()
+        cutoff = current - timedelta(days=days)
+        cutoff_iso = cutoff.isoformat(timespec="seconds")
+        removed_records = []
+        removed_jobs = 0
+        removed_tasks = 0
+        with self.connect() as connection:
+            active_result_ids = set()
+            has_jobs = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_jobs'"
+            ).fetchone()
+            has_job_history = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_job_history'"
+            ).fetchone()
+            if has_jobs:
+                active_result_ids = {
+                    value for row in connection.execute(
+                        """SELECT result_id,target_result_id FROM recognition_jobs
+                           WHERE status IN ('queued','running')"""
+                    )
+                    for value in (row["result_id"], row["target_result_id"])
+                    if value
+                }
+            rows = connection.execute(
+                """SELECT id,stored_name,preview_name,result_json
+                   FROM results WHERE julianday(created_at) < julianday(?) ORDER BY id""", (cutoff_iso,)
+            ).fetchall()
+            for row in rows:
+                if row["id"] in active_result_ids:
+                    continue
+                removed_records.append(dict(row))
+            ids = [row["id"] for row in removed_records]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                connection.execute(f"DELETE FROM results WHERE id IN ({placeholders})", ids)
+            if has_jobs:
+                # Queue history is operational data tied to the task. Keep
+                # running work and retries that still target a live result;
+                # remove completed or abandoned jobs beyond the same age.
+                old_jobs = connection.execute(
+                    """SELECT id FROM recognition_jobs
+                       WHERE julianday(created_at) < julianday(?) AND status <> 'running'
+                         AND NOT (status='queued' AND COALESCE(target_result_id,result_id) IS NOT NULL)""",
+                    (cutoff_iso,),
+                ).fetchall()
+                job_ids = [row["id"] for row in old_jobs]
+                if job_ids:
+                    placeholders = ",".join("?" for _ in job_ids)
+                    if has_job_history:
+                        connection.execute(
+                            f"DELETE FROM recognition_job_history WHERE job_id IN ({placeholders})", job_ids
+                        )
+                    connection.execute(
+                        f"DELETE FROM recognition_jobs WHERE id IN ({placeholders})", job_ids
+                    )
+                    removed_jobs = len(job_ids)
+                old_tasks = connection.execute(
+                    """SELECT id FROM batch_tasks WHERE julianday(created_at) < julianday(?)
+                       AND NOT EXISTS (SELECT 1 FROM recognition_jobs WHERE task_id=batch_tasks.id)""",
+                    (cutoff_iso,),
+                ).fetchall()
+                task_ids = [row["id"] for row in old_tasks]
+                if task_ids:
+                    placeholders = ",".join("?" for _ in task_ids)
+                    connection.execute(f"DELETE FROM batch_tasks WHERE id IN ({placeholders})", task_ids)
+                    removed_tasks = len(task_ids)
+        return {
+            "retention_days": days,
+            "cutoff": cutoff_iso,
+            "records": removed_records,
+            "deleted_results": len(removed_records),
+            "deleted_jobs": removed_jobs,
+            "deleted_tasks": removed_tasks,
+        }
 
     def create_task(
         self, task_id: str, name: str, total: int, ocr_backend: str = "",

@@ -10,6 +10,8 @@ from pathlib import Path
 import os
 import threading
 import math
+import re
+import tempfile
 
 import cv2
 import numpy as np
@@ -123,7 +125,16 @@ def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN
         confidence = float(box.get("confidence", 0.0) or 0.0)
         if confidence < minimum_confidence:
             continue
-        if "用章" not in text and "专用" not in text:
+        # Round and oval receiving stamps often print the shorter centre row
+        # ``收货章`` rather than ``收货专用章``.  It is still a valid direction
+        # anchor; the row's text polygon is more reliable than the ellipse's
+        # long axis because it also resolves the 180-degree ambiguity.
+        is_stamp_type = (
+            "用章" in text
+            or "专用" in text
+            or ("收货" in text and "章" in text)
+        )
+        if not is_stamp_type:
             continue
         try:
             angle = float(box.get("angle"))
@@ -161,6 +172,36 @@ def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN
         "confidence": round(chosen["confidence"], 4),
         "anchor_points": chosen.get("points", []),
     }
+
+
+def _round_stamp_type_texts(boxes, decision):
+    """Reuse detected type-row text, including a second numeric suffix line."""
+    anchor_text = str(decision.get("anchor_text", "")).strip()
+    if not anchor_text:
+        return []
+    try:
+        anchor_angle = float(decision.get("angle", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        anchor_angle = 0.0
+    marker_pattern = re.compile(r"^[（(]?\s*\d{1,3}\s*[）)]?$")
+    values = []
+    for box in boxes or ():
+        text = str(box.get("text", "")).strip()
+        if text != anchor_text and not marker_pattern.fullmatch(text):
+            continue
+        try:
+            angle = float(box.get("angle", anchor_angle))
+        except (TypeError, ValueError):
+            angle = anchor_angle
+        delta = abs(angle - anchor_angle)
+        delta = min(delta, abs(180.0 - delta))
+        if text != anchor_text and delta > 15.0:
+            continue
+        if text not in values:
+            values.append(text)
+    if anchor_text in values:
+        values.remove(anchor_text)
+    return [anchor_text, *values]
 
 
 def _rotation_geometry(width, height, angle):
@@ -274,6 +315,51 @@ def rotate_stamp_image(source, destination, angle):
     return destination
 
 
+def _ellipse_axis_angle(source):
+    """Estimate the remaining oval tilt without another OCR inference."""
+    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+    if image is None or image.size == 0:
+        return None
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = cv2.split(hsv)
+    red = (((hue <= 18) | (hue >= 162)) & (saturation >= 20) & (value >= 35))
+    blue = ((hue >= 82) & (hue <= 140) & (saturation >= 20) & (value >= 35))
+    b, g, r = cv2.split(image)
+    chromatic = (r.astype(np.int16) - np.maximum(g, b).astype(np.int16)) >= 4
+    mask = np.where(red | blue | chromatic, 255, 0).astype(np.uint8)
+    height, width = mask.shape[:2]
+    kernel_size = max(5, min(31, int(round(min(height, width) * 0.015))))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 5 or cv2.contourArea(contour) < height * width * 0.03:
+        return None
+    (_, _), (axis_a, axis_b), ellipse_angle = cv2.fitEllipse(contour)
+    if min(axis_a, axis_b) <= 0 or max(axis_a, axis_b) / min(axis_a, axis_b) < 1.15:
+        return None
+    # OpenCV reports the fitted ellipse angle in image coordinates.  Convert
+    # the long-axis direction to [-90, 90), which is also the sign convention
+    # used by the text-polygon rotation path above.
+    major = float(ellipse_angle if axis_a >= axis_b else ellipse_angle + 90.0)
+    while major >= 90.0:
+        major -= 180.0
+    while major < -90.0:
+        major += 180.0
+    return major
+
+
+def _refine_ellipse_axis(source, destination):
+    angle = _ellipse_axis_angle(source)
+    if angle is None or abs(angle) <= 2.0:
+        return Path(source), 0.0
+    return rotate_stamp_image(source, destination, angle), angle
+
+
 def prepare_round_stamp(source, destination, *, model_variant="mobile"):
     """Detect a stamp-type line and make an oriented OCR derivative."""
     from .paddle_ocr import detect_text_boxes
@@ -283,6 +369,7 @@ def prepare_round_stamp(source, destination, *, model_variant="mobile"):
     decision["mode"] = "polygon"
     decision["model_variant"] = model_variant
     decision["detected_boxes"] = boxes
+    decision["type_row_texts"] = _round_stamp_type_texts(boxes, decision)
     with Image.open(source) as image:
         source_width, source_height = image.size
     identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -318,6 +405,187 @@ def prepare_round_stamp(source, destination, *, model_variant="mobile"):
     decision["oriented_path"] = str(oriented)
     decision["status"] = "已按印章文字检测框旋正"
     return oriented, decision
+
+
+def prepare_ellipse_stamp(source, destination, *, model_variant="mobile"):
+    """Orient an oval stamp with its centre line, including quarter-turns.
+
+    Ellipse geometry can estimate tilt but cannot tell which end is upright.
+    Reuse the normal text-polygon route first; when the detector has no
+    trustworthy anchor, compare the centre-line reading at all four right
+    angle orientations.  This also handles an oval whose long axis is
+    vertical, where a horizontal centre crop otherwise sees only one glyph.
+    """
+    oriented, decision = prepare_round_stamp(
+        source, destination, model_variant=model_variant
+    )
+    decision["shape_route"] = "ellipse"
+    if oriented is not None or decision.get("anchor_text"):
+        # The polygon route may already have selected a quarter-turn, but an
+        # oval captured with perspective can still leave the centre row
+        # slanted. Always refine that successful route before returning; the
+        # fallback below is only responsible for choosing a missing direction.
+        base = oriented or Path(source)
+        try:
+            from .paddle_ocr import detect_text_boxes
+
+            fine_boxes = detect_text_boxes(base, model_variant=model_variant)
+            fine_decision = choose_round_stamp_angle(
+                fine_boxes, minimum_confidence=0.45
+            )
+            fine_rotation = float(fine_decision.get("angle") or 0.0)
+            if abs(fine_rotation) > 2.0:
+                oriented = rotate_stamp_image(base, destination, fine_rotation)
+                decision["fine_rotation"] = round(fine_rotation, 3)
+                decision["status"] = (
+                    f"{decision.get('status', '已按印章文字检测框旋正')}，"
+                    f"再微调 {fine_rotation:.1f}°"
+                )
+                decision["oriented_path"] = str(oriented)
+            geometry_source = oriented or base
+            geometry_path, geometry_rotation = _refine_ellipse_axis(
+                geometry_source, destination
+            )
+            if abs(geometry_rotation) > 2.0:
+                oriented = geometry_path
+                decision["geometry_rotation"] = round(geometry_rotation, 3)
+                decision["oriented_path"] = str(oriented)
+                decision["status"] = (
+                    f"{decision.get('status', '已按印章文字方向旋正')}，"
+                    f"按椭圆长轴再校正 {geometry_rotation:.1f}°"
+                )
+        except Exception:
+            pass
+        return oriented, decision
+
+    from .paddle_ocr import recognize_line
+
+    def _score(rows):
+        values = [row for row in rows if getattr(row, "text", "")]
+        if not values:
+            return 0.0, ""
+        text = "".join(str(row.text) for row in values)
+        confidence = sum(float(getattr(row, "confidence", 0.0) or 0.0)
+                         for row in values) / len(values)
+        # A direction decision must come from the centre stamp-type row, not
+        # a company fragment on the ellipse ring.  If no type marker is read,
+        # return no evidence and leave the crop in its current orientation.
+        is_type_text = (
+            ("收货" in text and "章" in text)
+            or ("专用" in text and "章" in text)
+            or "代码" in text
+            or bool(re.fullmatch(r"[（(]?\s*\d{1,3}\s*[）)]?", text))
+        )
+        if not is_type_text:
+            return 0.0, ""
+        marker_bonus = 0.35 if ("收货" in text and "章" in text) else 0.0
+        marker_bonus += 0.20 if ("专用" in text and "章" in text) else 0.0
+        return confidence + marker_bonus, text
+
+    try:
+        with Image.open(source) as image:
+            rgb = image.convert("RGB")
+        with tempfile.TemporaryDirectory(prefix="receipt-ellipse-ori-") as tmp:
+            candidate_rows = {}
+            for angle in (0, 90, 180, 270):
+                candidate_path = Path(tmp) / f"center-{angle}.png"
+                rotated = rgb.rotate(angle, expand=True, fillcolor="white")
+                width, height = rotated.size
+                left, right = round(width * 0.04), round(width * 0.96)
+                # Crop after rotating the full stamp. Cropping before a
+                # quarter-turn loses the top and bottom glyphs of a vertical
+                # ``收货章`` row, leaving only one character for OCR.
+                top, bottom = round(height * 0.38), round(height * 0.64)
+                rotated.crop((left, top, right, bottom)).save(candidate_path)
+                candidate_rows[angle] = recognize_line(
+                    candidate_path, model_variant=model_variant
+                )
+        scored = {
+            angle: _score(rows) for angle, rows in candidate_rows.items()
+        }
+        best_angle = max(
+            scored,
+            key=lambda angle: (scored[angle][0], angle in (0, 180), -angle),
+        )
+        best_score, best_text = scored[best_angle]
+        decision["ellipse_orientation_candidates"] = {
+            str(angle): {
+                "text": text,
+                "score": round(score, 4),
+            }
+            for angle, (score, text) in scored.items()
+        }
+        if best_score < 0.70:
+            decision["status"] = "椭圆中心行未确认方向，保留原方向"
+            decision["applied_rotation"] = 0.0
+            return None, decision
+        oriented = (
+            rotate_stamp_image(source, destination, float(best_angle))
+            if best_angle
+            else Path(source)
+        )
+        fine_rotation = 0.0
+        # A right-angle choice fixes a vertical oval, but camera perspective
+        # can leave the centre row tilted by another few degrees. Detect the
+        # now-readable type row once more and use its polygon angle for a
+        # small corrective rotation.
+        try:
+            from .paddle_ocr import detect_text_boxes
+
+            fine_boxes = detect_text_boxes(oriented, model_variant=model_variant)
+            fine_decision = choose_round_stamp_angle(
+                fine_boxes, minimum_confidence=0.45
+            )
+            fine_rotation = float(fine_decision.get("angle") or 0.0)
+            if abs(fine_rotation) > 2.0:
+                oriented = rotate_stamp_image(oriented, destination, fine_rotation)
+        except Exception:
+            fine_rotation = 0.0
+        try:
+            geometry_path, geometry_rotation = _refine_ellipse_axis(
+                oriented, destination
+            )
+            if abs(geometry_rotation) > 2.0:
+                oriented = geometry_path
+                decision["geometry_rotation"] = round(geometry_rotation, 3)
+                decision["status"] = (
+                    f"{decision.get('status', '按椭圆中心单行旋正')}，"
+                    f"按椭圆长轴再校正 {geometry_rotation:.1f}°"
+                )
+        except Exception:
+            geometry_rotation = 0.0
+        if (
+            best_angle == 0
+            and abs(fine_rotation) <= 2.0
+            and abs(geometry_rotation) <= 2.0
+        ):
+            decision.update(
+                angle=0.0,
+                applied_rotation=0.0,
+                anchor_text=best_text,
+                confidence=round(best_score, 4),
+                status="椭圆中心单行已接近水平，保留原方向",
+            )
+            return None, decision
+        decision.update(
+            angle=float(best_angle),
+            applied_rotation=float(best_angle),
+            anchor_text=best_text,
+            confidence=round(best_score, 4),
+            fine_rotation=round(fine_rotation, 3),
+            geometry_rotation=round(geometry_rotation, 3),
+            oriented_path=str(oriented),
+            status=(
+                f"按椭圆中心单行识别结果旋转 {best_angle}°"
+                + (f"，再微调 {fine_rotation:.1f}°" if abs(fine_rotation) > 2 else "")
+            ),
+        )
+        return oriented, decision
+    except Exception as exc:
+        decision["ellipse_orientation_error"] = str(exc)
+        decision["status"] = "椭圆中心行方向比较失败，保留原方向"
+        decision["applied_rotation"] = 0.0
+        return None, decision
 
 
 def prepare_round_stamp_doc_ori(source, destination):

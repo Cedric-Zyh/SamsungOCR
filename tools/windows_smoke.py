@@ -40,12 +40,10 @@ def _collect(*, write_check: bool) -> tuple[dict, list[str]]:
     if platform.system() == "Windows":
         if indexed.get("vision", {}).get("available"):
             failures.append("Windows 不应暴露 macOS Vision")
-        if default != "paddle":
-            failures.append(f"Windows 默认后端应为 paddle，实际为 {default or '空'}")
-        if set(route.values()) != {"paddle"}:
-            failures.append(f"Windows Hybrid 应全部回退 Paddle Mobile，实际为 {route}")
-        if not indexed.get("hybrid_server", {}).get("safety_policy"):
-            failures.append("Windows 混合 OCR 未声明单模型人工复核安全策略")
+        if default != "paddle_v6":
+            failures.append(f"Windows 默认后端应为 paddle_v6，实际为 {default or '空'}")
+        if set(route.values()) != {"paddle_v6"}:
+            failures.append(f"Windows 路由应使用 PP-OCRv6 Small，实际为 {route}")
 
     model_home = paddle_model_home()
     writable = None

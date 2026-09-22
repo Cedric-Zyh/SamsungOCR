@@ -240,11 +240,26 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
         )
         for row in region.evidence.variant_rows
     ]
+    # ``primary_rows`` is the only row list consumed by the live date stage.
+    # Keep it restricted to the three visible date-line images; generic crop
+    # OCR remains available in the raw artifact for diagnostics but cannot
+    # silently change the displayed date.
+    visible_rows = [
+        type(row)(
+            text=row.text,
+            confidence=row.confidence,
+            x=lx + row.x * lw,
+            y=ly + row.y * lh,
+            width=row.width * lw,
+            height=row.height * lh,
+        )
+        for row in region.evidence.line_rows
+    ]
     # The tight crop is the only geometry used for the live date decision.
     # Keep its normalized observations on the artifact so the stage can
     # select them without confusing overlapping wide-crop coordinates.
     if region.crop_key == "tight" and not region.audit_only:
-        run.primary_rows = list(normalized_rows)
+        run.primary_rows = visible_rows
     run.output.extend(normalized_rows)
     if region.audit_only:
         # Only strict four-digit dates survive this evidence path.

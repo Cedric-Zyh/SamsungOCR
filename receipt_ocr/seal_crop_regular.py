@@ -11,13 +11,16 @@ from .image_processing import (
     SealRegion,
     extract_region_text,
     save_color_isolated_seal,
+    save_ellipse_normalized_seal,
     save_isolated_seal,
     save_rectangular_seal_code_line,
     save_region_crop,
     save_round_seal_type_band,
     round_seal_type_band_box,
     save_unwrapped_seal,
+    save_unwrapped_seal_bands,
     seal_region_is_rectangular,
+    seal_region_is_elliptical,
 )
 from .ocr_backends import backend_label, recognize_text
 from .paddle_ocr import is_paddle_backend, variant_of
@@ -39,6 +42,10 @@ def _collect_primary_region_evidence(
     """Read the primary color-safe transforms in their original order."""
     evidence.region_texts: list[str] = []
     evidence.rectangular = seal_region_is_rectangular(request.source, region)
+    evidence.elliptical = (
+        not evidence.rectangular
+        and seal_region_is_elliptical(request.source, region)
+    )
     evidence.original = Path(temp_dir) / f"seal-{index}-original.jpg"
     save_region_crop(request.source, evidence.original, region)
     # Keep the full-page OCR text for the audit artifact below.  For a local
@@ -55,6 +62,7 @@ def _collect_primary_region_evidence(
     evidence.color_isolated = Path(temp_dir) / f"seal-{index}-color-isolated.png"
     save_color_isolated_seal(request.source, evidence.color_isolated, region)
     evidence.color_isolated_oriented = None
+    evidence.ellipse_normalized = None
     evidence.orientation = {}
     evidence.orientation_anchor_text = ""
     # A round stamp's outer circle has no direction.  The configured strategy
@@ -67,12 +75,22 @@ def _collect_primary_region_evidence(
         and (not evidence.rectangular or request.orientation_mode == "doc_ori")
     ):
         try:
-            from .seal_orientation import prepare_round_stamp, prepare_round_stamp_doc_ori
+            from .seal_orientation import (
+                prepare_ellipse_stamp,
+                prepare_round_stamp,
+                prepare_round_stamp_doc_ori,
+            )
 
             oriented_path = Path(temp_dir) / f"seal-{index}-color-isolated-oriented.png"
             if request.orientation_mode == "doc_ori":
                 oriented, evidence.orientation = prepare_round_stamp_doc_ori(
                     evidence.color_isolated, oriented_path
+                )
+            elif evidence.elliptical:
+                oriented, evidence.orientation = prepare_ellipse_stamp(
+                    evidence.color_isolated,
+                    oriented_path,
+                    model_variant=variant_of(request.ocr_backend) or "mobile",
                 )
             else:
                 oriented, evidence.orientation = prepare_round_stamp(
@@ -100,6 +118,28 @@ def _collect_primary_region_evidence(
             "applied_rotation": 0.0,
             "confidence": 1.0,
         }
+    # An oval must be normalized before any type-band or ring OCR.  Keep this
+    # image visible as a first-class artifact so the subsequent stages can be
+    # audited instead of silently stretching inside the polar transform.
+    if evidence.elliptical:
+        try:
+            ellipse_source = evidence.color_isolated_oriented or evidence.color_isolated
+            evidence.ellipse_normalized = Path(temp_dir) / f"seal-{index}-ellipse-normalized.png"
+            save_ellipse_normalized_seal(
+                ellipse_source,
+                evidence.ellipse_normalized,
+                color=region.color,
+            )
+            # ``ellipse_source`` is the final path returned by the one
+            # orientation pass. The normalized image, type band, unwrap and
+            # all following OCR deliberately consume this derivative rather
+            # than falling back to the raw color crop.
+            evidence.orientation["ellipse_preprocess_source"] = str(ellipse_source)
+            evidence.orientation["ellipse_ocr_source"] = str(
+                evidence.ellipse_normalized
+            )
+        except Exception:
+            evidence.ellipse_normalized = None
     evidence.round_type_band = None
     evidence.round_type_band_texts = []
     type_band_focus_box = None
@@ -112,16 +152,26 @@ def _collect_primary_region_evidence(
             # The fixed band is meaningful only after the round stamp has
             # been put into its detected text orientation.  Otherwise the
             # lower slice can contain an arbitrary arc of the company name.
-            band_source = evidence.color_isolated_oriented or evidence.color_isolated
-            type_band_focus_box = evidence.orientation.get("oriented_type_row_box")
-            if type_band_focus_box is None and request.orientation_mode == "none":
+            if evidence.elliptical and evidence.ellipse_normalized is not None:
+                # The normalized oval is square and upright by construction;
+                # do not reuse a pre-normalization polygon box, which can
+                # point at the lower arc and yield the partial crop seen in
+                # the review page.
+                band_source = evidence.ellipse_normalized
+                type_band_focus_box = None
+                band_aligned = True
+            else:
+                band_source = evidence.color_isolated_oriented or evidence.color_isolated
+                type_band_focus_box = evidence.orientation.get("oriented_type_row_box")
+                band_aligned = evidence.color_isolated_oriented is not None
+            if type_band_focus_box is None and not band_aligned and request.orientation_mode == "none":
                 type_band_focus_box = round_seal_type_band_box(
                     band_source, orientation_aligned=False
                 )
             save_round_seal_type_band(
                 band_source,
                 evidence.round_type_band,
-                orientation_aligned=evidence.color_isolated_oriented is not None,
+                orientation_aligned=band_aligned,
                 focus_box=type_band_focus_box,
             )
             from .paddle_ocr import recognize_line
@@ -131,6 +181,29 @@ def _collect_primary_region_evidence(
                 model_variant=variant_of(request.ocr_backend) or "mobile",
             )
             evidence.round_type_band_texts = [row.text for row in band_rows if row.text]
+            # The focused band can contain a second short line such as
+            # ``（1）``. Reuse the already detected text boxes when the
+            # recognition-only model returns just the main line.
+            detected_type_texts = evidence.orientation.get("type_row_texts", [])
+            detected_anchor = detected_type_texts[0] if detected_type_texts else ""
+            detected_suffixes = detected_type_texts[1:]
+            if detected_anchor and detected_anchor not in evidence.round_type_band_texts:
+                evidence.round_type_band_texts.insert(0, detected_anchor)
+            if detected_anchor in evidence.round_type_band_texts:
+                anchor_index = evidence.round_type_band_texts.index(detected_anchor)
+                suffix = "".join(
+                    value for value in detected_suffixes
+                    if value and value not in evidence.round_type_band_texts
+                )
+                if suffix:
+                    evidence.round_type_band_texts[anchor_index] = (
+                        detected_anchor + suffix
+                    )
+            else:
+                evidence.round_type_band_texts.extend(
+                    value for value in detected_suffixes
+                    if value and value not in evidence.round_type_band_texts
+                )
             evidence.region_texts.extend(evidence.round_type_band_texts)
         except Exception:
             evidence.round_type_band = None
@@ -146,13 +219,13 @@ def _collect_primary_region_evidence(
         try:
             if evidence.code_line is None or not evidence.code_line.is_file():
                 raise ValueError("矩形编号章数字行未生成")
-            if request.ocr_backend in {"paddle", "paddle_server"}:
+            if request.ocr_backend in {"paddle_v6", "paddle", "paddle_server"}:
                 from .paddle_ocr import recognize_line
 
                 code_rows = recognize_line(
                     evidence.code_line,
                     model_variant=(
-                        "server" if request.ocr_backend == "paddle_server" else "mobile"
+                        "v6"
                     ),
                 )
             else:
@@ -165,16 +238,11 @@ def _collect_primary_region_evidence(
             evidence.region_texts.extend(evidence.code_line_texts)
         except Exception:
             evidence.code_line_texts = []
-    crop_rows = []
-    try:
-        crop_rows = recognize_text(
-            evidence.isolated, backend=request.ocr_backend, min_text_height=0.012
-        )
-    except Exception:
-        pass
-    evidence.crop_text = "".join(row.text for row in crop_rows)
-    if evidence.crop_text:
-        evidence.region_texts.append(evidence.crop_text)
+    # ``isolated`` is the black/white high-contrast audit image.  Keep it
+    # available for visual inspection, but do not OCR it: the thresholded
+    # comparison view is prone to turning form strokes into false stamp text
+    # and is not an independent recognition channel.
+    evidence.crop_text = ""
     color_isolated_rows = []
     try:
         color_isolated_rows = recognize_text(
@@ -198,18 +266,14 @@ def _collect_primary_region_evidence(
         # ``收`` even though the anchor pass saw the complete phrase.
         evidence.oriented_texts.append(evidence.orientation_anchor_text)
     if evidence.color_isolated_oriented is not None:
-        try:
-            evidence.oriented_texts.extend(
-                row.text
-                for row in recognize_text(
-                    evidence.color_isolated_oriented,
-                    backend=request.ocr_backend,
-                    min_text_height=0.012,
-                )
-                if row.text
-            )
-        except Exception:
-            pass
+        # ``prepare_round_stamp`` already detected the usable text polygons
+        # before rotating the crop.  The focused type-row image is recognized
+        # as one line above, so running a second full detector on the rotated
+        # canvas only repeats work and can clip the leftmost ``收`` after
+        # interpolation.  Reuse the pre-rotation anchor and the single-line
+        # row result; the polar-unwrapped derivative remains the independent
+        # source for the curved company name.
+        evidence.oriented_texts.extend(evidence.round_type_band_texts)
     evidence.region_texts.extend(evidence.oriented_texts)
     ring_exclude_boxes = []
     source_type_box = evidence.orientation.get("type_row_box")
@@ -220,24 +284,54 @@ def _collect_primary_region_evidence(
             with Image.open(evidence.color_isolated) as image:
                 mask_width, mask_height = image.size
             left, top, right, bottom = [float(value) for value in source_type_box]
-            ring_exclude_boxes.append(
-                (
-                    max(0.0, left / mask_width),
-                    max(0.0, top / mask_height),
-                    min(1.0, right / mask_width),
-                    min(1.0, bottom / mask_height),
+            box_width = max(0.0, right - left)
+            box_height = max(0.0, bottom - top)
+            # A diagonal detector polygon can cover most of the circular crop
+            # even though it represents only the centre ``收货专用章`` text.
+            # Do not use such a broad box to erase the ring before unwrapping;
+            # that was the reason some otherwise clear red ring lettering
+            # produced a nearly blank black/white展开图.
+            if (
+                box_width <= mask_width * 0.65
+                or box_height <= mask_height * 0.45
+            ):
+                ring_exclude_boxes.append(
+                    (
+                        max(0.0, left / mask_width),
+                        max(0.0, top / mask_height),
+                        min(1.0, right / mask_width),
+                        min(1.0, bottom / mask_height),
+                    )
                 )
-            )
-            evidence.orientation["ring_type_mask_box"] = ring_exclude_boxes[-1]
+                evidence.orientation["ring_type_mask_box"] = ring_exclude_boxes[-1]
+            else:
+                evidence.orientation["ring_type_mask_box"] = None
+                evidence.orientation["ring_type_mask_skipped"] = (
+                    "章型检测框覆盖过大，保留环形文字展开区域"
+                )
         except (OSError, TypeError, ValueError, ZeroDivisionError):
             ring_exclude_boxes = []
     evidence.unwrapped = Path(temp_dir) / f"seal-{index}-unwrapped.png"
-    save_unwrapped_seal(
-        request.source,
-        evidence.unwrapped,
-        region,
-        exclude_boxes=ring_exclude_boxes,
-    )
+    if evidence.elliptical and evidence.ellipse_normalized is not None:
+        # The ellipse is stretched first; every later ring stage consumes this
+        # square image, never the original oval crop.
+        save_unwrapped_seal(
+            evidence.ellipse_normalized,
+            evidence.unwrapped,
+            None,
+            elliptical=True,
+            normalized=True,
+            color=region.color,
+        )
+        evidence.orientation["ellipse_route"] = "先椭圆拉伸校正，再进入横向分带和环形展开"
+    else:
+        save_unwrapped_seal(
+            request.source,
+            evidence.unwrapped,
+            region,
+            exclude_boxes=ring_exclude_boxes,
+            elliptical=evidence.elliptical,
+        )
     evidence.unwrapped_rotated = (
         Path(temp_dir) / f"seal-{index}-unwrapped-rotated-180.png"
     )
@@ -265,7 +359,8 @@ def _collect_primary_region_evidence(
         # reads it in a single call, so coverage improves without
         # tripling batch latency or admitting black form text.
         try:
-            with Image.open(evidence.color_isolated) as image:
+            rotation_source = evidence.ellipse_normalized or evidence.color_isolated
+            with Image.open(rotation_source) as image:
                 base = image.convert("RGB")
                 rotations = [
                     base.rotate(angle, expand=True, fillcolor="white")
@@ -294,9 +389,29 @@ def _collect_primary_region_evidence(
         evidence.color_isolated_rotations = None
     unwrap_rows = []
     try:
-        unwrap_rows = recognize_text(
-            evidence.unwrapped, backend=request.ocr_backend, min_text_height=0.05
-        )
+        if is_paddle_backend(request.ocr_backend) and not evidence.rectangular:
+            # The polar output is a three-strip contact sheet.  Each strip is
+            # one horizontal line, so split it before recognition instead of
+            # asking the detector to rediscover three rows in a tall image.
+            band_paths = save_unwrapped_seal_bands(
+                evidence.unwrapped,
+                evidence.unwrapped.with_name(
+                    f"seal-{index}-unwrapped-primary-band"
+                ),
+            )
+            from .paddle_ocr import recognize_line
+
+            for band_path in band_paths:
+                unwrap_rows.extend(
+                    recognize_line(
+                        band_path,
+                        model_variant=variant_of(request.ocr_backend) or "mobile",
+                    )
+                )
+        else:
+            unwrap_rows = recognize_text(
+                evidence.unwrapped, backend=request.ocr_backend, min_text_height=0.05
+            )
     except Exception:
         pass
     evidence.unwrap_texts = [row.text for row in unwrap_rows if row.text]
@@ -342,21 +457,12 @@ def _collect_secondary_region_evidence(
     evidence.original_safe_for_matching = False
     if request.secondary_ocr_backend:
         # Circular seals frequently split the company name and the
-        # stamp-type suffix across different transforms.  In
-        # Retain both providers as independent OCR evidence, then
-        # combine only text actually recognized.
-        try:
-            evidence.secondary_original_texts = [
-                row.text
-                for row in recognize_text(
-                    evidence.original,
-                    backend=request.secondary_ocr_backend,
-                    min_text_height=0.012,
-                )
-                if row.text
-            ]
-        except Exception:
-            pass
+        # stamp-type suffix across different transforms.  Retain both
+        # providers as independent OCR evidence, then combine only text
+        # actually recognized.
+        # The raw crop is retained for display only; neither the primary nor
+        # secondary route should spend an OCR call on it.
+        evidence.secondary_original_texts = []
         if evidence.rectangular and evidence.rotated.is_file():
             try:
                 evidence.secondary_rotated_texts = [
@@ -382,44 +488,49 @@ def _collect_secondary_region_evidence(
             ]
         except Exception:
             pass
+        # The black/white high-contrast crop is audit-only for both providers;
+        # do not spend a secondary model call on the same non-safe image.
+        evidence.secondary_crop_texts = []
         try:
-            evidence.secondary_crop_texts = [
-                row.text
-                for row in recognize_text(
-                    evidence.isolated,
-                    backend=request.secondary_ocr_backend,
-                    min_text_height=0.012,
+            if is_paddle_backend(request.secondary_ocr_backend) and not evidence.rectangular:
+                secondary_band_paths = save_unwrapped_seal_bands(
+                    evidence.unwrapped,
+                    evidence.unwrapped.with_name(
+                        f"seal-{evidence.unwrapped.stem}-secondary-band"
+                    ),
                 )
-                if row.text
-            ]
-        except Exception:
-            pass
-        try:
-            evidence.secondary_unwrap_texts = [
-                row.text
-                for row in recognize_text(
+                from .paddle_ocr import recognize_line
+
+                secondary_rows = []
+                for band_path in secondary_band_paths:
+                    secondary_rows.extend(
+                        recognize_line(
+                            band_path,
+                            model_variant=(
+                                variant_of(request.secondary_ocr_backend) or "mobile"
+                            ),
+                        )
+                    )
+            else:
+                secondary_rows = recognize_text(
                     evidence.unwrapped,
                     backend=request.secondary_ocr_backend,
                     min_text_height=0.04,
                 )
-                if row.text
+            evidence.secondary_unwrap_texts = [
+                row.text for row in secondary_rows if row.text
             ]
         except Exception:
             pass
         if evidence.code_line is not None and evidence.code_line.is_file():
             try:
-                if request.secondary_ocr_backend in {
-                    "paddle",
-                    "paddle_server",
-                }:
+                if request.secondary_ocr_backend in {"paddle_v6", "paddle", "paddle_server"}:
                     from .paddle_ocr import recognize_line
 
                     secondary_code_rows = recognize_line(
                         evidence.code_line,
                         model_variant=(
-                            "server"
-                            if request.secondary_ocr_backend == "paddle_server"
-                            else "mobile"
+                            "v6"
                         ),
                     )
                 else:
@@ -478,7 +589,13 @@ def _record_region_evidence(
                 "index": index,
                 "color": region.color,
                 "role": region.role,
-                "shape": "矩形" if evidence.rectangular else "圆形",
+                "shape": (
+                    "矩形"
+                    if evidence.rectangular
+                    else "椭圆" if evidence.elliptical else "圆形"
+                ),
+                "qingtong_shape": region.qingtong_cls or "",
+                "shape_source": "本地章色轮廓校验（清瞳章型仅作提示）",
                 "ocr_backend": backend_label(request.ocr_backend),
                 "secondary_ocr_backend": (
                     backend_label(request.secondary_ocr_backend)
@@ -492,6 +609,12 @@ def _record_region_evidence(
                     f"{prefix}/seals/{evidence.color_isolated_oriented.name}"
                     if evidence.color_isolated_oriented is not None
                     and evidence.color_isolated_oriented.is_file()
+                    else ""
+                ),
+                "ellipse_normalized_url": (
+                    f"{prefix}/seals/{evidence.ellipse_normalized.name}"
+                    if evidence.ellipse_normalized is not None
+                    and evidence.ellipse_normalized.is_file()
                     else ""
                 ),
                 "orientation": evidence.orientation,
@@ -558,6 +681,7 @@ def _record_region_evidence(
             "isolated": evidence.isolated,
             "color_isolated": evidence.color_isolated,
             "color_isolated_oriented": evidence.color_isolated_oriented,
+            "ellipse_normalized": evidence.ellipse_normalized,
             "orientation": evidence.orientation,
             "ring_type_mask_boxes": (
                 [evidence.orientation["ring_type_mask_box"]]
@@ -569,6 +693,13 @@ def _record_region_evidence(
             "color_isolated_rotations": evidence.color_isolated_rotations,
             "rotated": evidence.rotated if evidence.rectangular and evidence.rotated.is_file() else None,
             "rectangular": evidence.rectangular,
+            "elliptical": evidence.elliptical,
+            "shape": (
+                "矩形"
+                if evidence.rectangular
+                else "椭圆" if evidence.elliptical else "圆形"
+            ),
+            "qingtong_shape": region.qingtong_cls or "",
             "evidence": _dedupe(
                 evidence.region_texts + ([evidence.combined_text] if evidence.combined_text else [])
             ),

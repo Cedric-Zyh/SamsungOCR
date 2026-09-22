@@ -41,7 +41,11 @@ def _read_server_audit_evidence(
         if not audit_path or not Path(audit_path).is_file():
             continue
         try:
-            if audit_label in {"矩形编号章数字行", "圆章章类型横向分带"}:
+            # Every generated horizontal band is already a single logical
+            # text line.  Use recognition-only inference for it, including
+            # rotated type bands and the three unwrapped strips; re-running
+            # detection on a band adds latency and can split one row.
+            if audit_label == "矩形编号章数字行" or "分带" in audit_label:
                 from .paddle_ocr import recognize_line
 
                 audit_rows = recognize_line(
@@ -56,7 +60,12 @@ def _read_server_audit_evidence(
             current_audit_texts = [
                 row.text for row in audit_rows if row.text
             ]
-            if audit_label == "圆章章类型横向分带":
+            if audit_label in {
+                "圆章章类型横向分带",
+                "旋正后圆章章型横向分带",
+                "椭圆章章类型横向分带",
+                "旋正后椭圆章章型横向分带",
+            }:
                 audit.round_type_band_rows = list(audit_rows)
             # The robust-bound bands are a cross-model route.
             # Keep Server-only readings visible for audit but
@@ -64,7 +73,12 @@ def _read_server_audit_evidence(
             # independently read the same long suffix below.
             if (
                 not audit_label.startswith("稳健圆心展开 Server 分带")
-                and audit_label != "圆章章类型横向分带"
+                and audit_label not in {
+                    "圆章章类型横向分带",
+                    "旋正后圆章章型横向分带",
+                    "椭圆章章类型横向分带",
+                    "旋正后椭圆章章型横向分带",
+                }
             ):
                 audit.audit_texts.extend(current_audit_texts)
             audit.audit_variant_texts[audit_label] = current_audit_texts
@@ -215,6 +229,13 @@ def _record_server_audit_artifact(
                 }
                 for label, values in audit.audit_variant_texts.items()
             ],
+            ellipse_normalized_url=(
+                f"{request.artifact_url_prefix.rstrip('/')}/seals/"
+                f"{Path(candidate['ellipse_normalized']).name}"
+                if candidate.get("ellipse_normalized")
+                and Path(candidate["ellipse_normalized"]).is_file()
+                else ""
+            ),
             unwrapped_band_urls=[
                 f"{request.artifact_url_prefix.rstrip('/')}/seals/{path.name}"
                 for path in audit.unwrapped_band_paths

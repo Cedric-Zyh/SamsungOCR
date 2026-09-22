@@ -8,22 +8,13 @@ it uses.
 
 ``SEAL_AUDIT_MODE`` selects the strategy:
 
-``auto``    Default, and deliberately behaviour-preserving.  Audit with
-            PP-OCRv5 Server when the current request already authorises it,
-            otherwise skip and record why.  An unrestricted ``analyzer.analyze``
-            run still audits; a scoped recognition plan that never allowed the
-            Server model still does not.  What changes is that the skip is now
-            explicit and attributable instead of a silent empty result.
-``server``  Always audit with PP-OCRv5 Server and widen the seal stage's
-            authorisation so that provider may load.  The full cross-model
-            check, opt-in.
-``local``   Audit with a local Paddle tier instead of Server, and never load
-            Server.  Roughly a quarter of the cost.  Independent whenever the
-            seal stage runs on a different model tier.
+``auto``    Default.  Audit only when the seal stage uses a remote provider;
+            otherwise skip and record why.
+``local``   Audit with the remaining local Paddle v6 tier for remote seal
+            stages.  It never loads a retired v5 model.
 ``off``     Never audit.
 
-Background: the audit used to call ``recognize_text(..., backend=
-"paddle_server")`` directly.  Under a recognition plan the provider scope is
+Background: the audit used to call a provider directly.  Under a recognition plan the provider scope is
 exactly the backend the user selected, so every audit call was denied and
 returned ``[]`` -- the branch produced nothing while still looking as though it
 had run.  The same image therefore carried different seal evidence depending on
@@ -36,19 +27,19 @@ from dataclasses import dataclass, field
 
 from .paddle_ocr import is_paddle_backend, variant_of
 
-SEAL_AUDIT_MODES = ("auto", "server", "local", "off")
+SEAL_AUDIT_MODES = ("auto", "local", "off")
 DEFAULT_SEAL_AUDIT_MODE = "auto"
 
 # The provider the audit was written against, and the lightweight tier it reads
 # the robust bounds bands with.  Two different tiers keep the cross-model common
 # suffix an actual cross-model observation.
-DEFAULT_AUDIT_BACKEND = "paddle_server"
-BAND_READER_BACKEND = "paddle"
+DEFAULT_AUDIT_BACKEND = "paddle_v6"
+BAND_READER_BACKEND = None
 
 # Used by ``local`` when the seal stage is served by a non-Paddle provider
 # (单证通 / 清瞳).  The colour-isolated derivatives are only wired to the local
 # Paddle pipelines.
-LOCAL_FALLBACK_BACKEND = "paddle"
+LOCAL_FALLBACK_BACKEND = "paddle_v6"
 
 SKIP_DISABLED = "按设置跳过印章二次审计（SEAL_AUDIT_MODE=off）"
 SKIP_UNAUTHORISED = (
@@ -113,12 +104,12 @@ def seal_audit_mode() -> str:
 
 
 def variant_for_audit_backend(backend: str | None) -> str:
-    """Model variant behind an audit backend id, defaulting to Mobile.
+    """Model variant behind an audit backend id, defaulting to v6.
 
     The audit provider is always a local Paddle tier by construction, so the
     line recogniser can be addressed by variant directly.
     """
-    return variant_of(backend) or "mobile"
+    return variant_of(backend) or "v6"
 
 
 def resolve_seal_audit(
@@ -159,7 +150,7 @@ def resolve_seal_audit(
             authorise=frozenset({backend}),
         )
 
-    # ``auto`` and ``server`` both want the Server model.
+    # ``auto`` uses the remaining local model only for remote seal stages.
     if mode == "auto" and allowed is not None and DEFAULT_AUDIT_BACKEND not in allowed:
         return SealAuditPlan(
             mode=mode, seal_backend=selected, skip_reason=SKIP_UNAUTHORISED
@@ -175,7 +166,7 @@ def resolve_seal_audit(
         seal_backend=selected,
         backend=DEFAULT_AUDIT_BACKEND,
         band_backend=BAND_READER_BACKEND,
-        authorise=frozenset({DEFAULT_AUDIT_BACKEND, BAND_READER_BACKEND}),
+        authorise=frozenset({DEFAULT_AUDIT_BACKEND}),
     )
 
 
@@ -183,11 +174,11 @@ def seal_audit_providers_for_plan(config: dict | None) -> frozenset:
     """Extra providers the seal stage must authorise so its audit can run.
 
     ``recognition_config`` scopes every stage to the single backend the user
-    picked.  Only the explicit ``server`` / ``local`` modes widen that scope;
-    ``auto`` never does, so turning the audit on stays a deliberate choice.
+    picked.  Only the explicit ``local`` mode widens that scope; ``auto`` never
+    does, so turning the audit on stays a deliberate choice.
     """
     mode = seal_audit_mode()
-    if mode not in {"server", "local"}:
+    if mode != "local":
         return frozenset()
     extra: set[str] = set()
     # Any of the local seal backends may run the audit, and a single stage call
@@ -208,11 +199,10 @@ def describe_seal_audit(mode: str | None = None) -> dict:
         "modes": list(SEAL_AUDIT_MODES),
         "backend": DEFAULT_AUDIT_BACKEND,
         "band_backend": BAND_READER_BACKEND,
-        "independent": active in {"auto", "server"},
+        "independent": active == "auto",
         "description": {
-            "auto": "已授权时用 Server 跨模型审计，否则跳过并记录原因",
-            "server": "始终用 Server 跨模型审计，并为其放开授权",
-            "local": "改用本地轻量模型复算，不加载 Server",
+            "auto": "仅在印章阶段使用远程方式时用本地 v6 复算，否则跳过并记录原因",
+            "local": "使用本地 v6 复算，不加载已下线模型",
             "off": "完全跳过印章二次审计",
         }[active],
     }

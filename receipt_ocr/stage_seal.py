@@ -18,6 +18,43 @@ from .qingtong_regions import qingtong_region_artifacts, qingtong_seal_regions
 from .seal_local_channel import LOCAL_REGION_SOURCE, record_local_channel
 
 
+def _ellipse_channels(seal_texts, seal_artifacts):
+    """Collect oval evidence in ring, centre-type and fallback channels."""
+    ring, type_text, other = [], [], []
+    for artifact in seal_artifacts:
+        if artifact.get("shape") != "椭圆":
+            continue
+        ring.extend(
+            value.strip()
+            for value in str(artifact.get("unwrapped_text", "")).split("|")
+            if value.strip()
+        )
+        type_text.extend(
+            value.strip()
+            for value in str(artifact.get("round_type_band_text", "")).split("|")
+            if value.strip()
+        )
+        for reading in artifact.get("seal_model_readings", []):
+            values = [value for value in reading.get("texts", []) if value]
+            variant = reading.get("variant", "")
+            if variant in {"ellipse_unwrapped", "unwrapped"}:
+                ring.extend(values)
+            elif variant in {"ellipse_type_band", "round_type_band"}:
+                type_text.extend(values)
+        other.extend(
+            value.strip()
+            for value in str(artifact.get("color_isolated_text", "")).split("|")
+            if value.strip()
+        )
+    return _dedupe(ring), _dedupe(type_text), _dedupe(other), _dedupe(seal_texts)
+
+
+def _ellipse_display_texts(seal_texts, seal_artifacts):
+    """Order oval evidence as ring company text, then centre type text."""
+    ring, type_text, other, fallback = _ellipse_channels(seal_texts, seal_artifacts)
+    return ring + type_text + other or fallback
+
+
 def _settled_future(future):
     """The prefetched seal response, or ``None`` when it is unusable.
 
@@ -183,6 +220,21 @@ def execute(context: DocumentContext, request: StageRequest, recognize_seals, se
             # character is a mismatch.  Keep the fuzzy comparator for routing
             # and audit planning, but do not let it turn a company-only local
             # reading into ``无法判断`` or silently accept a typo.
+            has_ellipse_artifact = any(
+                artifact.get("shape") == "椭圆" for artifact in seal_artifacts
+            )
+            if has_ellipse_artifact:
+                ring_texts, type_texts, _, _ = _ellipse_channels(
+                    seal_texts, seal_artifacts
+                )
+                # The two ellipse channels describe one stamp. Add their
+                # natural reading order as a single candidate so a requirement
+                # such as ``公司名收货章`` can reach an exact match while the
+                # individual OCR results remain available for audit.
+                if ring_texts and type_texts:
+                    seal_texts = _dedupe(
+                        [ring_texts[0] + type_texts[0], *seal_texts]
+                    )
             seal_check = compare_seal_text_strict(requirement, seal_texts)
             if stage_backends["seal"] == "paddle_seal":
                 readings = [reading for artifact in seal_artifacts
@@ -191,6 +243,15 @@ def execute(context: DocumentContext, request: StageRequest, recognize_seals, se
                 seal_check["model_errors"] = errors
                 if errors and not seal_texts:
                     seal_check.update(status="识别失败", message="印章专用模型执行失败：" + errors[0])
+            # The strict matcher keeps one best candidate for the decision,
+            # while an ellipse intentionally has separate centre-row and
+            # ring-row channels. Expose all of those channels for both the
+            # regular v6 route and the dedicated seal route, so a valid
+            # ``收货章`` result is not hidden by the company-name winner.
+            if has_ellipse_artifact:
+                seal_check["display_text"] = " | ".join(
+                    _ellipse_display_texts(seal_texts, seal_artifacts)
+                )
             if kind == "receipt":
                 seal_check = _apply_code_stamp_business_id(
                     seal_check, requirement, seal_texts, fields

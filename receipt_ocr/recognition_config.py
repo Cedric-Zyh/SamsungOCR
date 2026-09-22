@@ -7,7 +7,7 @@ from contextvars import copy_context
 from pathlib import Path
 import time
 
-from .ocr_backends import backend_catalog, backend_route, backend_label
+from .ocr_backends import backend_catalog, backend_route, backend_label, normalize_backend_id
 from .paddle_ocr import PADDLE_BACKENDS, SEAL_BACKENDS
 from .recognition_scope import provider_scope
 from .seal_audit_policy import seal_audit_providers_for_plan
@@ -43,6 +43,7 @@ def validate_config(config, *, api_enabled=True):
             not isinstance(x, str) for x in methods
         ):
             raise ValueError("识别方式必须为列表")
+        methods = [normalize_backend_id(method) for method in methods]
         methods = list(dict.fromkeys(methods))
         for method in methods:
             if method == "danzhengtong":

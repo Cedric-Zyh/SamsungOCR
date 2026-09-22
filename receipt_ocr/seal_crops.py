@@ -150,7 +150,7 @@ def _apply_seal_audit_plan(
 ) -> None:
     """Resolve which provider may run the audit, and record an explicit skip.
 
-    The audit used to hard-code ``paddle_server``.  Under a recognition plan the
+    The audit now uses the remaining v6 provider.  Under a recognition plan the
     request scope is exactly the backend the user selected, so every audit call
     was denied and quietly returned ``[]`` -- the branch produced nothing while
     still looking like it had run.  Resolving the provider here keeps the

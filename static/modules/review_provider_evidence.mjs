@@ -40,8 +40,6 @@ function evidenceRow(label, status, value, note) {
 }
 
 const localMethodLabels = {
-  paddle: 'PaddleOCR PP-OCRv5 Mobile',
-  paddle_server: 'PaddleOCR PP-OCRv5 Server（大模型）',
   paddle_v6: 'PaddleOCR PP-OCRv6 Small',
   paddle_seal: 'PaddleOCR 印章专用检测模型',
 };
@@ -88,7 +86,7 @@ export function sealEvidenceMarkup(item) {
       check.recognized || '未返回文字结果', '独立对照本单签章要求'));
   }
   for (const {check, variant} of localSealResults(item)) {
-    const value = check.recognized || (check.all_recognized || []).join('；');
+    const value = check.display_text || check.recognized || (check.all_recognized || []).join('；');
     const confidence = check.confidence == null ? '' : ` · 置信度 ${percent(check.confidence)}`;
     const note = `${check.region_source ? '清瞳印章区域内' : '本地印章区域'}处理图 OCR${confidence} · ${check.reliable === false ? '单模型辅助证据，需人工确认' : '独立对照本单签章要求'}`;
     rows.push(evidenceRow(`${localProviderLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, value, variant?.error),

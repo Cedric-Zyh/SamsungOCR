@@ -64,7 +64,7 @@
           <div><span class="workbench-overview-eyebrow">已处理单据</span><strong><span id="overview-completed">—</span><em>/ <span id="overview-total">—</span> 张</em></strong><small>包含待复核、通过、不通过和识别失败</small></div>
           <div class="overview-progress-detail"><div><span>当日处理进度</span><b id="overview-percent">—</b></div><div class="progress-track" role="progressbar" aria-label="当天回单处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress"></span></div><small id="overview-remaining">正在加载当天数据…</small><span id="task-summary" class="sr-only" role="status"></span></div>
         </div>
-        <div class="workbench-filter-buttons workbench-state-cards" aria-label="按处理状态筛选">
+        <div class="workbench-filter-buttons workbench-state-cards" aria-label="按处理状态筛选，可同时选择多个状态">
           <button type="button" data-work-filter="ready" aria-pressed="false"><span class="stat-label">待开始</span><strong data-work-count="ready">—</strong></button>
           <button type="button" data-work-filter="running" aria-pressed="false"><span class="stat-label">处理中</span><strong data-work-count="running">—</strong></button>
           <button type="button" data-work-filter="review" aria-pressed="true"><span class="stat-label">待复核</span><strong data-work-count="review">—</strong></button>
@@ -89,7 +89,7 @@
         <div class="records-command-bar">
           <div class="import-date-bar"><span class="date-label">导入日期</span><div class="calendar-wrap"><input id="import-date" type="hidden" name="import_date" form="filters"><button id="calendar-toggle" type="button" class="secondary-button" aria-label="选择导入日期" aria-expanded="false" aria-controls="import-calendar"></button><section id="import-calendar" class="import-calendar hidden" role="dialog" aria-label="选择导入日期"><div class="calendar-header"><button id="calendar-prev" type="button" aria-label="上个月">‹</button><input id="calendar-month" type="month" aria-label="日历月份"><button id="calendar-next" type="button" aria-label="下个月">›</button></div><div class="calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div id="calendar-days" class="calendar-days"></div><p id="calendar-note" aria-live="polite">右上角数字表示当天导入的回单数量</p></section></div><button id="import-today" type="button" class="text-button">今天</button></div>
           <label class="record-search-label" for="record-search"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input id="record-search" type="search" form="filters" name="search" placeholder="搜索文件名、订单号或客户" aria-label="搜索文件名、订单号或客户" autocomplete="off"></label>
-          <div class="records-view-actions"><button id="records-more-filters" class="secondary-button header-filter-button" type="button" data-filter-popover="records" aria-expanded="false" aria-controls="filter-records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"></path></svg><span>更多筛选</span></button><button id="review-filtered-records" type="button" class="secondary-button">复核当前结果</button><details class="records-review-more"><summary aria-label="更多记录操作" title="更多记录操作">···</summary><div><button id="export-excel" type="button">导出 Excel</button><button id="records-density-toggle" type="button" aria-pressed="false">紧凑显示</button><button id="review-day-records" type="button">复核当天全部</button></div></details></div>
+          <div class="records-view-actions"><button id="records-more-filters" class="secondary-button header-filter-button" type="button" data-filter-popover="records" aria-expanded="false" aria-controls="filter-records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"></path></svg><span>更多筛选</span></button><button id="review-filtered-records" type="button" class="secondary-button">复核当前结果</button><details class="records-review-more"><summary aria-label="更多记录操作" title="更多记录操作">···</summary><div><button id="records-density-toggle" type="button" aria-pressed="false">紧凑显示</button><button id="review-day-records" type="button">复核当天全部</button></div></details></div>
         </div>
         <div id="selection-toolbar" class="selection-toolbar hidden"><span id="selection-count"></span><button id="clear-record-selection" type="button" class="text-button">取消选择</button><span id="selection-readiness" role="status"></span><button id="bulk-pass" type="button" class="secondary-button">批量确认通过</button><button id="review-selected-records" type="button" class="secondary-button">复核选中</button><details class="records-review-more records-bulk-more"><summary aria-label="更多批量操作" title="更多批量操作">···</summary><div><button id="bulk-pending" type="button">批量待复核</button><button id="bulk-retry" type="button">批量重新识别</button><button id="bulk-delete" type="button">删除选中</button></div></details></div>
         <div class="records-list-heading"><div class="record-tabs" aria-label="快捷筛选"><button type="button" data-filter="" class="active">全部回单</button><button type="button" data-filter="需人工复核">待复核</button><button type="button" data-filter="通过">已通过</button><button type="button" data-filter="不通过">不通过</button><button type="button" data-filter="识别失败">识别失败</button></div><span id="record-count" role="status"></span></div>
@@ -119,8 +119,8 @@
                 <div class="plan-card-heading"><label class="plan-title" id="plan-title-{{ key }}"><input type="checkbox" data-target="{{ key }}" aria-controls="plan-methods-{{ key }}" checked><span>{{ title }}</span></label><span class="plan-stage-status" data-plan-status="{{ key }}"></span></div>
                 <p class="plan-description">{{ description }}</p>
                 <div class="plan-methods" id="plan-methods-{{ key }}" role="group" aria-label="{{ title }}识别方式">
-{% for backend in ocr_backend_catalog if backend.id in ['paddle','paddle_server','paddle_v6','paddle_seal'] and (backend.id != 'paddle_seal' or key == 'seal') %}
-                  <label class="plan-method" title="{{ backend.reason if not backend.available else {'paddle':'在本机使用 Paddle Mobile 识别','paddle_server':'在本机使用 Paddle Server 大模型识别','paddle_v6':'在本机使用 PP-OCRv6 Small 识别','paddle_seal':'仅对印章三张处理图使用 PP-OCRv4 印章检测模型 + PP-OCRv6 识别'}[backend.id] }}"><input type="checkbox" data-method="{{ backend.id }}" data-stage="{{ key }}" {{ 'disabled' if not backend.available else '' }} data-available="{{ 'true' if backend.available else 'false' }}"><span>{{ {'paddle':'Paddle Mobile','paddle_server':'Paddle Server','paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</span>{% if not backend.available %}<small>不可用</small>{% endif %}</label>
+{% for backend in ocr_backend_catalog if backend.id in ['paddle_v6','paddle_seal'] and (backend.id != 'paddle_seal' or key == 'seal') %}
+                  <label class="plan-method" title="{{ backend.reason if not backend.available else {'paddle_v6':'在本机使用 PP-OCRv6 Small 识别','paddle_seal':'仅对印章三张处理图使用 PP-OCRv4 印章检测模型 + PP-OCRv6 识别'}[backend.id] }}"><input type="checkbox" data-method="{{ backend.id }}" data-stage="{{ key }}" {{ 'disabled' if not backend.available else '' }} data-available="{{ 'true' if backend.available else 'false' }}"><span>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</span>{% if not backend.available %}<small>不可用</small>{% endif %}</label>
 {% endfor %}
 {% if key == 'seal' %}
                   <label class="plan-method" title="{{ '使用已配置的清瞳印章服务' if seal_api_enabled else '需要先配置清瞳服务密钥' }}"><input type="checkbox" data-method="qingtong" data-stage="seal" data-available="{{ 'true' if seal_api_enabled else 'false' }}" {{ 'disabled' if not seal_api_enabled else '' }}><span>清瞳</span><small>{{ '远程' if seal_api_enabled else '未配置' }}</small></label>
@@ -159,12 +159,21 @@
           </aside>
         </div>
       </div>
+      <section class="settings-card retention-settings" aria-labelledby="retention-settings-title">
+        <div class="retention-settings-copy"><h2 id="retention-settings-title">数据保留</h2><p>自动清理超过保留期限的回单、识别记录和本地中间文件，默认保留 {{ retention_default_days }} 天。</p></div>
+        <form id="retention-form" class="retention-form">
+          <label for="retention-days">保留天数</label>
+          <div class="retention-input-wrap"><input id="retention-days" name="retention_days" type="number" min="1" max="3650" step="1" value="{{ retention_days }}" inputmode="numeric"><span>天</span></div>
+          <button id="save-retention-days" type="submit" class="secondary-button">保存</button>
+          <span id="retention-save-status" class="retention-save-status" role="status" aria-live="polite"></span>
+        </form>
+      </section>
       <div class="settings-reference-grid">
         <details class="settings-card settings-disclosure">
           <summary><span><strong>识别方式说明</strong><small>查看用途与可用状态</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
           <div class="settings-disclosure-body settings-engine-list">
-{% for backend in ocr_backend_catalog if backend.id in ['paddle','paddle_server','paddle_v6','paddle_seal'] %}
-            <div><span><strong>{{ {'paddle':'Paddle Mobile','paddle_server':'Paddle Server','paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</strong><small>{{ {'paddle':'本地识别，适合印刷字段与商品表格','paddle_server':'本地大模型，适合难例对照，耗时更高','paddle_v6':'新一代本地小模型，速度更快','paddle_seal':'仅识别印章三张处理图，不参与页面和日期'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
+{% for backend in ocr_backend_catalog if backend.id in ['paddle_v6','paddle_seal'] %}
+            <div><span><strong>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</strong><small>{{ {'paddle_v6':'本地小模型，速度较快','paddle_seal':'仅识别印章三张处理图，不参与页面和日期'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
 {% endfor %}
             <div><span><strong>清瞳</strong><small>在线印章服务，按所选方案执行</small></span><b class="settings-availability {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</b></div>
             <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b class="settings-availability">已接入</b></div>
@@ -308,6 +317,6 @@
   <script src="{{ url_for('static', filename='queue_state.js') }}?v=20260914-workbench-actions"></script>
   <script src="{{ url_for('static', filename='workbench.js') }}?v=20260914-workbench-actions"></script>
   <script src="{{ url_for('static', filename='import_files.js') }}?v=20260910-review-pagination"></script>
-  <script type="module" src="{{ url_for('static', filename='app.js') }}?v=20260920-progress-detail"></script>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}?v=20260923-retention-days"></script>
 </body>
 </html>

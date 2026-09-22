@@ -2,7 +2,7 @@ import json
 
 import app as app_module
 
-from app import _apply_human_edits, _export_machine_scope
+from app import _apply_human_edits
 from receipt_ocr.database import Database
 from receipt_ocr.evaluation import GROUND_TRUTH_FIELDS
 from receipt_ocr.parser import PRODUCT_COLUMNS
@@ -65,20 +65,6 @@ def test_create_task_persists_qingtong_mode_and_rejects_unknown(
     assert response.get_json()["seal_recognition_mode"] == "qingtong"
     assert rejected.status_code == 400
     assert "不支持的印章识别方式" in rejected.get_json()["error"]
-
-
-def test_export_accuracy_scope_follows_exact_workbook_rows_and_backend():
-    machine = [
-        {"id": 1, "filename": "a.jpg", "ocr_backend": "hybrid"},
-        {"id": 2, "filename": "b.jpg", "ocr_backend": "hybrid"},
-        {"id": 3, "filename": "a.jpg", "ocr_backend": "vision"},
-        {"id": 4, "filename": "c.jpg", "ocr_backend": "hybrid"},
-    ]
-    exported = [{"id": 1, "filename": "a.jpg"}, {"id": 2, "filename": "b.jpg"}]
-
-    scoped = _export_machine_scope(machine, exported, "hybrid")
-
-    assert [item["id"] for item in scoped] == [1, 2]
 
 
 def test_human_edits_recompute_date_and_seal():

@@ -7,7 +7,6 @@
 [data-page="records"] #calendar-toggle { min-height:34px; font-size:13px; color:var(--archive-ink); background:var(--archive-paper); border:1px solid var(--archive-line); }
 [data-page="records"] #import-today { border-color:transparent; background:transparent; font-size:12px; }
 [data-page="records"] #record-count { margin-left:4px; color:var(--archive-muted); font-variant-numeric:tabular-nums; }
-[data-page="records"] #export-excel { margin-left:auto; color:var(--archive-text); background:transparent; border-color:#b4b4a7; }
 [data-page="records"] .record-tabs { gap:26px; border-color:var(--archive-line); }
 [data-page="records"] .record-tabs button { padding:12px 0; color:var(--archive-muted); font-size:13px; font-weight:500; }
 [data-page="records"] .record-tabs button.active { color:var(--archive-ink); border-bottom-color:var(--archive-accent); font-weight:600; }

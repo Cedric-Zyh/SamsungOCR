@@ -138,8 +138,8 @@ def _plan_server_audit_route(
             or strong_unread_colored_stamp
             or route.robust_round_shop
         )
-        and request.ocr_backend != "paddle_server"
-        and request.secondary_ocr_backend != "paddle_server"
+        and request.ocr_backend != "paddle_v6"
+        and request.secondary_ocr_backend != "paddle_v6"
     )
 
 

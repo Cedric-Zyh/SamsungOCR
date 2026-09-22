@@ -6,7 +6,10 @@ export function createState() {
     review: {reviewDeferred: new Set(), reviewDirty: false, reviewSaving: false, reviewEditVersion: 0,
       current: null, artifactTab: 'date', reviewQueue: [], reviewTask: ''},
     imports: {batchRunning: false, taskId: '', ocrBackend: '', sealRecognitionMode: 'local'},
-    progress: {workFilter: 'review'},
+    // `workFilter` remains for compatibility with queued actions and older
+    // persisted state. `workFilters` is null until the user makes a choice,
+    // then contains the selected status cards.
+    progress: {workFilter: 'review', workFilters: null},
     report: {},
     navigation: {},
     results: {},

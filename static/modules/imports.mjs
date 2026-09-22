@@ -68,6 +68,7 @@ export function createImports({
         }
         importsState.taskId = task.id;
         importsState.taskImportDate = (task.created_at || '').slice(0, 10) || localToday();
+        progressState.workFilters = null;
         progressState.workFilter = 'processing';
         progressState.workVisibleLimit = 50;
         progressState.dailyReady = false;

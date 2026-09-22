@@ -17,8 +17,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--backend",
-        choices=("vision", "paddle", "paddle_server", "hybrid", "hybrid_server"),
-        default="vision",
+        choices=("paddle_v6",),
+        default="paddle_v6",
     )
     parser.add_argument(
         "--limit", type=int, default=0,
@@ -39,11 +39,6 @@ def main() -> None:
         help="用真值对第一张执行单张人工复核，并对第二张执行批量确认，验证审计闭环。",
     )
     parser.add_argument("--report-path", type=Path, default=None)
-    parser.add_argument("--excel-path", type=Path, default=None)
-    parser.add_argument(
-        "--skip-excel", action="store_true",
-        help="专项 OCR 探针不生成 Excel；正式端到端验收默认仍会导出。",
-    )
     args = parser.parse_args()
     truth = json.loads(GROUND_TRUTH_PATH.read_text(encoding="utf-8"))
     if args.sample:
@@ -194,32 +189,6 @@ def main() -> None:
                         artifact_http_failures.append({"url": url, "status": response.status_code})
 
     suffix = f"-{len(names)}" if len(names) != len(truth) else "-all"
-    export_path = args.excel_path or Path(
-        f"storage/exports/e2e-six-{args.backend}{suffix}.xlsx"
-    )
-    if args.skip_excel:
-        excel_result = {
-            "skipped": True,
-            "http_status": None,
-            "path": "",
-            "bytes": 0,
-            "error": None,
-        }
-    else:
-        export_response = client.get(
-            f"/api/export.xlsx?task_id={task_id}&ocr_backend={args.backend}"
-        )
-        if export_response.status_code == 200:
-            export_path.parent.mkdir(parents=True, exist_ok=True)
-            export_path.write_bytes(export_response.data)
-        excel_result = {
-            "skipped": False,
-            "http_status": export_response.status_code,
-            "path": str(export_path.resolve()),
-            "bytes": len(export_response.data),
-            "error": export_response.get_json(silent=True),
-        }
-
     output = {
         "task": task,
         "backend": args.backend,
@@ -232,7 +201,6 @@ def main() -> None:
         "missing_artifacts": missing_artifacts,
         "artifact_http_failures": artifact_http_failures,
         "artifact_contract_failures": artifact_contract_failures,
-        "excel": excel_result,
     }
     result_path = args.report_path or Path(
         f"storage/e2e-six-{args.backend}{suffix}-report.json"

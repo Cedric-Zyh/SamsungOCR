@@ -25,10 +25,13 @@ os.environ.setdefault("KMP_USE_SHM", "0")
 # Each entry is a (detection, recognition) pair; a variant is only usable when
 # its weights exist for the installed PaddleOCR version.
 MODEL_VARIANTS = {
-    "mobile": ("PP-OCRv5_mobile_det", "PP-OCRv5_mobile_rec"),
-    "server": ("PP-OCRv5_server_det", "PP-OCRv5_server_rec"),
     "v6": ("PP-OCRv6_small_det", "PP-OCRv6_small_rec"),
 }
+
+# The v5 Mobile and Server models were retired from the product.  Keep these
+# aliases only for old saved evidence and helper callers; they always resolve
+# to v6 and can never load a v5 weight set.
+LEGACY_VARIANT_ALIASES = {"mobile": "v6", "server": "v6"}
 
 # A model variant is reached through exactly one request-scoped provider id.
 # ``recognition_scope.provider_scope`` gates every OCR call by the backend id
@@ -36,23 +39,24 @@ MODEL_VARIANTS = {
 # ``ocr_backends.BACKEND_LABELS`` / ``backend_catalog``. Missing one turns the
 # stage into a silent empty result instead of an error.
 VARIANT_PROVIDERS = {
-    "mobile": "paddle",
-    "server": "paddle_server",
     "v6": "paddle_v6",
 }
 _PROVIDER_VARIANTS = {provider: variant for variant, provider in VARIANT_PROVIDERS.items()}
+_LEGACY_PROVIDER_ALIASES = {
+    "paddle": "paddle_v6",
+    "paddle_server": "paddle_v6",
+}
 
 PADDLE_BACKENDS = frozenset(VARIANT_PROVIDERS.values())
 SEAL_BACKENDS = frozenset({"paddle_seal"})
 
-# Tiers light enough to load a second recognition-only predictor next to an
-# already-loaded page pipeline. The Server tier is deliberately excluded.
-LIGHTWEIGHT_VARIANTS = frozenset({"mobile", "v6"})
+# The remaining local tier can be reused for recognition-only crops.
+LIGHTWEIGHT_VARIANTS = frozenset({"v6"})
 
 
 def is_paddle_backend(name: str | None) -> bool:
     """True when a backend id is served by one of the local PaddleOCR models."""
-    return str(name or "").strip().lower() in PADDLE_BACKENDS
+    return str(name or "").strip().lower() in PADDLE_BACKENDS or str(name or "").strip().lower() in _LEGACY_PROVIDER_ALIASES
 
 
 def is_seal_backend(name: str | None) -> bool:
@@ -62,16 +66,18 @@ def is_seal_backend(name: str | None) -> bool:
 
 def provider_of(model_variant: str) -> str:
     """Provider id used by the request scope for a model variant."""
-    return VARIANT_PROVIDERS.get(model_variant, VARIANT_PROVIDERS["mobile"])
+    variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
+    return VARIANT_PROVIDERS.get(variant, VARIANT_PROVIDERS["v6"])
 
 
 def variant_of(backend: str | None) -> str | None:
     """Model variant behind a backend id, or ``None`` for a non-Paddle backend."""
-    return _PROVIDER_VARIANTS.get(str(backend or "").strip().lower())
+    provider = _LEGACY_PROVIDER_ALIASES.get(str(backend or "").strip().lower(), str(backend or "").strip().lower())
+    return _PROVIDER_VARIANTS.get(provider)
 
 
 def is_lightweight_backend(value: str | None) -> bool:
-    """True for the small local Paddle tiers (Mobile / PP-OCRv6 Small).
+    """True for the remaining small local Paddle tier (PP-OCRv6 Small).
 
     Accepts either a backend id (``paddle``, ``paddle_v6``) or a backend label
     (``PaddleOCR PP-OCRv6 Small``) because older date artifacts persist the
@@ -166,6 +172,7 @@ def paddle_model_home() -> Path:
 
 
 def _pipeline(model_variant: str):
+    model_variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
     if model_variant not in MODEL_VARIANTS:
         raise ValueError(f"未知 PaddleOCR 模型规格: {model_variant}")
     engine_kwargs = _engine_kwargs()
@@ -197,6 +204,7 @@ def _pipeline(model_variant: str):
 
 def _line_recognizer(model_variant: str):
     """Load Paddle's recognition-only model for a pre-cropped text line."""
+    model_variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
     if model_variant not in MODEL_VARIANTS:
         raise ValueError(f"未知 PaddleOCR 模型规格: {model_variant}")
     engine_kwargs = _engine_kwargs()

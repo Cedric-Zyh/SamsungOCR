@@ -62,29 +62,16 @@ def test_workbench_includes_cross_day_retry_results_by_id(tmp_path, monkeypatch)
     assert [r['id'] for r in client.get(url).get_json()] == [new_id]
 
 
-def test_header_filters_apply_equally_to_list_and_export(tmp_path, monkeypatch):
-    import json
-    from pathlib import Path
-    from types import SimpleNamespace
-    db = Database(tmp_path / 'export-scope.db')
+def test_header_filters_apply_to_list(tmp_path, monkeypatch):
+    db = Database(tmp_path / 'filter-scope.db')
     db.initialize()
     monkeypatch.setattr(app_module, 'database', db)
-    monkeypatch.setattr(app_module, 'EXPORT_DIR', tmp_path)
-    monkeypatch.setattr(app_module, 'NODE_EXECUTABLE', Path('/test-node'))
     for filename, reliable in [('7123.jpg', True), ('7281.jpg', False), ('8172.jpg', True)]:
         db.insert_result(filename=filename, stored_name=filename, preview_name='', task_id='', result={
             'created_at': '2026-09-10T10:00:00', 'overall': '需人工复核',
             'internal_fields': {'客户订单号': '7654' if filename == '8172.jpg' else ''},
             'date_check': {'status': '未识别'}, 'seal_check': {'status': '匹配', 'reliable': reliable}})
-    exported = []
-    def fake_export(command, **kwargs):
-        exported.extend(json.loads(Path(command[2]).read_text())['results'])
-        Path(command[3]).write_bytes(b'export-placeholder')
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(app_module.subprocess, 'run', fake_export)
     query = '?search_prefix=7&seal_status=匹配&date_status=未识别&import_date=2026-09-10'
     client = app_module.app.test_client()
     listed = client.get('/api/results' + query).get_json()
     assert [r['filename'] for r in listed] == ['8172.jpg', '7123.jpg']
-    assert client.get('/api/export.xlsx' + query).status_code == 200
-    assert [r['id'] for r in exported] == [r['id'] for r in listed]

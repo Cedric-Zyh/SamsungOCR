@@ -9,6 +9,7 @@ from .parser import (
     estimate_date_confidence,
     extract_date_components,
     find_receipt_date,
+    parse_date,
 )
 from .date_evidence import _collect_business_rejected_date_evidence
 from .document_layout import _find_signature_requirement_row
@@ -45,6 +46,18 @@ def _tight_decision_rows(rows, artifacts):
                 selected.append(TextObservation(**item))
             except (TypeError, ValueError):
                 continue
+        if not selected:
+            # The low-confidence audit deliberately publishes one capped
+            # strict-date observation when the date-line variants agree but
+            # do not satisfy the automatic-decision gate.  Keep that review
+            # candidate visible to the date comparison instead of reducing
+            # the result to a blank component.  Its capped confidence keeps
+            # it on the human-review path.
+            selected = [
+                row
+                for row in rows
+                if float(row.confidence) <= 0.25 and parse_date(row.text) is not None
+            ]
     # A fragment such as ``202年2月5日`` exposes a malformed/incomplete year.
     # It must not inherit the required year and turn the uncertain day into a
     # complete date. Keep the original OCR in the artifact, but exclude this

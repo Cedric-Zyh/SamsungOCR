@@ -3,6 +3,7 @@ import numpy as np
 from receipt_ocr.image_processing import (
     SealRegion,
     _robust_round_seal_bounds,
+    _save_ellipse_annulus_unwrapped,
     _color_masks,
     _dedupe_overlapping_regions,
     _merge_split_stamp_fragments,
@@ -10,12 +11,66 @@ from receipt_ocr.image_processing import (
     classify_seal_role,
     detect_seal_regions,
     save_color_isolated_seal,
+    save_ellipse_normalized_seal,
     save_rectangular_seal_code_line,
     save_rectangular_seal_bands,
     save_round_seal_type_band,
     save_unwrapped_seal_bands,
     seal_region_is_rectangular,
+    seal_region_is_elliptical,
+    seal_region_shape,
 )
+
+
+def test_ellipse_annulus_unwrap_keeps_ring_ink_and_excludes_center(tmp_path):
+    import cv2
+
+    mask = np.zeros((400, 400), dtype=np.uint8)
+    cv2.ellipse(mask, (200, 200), (180, 160), 0, 0, 360, 255, 4)
+    cv2.ellipse(mask, (200, 200), (125, 105), 0, 0, 360, 255, 4)
+    # A center marker must not leak into the ring strips. The grey marker
+    # between the two borders stands in for anti-aliased stamp lettering.
+    gray = np.full_like(mask, 255)
+    cv2.rectangle(gray, (170, 170), (230, 230), 0, -1)
+    cv2.rectangle(gray, (190, 61), (210, 76), 100, -1)
+    destination = tmp_path / "ellipse-unwrapped.png"
+
+    assert _save_ellipse_annulus_unwrapped(gray, mask, destination)
+    bands = save_unwrapped_seal_bands(destination, tmp_path / "band")
+
+    assert len(bands) == 3
+    for band in bands:
+        output = cv2.imread(str(band), cv2.IMREAD_GRAYSCALE)
+        assert (output < 180).sum() > 100
+        assert output.min() > 30  # No black center marker.
+
+
+def test_ellipse_annulus_requires_two_reliable_borders(tmp_path):
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    destination = tmp_path / "missing.png"
+    assert not _save_ellipse_annulus_unwrapped(255 - mask, mask, destination)
+    assert not destination.exists()
+
+
+def test_ellipse_normalized_stage_stretches_color_safe_crop_to_square(tmp_path):
+    import cv2
+
+    image = np.full((220, 420, 3), 255, dtype=np.uint8)
+    cv2.ellipse(image, (210, 110), (150, 55), 0, 0, 360, (60, 60, 220), 6)
+    cv2.putText(image, "收货章", (145, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 60, 220), 3)
+    source = tmp_path / "ellipse-source.png"
+    destination = tmp_path / "ellipse-normalized.png"
+    assert cv2.imwrite(str(source), image)
+
+    save_ellipse_normalized_seal(source, destination)
+    output = cv2.imread(str(destination))
+
+    assert output is not None
+    assert output.shape[0] == output.shape[1]
+    assert output.shape[0] > 100
+    # The ink is retained after stretching, while the white background stays
+    # white and does not become a full-page OCR signal.
+    assert int((output[:, :, 2] > output[:, :, 1] + 20).sum()) > 100
 
 
 def test_robust_round_bounds_remove_sparse_far_color_noise():
@@ -71,6 +126,21 @@ def test_wide_oval_is_not_misclassified_as_rectangular_stamp(tmp_path):
     assert cv2.imwrite(str(source), image)
     region = SealRegion(.14, .24, .72, .52, "red", "收货客户章", .1)
 
+    assert seal_region_is_rectangular(source, region) is False
+    assert seal_region_is_elliptical(source, region) is True
+    assert seal_region_shape(source, region) == "ellipse"
+
+
+def test_local_oval_geometry_overrides_wrong_qingtong_rectangle_label(tmp_path):
+    import cv2
+
+    image = np.full((600, 900, 3), 255, dtype=np.uint8)
+    cv2.ellipse(image, (450, 300), (300, 135), 0, 0, 360, (60, 60, 220), 18)
+    source = tmp_path / "oval-wrong-remote-shape.jpg"
+    assert cv2.imwrite(str(source), image)
+    region = SealRegion(.14, .24, .72, .52, "red", "收货客户章", .1, "rectangle")
+
+    assert seal_region_shape(source, region) == "ellipse"
     assert seal_region_is_rectangular(source, region) is False
 
 

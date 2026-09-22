@@ -10,11 +10,8 @@ from .ocr_types import TextObservation, observations_text
 
 BACKEND_LABELS = {
     "danzhengtong": "单证通",
-    "paddle": "PaddleOCR PP-OCRv5 Mobile",
-    "paddle_server": "PaddleOCR PP-OCRv5 Server（大模型）",
     "paddle_v6": "PaddleOCR PP-OCRv6 Small",
     "paddle_seal": "PaddleOCR 印章专用检测模型",
-    "hybrid_server": "混合 OCR（Paddle Server 页面 + Paddle Mobile 日期/印章）",
 }
 
 # The macOS Vision backend was removed.  Selected ids may still sit in saved
@@ -22,14 +19,21 @@ BACKEND_LABELS = {
 # turning an old record into a hard error: a legacy id maps onto the local
 # Paddle route that replaced it, and keeps its own label for display.
 LEGACY_BACKEND_ALIASES = {
-    "vision": "paddle",
-    # "hybrid" used to mean Paddle Mobile page + Vision details.  With Vision
-    # gone it degenerates to a single Paddle Mobile route.
-    "hybrid": "paddle",
+    # Older saved tasks may still contain these ids.  They are deliberately
+    # redirected to the remaining local model so removed v5 models can never
+    # be loaded again.
+    "paddle": "paddle_v6",
+    "paddle_server": "paddle_v6",
+    "hybrid_server": "paddle_v6",
+    "vision": "paddle_v6",
+    "hybrid": "paddle_v6",
 }
 LEGACY_BACKEND_LABELS = {
-    "vision": "macOS Vision（已下线）",
-    "hybrid": "混合 OCR（Paddle Mobile + Vision，已下线）",
+    "paddle": "Paddle Mobile（已下线，已转 PP-OCRv6 Small）",
+    "paddle_server": "Paddle Server（已下线，已转 PP-OCRv6 Small）",
+    "hybrid_server": "混合 OCR（已下线，已转 PP-OCRv6 Small）",
+    "vision": "macOS Vision（已下线，已转 PP-OCRv6 Small）",
+    "hybrid": "混合 OCR（已下线，已转 PP-OCRv6 Small）",
 }
 
 OCR_STAGES = ("page", "date", "seal")
@@ -62,34 +66,11 @@ def backend_catalog() -> list[dict]:
         importlib.util.find_spec("paddle") is not None
         and importlib.util.find_spec("paddleocr") is not None
     )
-    from .paddle_ocr import paddle_model_home, server_max_side
+    from .paddle_ocr import paddle_model_home
 
     single_model_safety = "单一 Paddle 模型：日期同日可匹配，印章候选进入人工复核"
     paddle_v6_ready = paddle_installed and paddle_v6_supported()
     return [
-        {
-            "id": "paddle",
-            "label": BACKEND_LABELS["paddle"],
-            "available": paddle_installed,
-            "reason": "" if paddle_installed else "需安装 paddlepaddle 与 paddleocr",
-            "model_home": str(paddle_model_home()),
-            "model_name": "PP-OCRv5 mobile",
-            "safety_policy": single_model_safety,
-            "recommended": True,
-            "usage_note": "默认引擎；速度和字段/商品准确率较均衡",
-        },
-        {
-            "id": "paddle_server",
-            "label": BACKEND_LABELS["paddle_server"],
-            "available": paddle_installed,
-            "reason": "" if paddle_installed else "需安装 paddlepaddle 与 paddleocr",
-            "model_home": str(paddle_model_home()),
-            "model_name": "PP-OCRv5 server",
-            "max_page_side": server_max_side(),
-            "safety_policy": single_model_safety,
-            "recommended": False,
-            "usage_note": "大模型对照或局部重试；整页更耗内存，当前不建议整批默认",
-        },
         {
             "id": "paddle_v6",
             "label": BACKEND_LABELS["paddle_v6"],
@@ -98,8 +79,8 @@ def backend_catalog() -> list[dict]:
             "model_home": str(paddle_model_home()),
             "model_name": "PP-OCRv6 small",
             "safety_policy": single_model_safety,
-            "recommended": False,
-            "usage_note": "新一代多语种模型对照；整页与日期需与 PP-OCRv5 结果交叉核对",
+            "recommended": True,
+            "usage_note": "当前默认本地模型；整页、日期和印章使用同一 v6 路线",
         },
         {
             "id": "paddle_seal",
@@ -112,23 +93,6 @@ def backend_catalog() -> list[dict]:
             "recommended": False,
             "usage_note": "印章专用检测；首次使用需下载 PP-OCRv4_mobile_seal_det 权重",
         },
-        {
-            "id": "hybrid_server",
-            "label": BACKEND_LABELS["hybrid_server"],
-            "available": paddle_installed,
-            "reason": "" if paddle_installed else "需安装 paddlepaddle 与 paddleocr",
-            "model_home": str(paddle_model_home()),
-            "model_name": "页面：PP-OCRv5 server；日期/印章：PP-OCRv5 mobile",
-            "max_page_side": server_max_side(),
-            "safety_policy": "Paddle Server 表单 + Paddle Mobile 日期/印章：跨模型证据仍按严格规则核验",
-            "recommended": False,
-            "usage_note": "密集表格对照或指定批次重试；大模型结果仍需与 Mobile/真值核对",
-            "route": {
-                "page": BACKEND_LABELS["paddle_server"],
-                "date": BACKEND_LABELS["paddle"],
-                "seal": BACKEND_LABELS["paddle"],
-            },
-        },
     ]
 
 
@@ -137,8 +101,8 @@ def default_backend() -> str:
     if configured and configured != "auto":
         return resolve_backend(configured)
     available = {item["id"] for item in backend_catalog() if item["available"]}
-    if "paddle" in available:
-        return "paddle"
+    if "paddle_v6" in available:
+        return "paddle_v6"
     raise RuntimeError("没有可用的 OCR 引擎")
 
 
@@ -155,6 +119,12 @@ def resolve_backend(name: str | None) -> str:
     return requested
 
 
+def normalize_backend_id(name: str | None) -> str:
+    """Map ids from old saved plans without bringing retired models back."""
+    requested = (name or "").strip().lower()
+    return LEGACY_BACKEND_ALIASES.get(requested, requested)
+
+
 def backend_label(name: str) -> str:
     return BACKEND_LABELS.get(name) or LEGACY_BACKEND_LABELS.get(name, name)
 
@@ -167,9 +137,7 @@ def backend_route(name: str | None) -> dict[str, str]:
         # page/date route remains a normal local model so the seal-only model
         # can never become a document OCR provider by accident.
         return {"page": "paddle_v6", "date": "paddle_v6", "seal": "paddle_seal"}
-    if selected != "hybrid_server":
-        return {stage: selected for stage in OCR_STAGES}
-    return {"page": "paddle_server", "date": "paddle", "seal": "paddle"}
+    return {stage: selected for stage in OCR_STAGES}
 
 
 def backend_route_labels(name: str | None) -> dict[str, str]:
@@ -205,5 +173,5 @@ def recognize_text(
 __all__ = [
     "TextObservation", "observations_text", "backend_catalog", "backend_label",
     "backend_route", "backend_route_labels", "default_backend", "resolve_backend",
-    "recognize_text", "paddle_v6_supported",
+    "recognize_text", "paddle_v6_supported", "normalize_backend_id",
 ]

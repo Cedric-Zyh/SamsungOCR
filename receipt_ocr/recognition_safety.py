@@ -13,8 +13,7 @@ def _apply_single_paddle_safety(
     Every local route now runs one Paddle tier across the page, date and seal
     stages. Raw/clean/line variants remain useful OCR evidence, but they are
     observations by the same model and must not be mistaken for independent
-    corroboration. A genuinely cross-model ``hybrid_server`` route (Server page
-    + Mobile details) is not affected. Exact date and strict seal-text matches
+    corroboration. Cross-model legacy routes are no longer available. Exact date and strict seal-text matches
     use the normal business comparison rule without requiring another model.
     """
     physical = {
@@ -58,12 +57,4 @@ def _apply_single_paddle_safety(
 
 
 def _ocr_model_config(stage_backends: dict[str, str]) -> dict:
-    if stage_backends.get("page") != "paddle_server":
-        return {}
-    from .paddle_ocr import server_max_side
-
-    return {
-        "page_model": "PP-OCRv5 Server",
-        "server_max_page_side": server_max_side(),
-        "server_page_scaling": "最长边超过上限时等比缩放推理，归一化坐标映射不变",
-    }
+    return {}

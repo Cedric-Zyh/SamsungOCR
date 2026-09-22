@@ -10,6 +10,7 @@ from .image_processing import (
     save_unwrapped_seal_bands,
 )
 from .ocr_backends import recognize_text
+from .paddle_ocr import is_paddle_backend, recognize_line, variant_of
 from .ocr_types import TextObservation
 from .recognition_utils import _dedupe
 from .seal_crop_types import SealCropRequest, SealAuditRoute, SealAuditEvidence
@@ -41,6 +42,12 @@ def _prepare_server_audit_images(
     # requirement self-matching because neutral form text was
     # removed before either image reached the Server model.
     color_source = candidate.get("color_isolated_oriented") or candidate["color_isolated"]
+    ellipse_normalized = candidate.get("ellipse_normalized")
+    normalized_label = (
+        "椭圆环形文字展开图"
+        if candidate.get("elliptical") or candidate.get("shape") == "椭圆"
+        else "圆章/矩形校正图"
+    )
     audit.audit_paths = [
         (
             "按章型文字旋正后的保留章色图"
@@ -48,8 +55,10 @@ def _prepare_server_audit_images(
             else "保留章色白底图",
             color_source,
         ),
-        ("圆章/矩形校正图", candidate["unwrapped"]),
+        (normalized_label, candidate["unwrapped"]),
     ]
+    if ellipse_normalized and Path(ellipse_normalized).is_file():
+        audit.audit_paths.insert(1, ("椭圆拉伸校正图", Path(ellipse_normalized)))
     if (
         request.artifact_dir
         and audit_position == 0
@@ -63,20 +72,44 @@ def _prepare_server_audit_images(
             f"seal-{candidate['index']}-round-type-band.png"
         )
         try:
+            using_ellipse_normalized = bool(
+                (candidate.get("elliptical") or candidate.get("shape") == "椭圆")
+                and ellipse_normalized
+                and Path(ellipse_normalized).is_file()
+            )
+            type_band_source = (
+                Path(ellipse_normalized)
+                if using_ellipse_normalized
+                else color_source
+            )
             save_round_seal_type_band(
-                color_source,
+                type_band_source,
                 audit.round_type_band,
-                orientation_aligned=candidate.get("color_isolated_oriented") is not None,
-                focus_box=(candidate.get("orientation") or {}).get("oriented_type_row_box"),
+                orientation_aligned=(
+                    using_ellipse_normalized
+                    or candidate.get("color_isolated_oriented") is not None
+                ),
+                focus_box=(
+                    None
+                    if using_ellipse_normalized
+                    else (candidate.get("orientation") or {}).get("oriented_type_row_box")
+                ),
             )
         except Exception:
             audit.round_type_band = None
         if audit.round_type_band is not None:
+            band_label = (
+                "旋正后椭圆章章型横向分带"
+                if candidate.get("elliptical") or candidate.get("shape") == "椭圆"
+                else "旋正后圆章章型横向分带"
+            ) if candidate.get("color_isolated_oriented") else (
+                "椭圆章章类型横向分带"
+                if candidate.get("elliptical") or candidate.get("shape") == "椭圆"
+                else "圆章章类型横向分带"
+            )
             audit.audit_paths.append(
                 (
-                    "旋正后圆章章型横向分带"
-                    if candidate.get("color_isolated_oriented")
-                    else "圆章章类型横向分带",
+                    band_label,
                     audit.round_type_band,
                 )
             )
@@ -121,15 +154,18 @@ def _prepare_server_audit_images(
         for band_index, band_path in enumerate(audit.robust_band_paths, start=1):
             current_mobile_texts: list[str] = []
             try:
-                current_mobile_texts = [
-                    row.text
-                    for row in recognize_text(
+                if is_paddle_backend(route.audit_band_backend):
+                    band_rows = recognize_line(
+                        band_path,
+                        model_variant=variant_of(route.audit_band_backend) or "mobile",
+                    )
+                else:
+                    band_rows = recognize_text(
                         band_path,
                         backend=route.audit_band_backend,
                         min_text_height=0.012,
                     )
-                    if row.text
-                ]
+                current_mobile_texts = [row.text for row in band_rows if row.text]
             except Exception:
                 current_mobile_texts = []
             audit.robust_mobile_texts.extend(current_mobile_texts)

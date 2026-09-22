@@ -81,7 +81,7 @@ def main() -> None:
     parser.add_argument("--output", default="")
     parser.add_argument("--previews", default="tmp/validation-previews")
     parser.add_argument("--artifacts", default="tmp/validation-artifacts")
-    parser.add_argument("--backend", default="hybrid")
+    parser.add_argument("--backend", default="paddle_v6")
     parser.add_argument("--filename", action="append", default=[], help="只验证指定文件名，可重复")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少张，0 表示不限制")
     parser.add_argument("--save-db", action="store_true", help="同时保存到本地任务、结果和复核数据库")

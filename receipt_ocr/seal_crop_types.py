@@ -38,11 +38,13 @@ class SealEvidenceCollection:
 class SealRegionEvidence:
     region_texts: list[str] = field(default_factory=list)
     rectangular: bool = False
+    elliptical: bool = False
     original: Path | None = None
     whole_text: str = ""
     isolated: Path | None = None
     color_isolated: Path | None = None
     color_isolated_oriented: Path | None = None
+    ellipse_normalized: Path | None = None
     orientation: dict = field(default_factory=dict)
     round_type_band: Path | None = None
     round_type_band_texts: list[str] = field(default_factory=list)

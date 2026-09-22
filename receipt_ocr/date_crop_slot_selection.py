@@ -54,7 +54,7 @@ def _select_slot_date(run: DateCropRun, probe: DateSlotProbe) -> None:
         month, day = next(iter(common_month_days))
         try:
             probe.accepted_slot_date = date(year, month, day)
-            probe.slot_candidate_source = "Paddle Mobile/Server 年月日槽位一致"
+            probe.slot_candidate_source = "Paddle v6 年月日槽位一致"
         except ValueError:
             probe.accepted_slot_date = None
 

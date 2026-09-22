@@ -18,12 +18,14 @@ from .date_fragments import (
 def _find_low_confidence_date_audit(
     rows: list[TextObservation],
 ) -> tuple[date | None, TextObservation | None]:
-    """Expose repeated strict audit dates without making them reliable.
+    """Expose strict audit dates without making them reliable.
 
     ``find_receipt_date`` intentionally accepts only the normal footer band.
     A far-below handwritten note therefore needs a separate path.  Require two
-    strict observations of the same date and the audit confidence cap; this
-    returns a display/review candidate, never an automatic decision.
+    strict observations of the same date and the audit confidence cap for the
+    normal audit path.  A single observation is allowed only when it has the
+    explicit ``0.25`` display-only cap applied by ``_select_display_only_date_audit_rows``;
+    this returns a display/review candidate, never an automatic decision.
     """
     grouped: dict[date, list[TextObservation]] = {}
     for row in rows:
@@ -36,7 +38,15 @@ def _find_low_confidence_date_audit(
         (parsed, evidence) for parsed, evidence in grouped.items() if len(evidence) >= 2
     ]
     if not supported:
-        return None, None
+        display_only = [
+            (parsed, evidence)
+            for parsed, evidence in grouped.items()
+            if len(evidence) == 1 and float(evidence[0].confidence) <= 0.25
+        ]
+        if len(display_only) != 1:
+            return None, None
+        parsed, evidence = display_only[0]
+        return parsed, evidence[0]
     parsed, evidence = max(
         supported,
         key=lambda item: (len(item[1]), max(row.confidence for row in item[1])),

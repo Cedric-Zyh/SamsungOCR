@@ -289,9 +289,7 @@ def evaluate_backends(results: list[dict], ground_truth: dict) -> list[dict]:
         backend = str(result.get("ocr_backend", "")).strip()
         if backend:
             groups.setdefault(backend, []).append(result)
-    order = {name: index for index, name in enumerate(
-        ("paddle", "paddle_v6", "paddle_server", "hybrid_server")
-    )}
+    order = {name: index for index, name in enumerate(("paddle_v6", "danzhengtong"))}
     output = []
     for backend, group in groups.items():
         metrics = evaluate_results(group, ground_truth)

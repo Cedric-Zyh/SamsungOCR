@@ -1,9 +1,9 @@
 import {escapeHtml, planLabels} from './ui.mjs';
 
-const methodLabels = {paddle:'Paddle Mobile', paddle_server:'Paddle Server', paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
+const methodLabels = {paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
 const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）'};
 const presetLabels = {danzhengtong:'单证通',full:'完整核验', date:'仅日期', seal:'仅印章', 'seal-test':'印章测试'};
-const localMethods = ['paddle', 'paddle_server', 'paddle_v6', 'paddle_seal'];
+const localMethods = ['paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';
 const acceptanceStorageKey = 'receipt-acceptance-policy';
 
@@ -82,17 +82,17 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     };
     const plan = {
       fields:choose('fields', localMethods), products:choose('products', localMethods), handwriting:[],
-      date:choose('date', ['danzhengtong', 'paddle', 'paddle_server']), seal:choose('seal', ['paddle', 'paddle_server']),
+      date:choose('date', ['danzhengtong', 'paddle_v6']), seal:choose('seal', ['paddle_v6']),
     };
     if ($('#seal-orientation-mode')) plan.seal_orientation = 'polygon';
     return plan;
   }
   function presetPlan(name) {
     if (name === 'danzhengtong') return {fields:['danzhengtong'], products:[], handwriting:['danzhengtong'], date:['danzhengtong'], seal:['danzhengtong']};
-    if (name === 'seal-test') return {fields:['paddle'], products:[], handwriting:[], date:[], seal:['qingtong']};
+    if (name === 'seal-test') return {fields:['paddle_v6'], products:[], handwriting:[], date:[], seal:['qingtong']};
     const plan = defaultPlan();
     if (name === 'full') {
-      const method = ['paddle', 'paddle_server'].find(method => available('handwriting', method));
+      const method = ['paddle_v6'].find(method => available('handwriting', method));
       plan.handwriting = method ? [method] : [];
     } else for (const stage of stages) if (stage !== name) plan[stage] = [];
     return plan;
@@ -100,7 +100,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
   function presetUnavailable(name) {
     if (name === 'seal-test') {
       const missing = [];
-      if (!available('fields', 'paddle')) missing.push('Paddle 不可用');
+      if (!available('fields', 'paddle_v6')) missing.push('Paddle v6 不可用');
       if (!available('seal', 'qingtong')) missing.push('清瞳尚未配置');
       return missing.join('，');
     }

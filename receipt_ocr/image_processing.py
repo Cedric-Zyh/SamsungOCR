@@ -87,12 +87,14 @@ def _ocr_color_mask(crop: np.ndarray, color: str) -> np.ndarray:
         hue_match = (hue <= 16) | (hue >= 164)
     else:
         hue_match = (hue >= 82) & (hue <= 140)
-    # The reviewed stamp has enough saturation at this threshold, while the
-    # pale/neutral fringes of black table lines do not.
+    # Keep the gate below the saturation of faint scanned red lettering.  The
+    # neutral-line pass below removes long low-saturation table rules, so this
+    # lower value does not re-admit the black form rows that the colour-safe
+    # derivative is meant to exclude.
     mask = (
         hue_match
-        & (saturation >= 70)
-        & (value >= 65)
+        & (saturation >= 45)
+        & (value >= 50)
     ).astype(np.uint8) * 255
 
     if mask.size:
@@ -127,8 +129,6 @@ def seal_region_is_rectangular(
     and retain the historical aspect-ratio fallback only when no usable
     contour survives the chroma gate.
     """
-    if region.qingtong_cls:
-        return region.qingtong_cls == "rectangle"
     image = _read_image(source)
     height, width = image.shape[:2]
     x1, y1 = int(region.x * width), int(region.y * height)
@@ -150,16 +150,76 @@ def seal_region_is_rectangular(
         grouped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     if not contours:
-        return ratio >= 1.45
+        # QingTong is useful as a last-resort hint when the local colour mask
+        # is too faint to recover a contour.  It must not override a usable
+        # local geometry result: the API occasionally calls an oval a
+        # rectangle (or a circle).
+        return str(region.qingtong_cls).strip().lower() in {
+            "rectangle", "rect", "矩形"
+        } or ratio >= 1.45
     contour = max(contours, key=cv2.contourArea)
     if cv2.contourArea(contour) < mask.size * 0.025:
-        return ratio >= 1.45
+        return str(region.qingtong_cls).strip().lower() in {
+            "rectangle", "rect", "矩形"
+        } or ratio >= 1.45
     rect = cv2.minAreaRect(contour)
     rw, rh = rect[1]
     extent = cv2.contourArea(contour) / max(1.0, rw * rh)
     perimeter = cv2.arcLength(contour, True)
     vertices = len(cv2.approxPolyDP(contour, perimeter * 0.025, True))
     return bool(extent >= 0.84 and vertices <= 8)
+
+
+def seal_region_is_elliptical(
+    source: str | Path,
+    region: SealRegion,
+) -> bool:
+    """Classify a non-rectangular stamp as an oval from its own pixels.
+
+    QingTong's ``cls`` is retained as a fallback for an extremely faint crop,
+    but a usable local colour mask wins.  The decision is intentionally based
+    on the ink bounding box rather than the API label: a horizontal oval has a
+    stable long/short-axis ratio even when its inner text is fragmented.
+    """
+    if seal_region_is_rectangular(source, region):
+        return False
+    try:
+        image = _read_image(source)
+        height, width = image.shape[:2]
+        x1, y1 = int(region.x * width), int(region.y * height)
+        x2 = int((region.x + region.width) * width)
+        y2 = int((region.y + region.height) * height)
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0:
+            raise ValueError("椭圆章区域为空")
+        mask = _ocr_color_mask(crop, region.color)
+        points = cv2.findNonZero(mask)
+        if points is not None:
+            bx, by, bw, bh = cv2.boundingRect(points)
+            axis_ratio = max(bw, bh) / max(1.0, min(bw, bh))
+            if axis_ratio >= 1.18:
+                return True
+            # A contour fit is more stable than the crop box when the API
+            # added generous margins around a nearly circular stamp.
+            if len(points) >= 5:
+                ellipse = cv2.fitEllipse(points)
+                major, minor = sorted(ellipse[1], reverse=True)
+                if major / max(1.0, minor) >= 1.18:
+                    return True
+        label = str(region.qingtong_cls).strip().lower()
+        return label in {"ellipse", "oval", "椭圆"}
+    except (OSError, ValueError, TypeError, cv2.error):
+        label = str(region.qingtong_cls).strip().lower()
+        return label in {"ellipse", "oval", "椭圆"}
+
+
+def seal_region_shape(source: str | Path, region: SealRegion) -> str:
+    """Return the locally validated shape: ``rectangle``, ``ellipse`` or ``circle``."""
+    if seal_region_is_rectangular(source, region):
+        return "rectangle"
+    if seal_region_is_elliptical(source, region):
+        return "ellipse"
+    return "circle"
 
 
 def _remove_page_spanning_vertical_scan_lines(mask: np.ndarray) -> np.ndarray:
@@ -897,13 +957,183 @@ def _robust_round_seal_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | N
     )
 
 
+def save_ellipse_normalized_seal(
+    source: str | Path,
+    destination: str | Path,
+    region: SealRegion | None = None,
+    *,
+    color: str = "red",
+) -> Path:
+    """Stretch a horizontal/vertical oval into a square, color-safe image.
+
+    This is a real pipeline stage, not an internal resize hidden inside the
+    polar unwrap.  The colored-ink bounding box is cropped with a small
+    margin, its shorter axis is stretched to the longer axis, and the result
+    is written as a visible white-background artifact.  Later oval OCR stages
+    must consume this image so the oval's ring text is treated like a circle.
+    """
+    image = _read_image(source)
+    height, width = image.shape[:2]
+    if region is not None:
+        x1 = max(0, int(region.x * width))
+        y1 = max(0, int(region.y * height))
+        x2 = min(width, int((region.x + region.width) * width))
+        y2 = min(height, int((region.y + region.height) * height))
+        crop = image[y1:y2, x1:x2]
+        ink_color = region.color
+    else:
+        crop = image
+        ink_color = color
+    if crop.size == 0:
+        raise ValueError("椭圆章拉伸区域为空")
+    mask = _ocr_color_mask(crop, ink_color)
+    points = cv2.findNonZero(mask)
+    if points is None:
+        # Keep a useful visible intermediate even when the color is extremely
+        # faint; the later OCR stage can then report a genuine empty result.
+        normalized = crop.copy()
+    else:
+        bx, by, bw, bh = cv2.boundingRect(points)
+        pad_x = max(3, round(bw * 0.035))
+        pad_y = max(3, round(bh * 0.035))
+        bx1, by1 = max(0, bx - pad_x), max(0, by - pad_y)
+        bx2, by2 = min(crop.shape[1], bx + bw + pad_x), min(crop.shape[0], by + bh + pad_y)
+        crop = crop[by1:by2, bx1:bx2]
+        mask = mask[by1:by2, bx1:bx2]
+        normalized = np.full_like(crop, 255)
+        normalized[mask > 0] = crop[mask > 0]
+    normalized_height, normalized_width = normalized.shape[:2]
+    if normalized_height <= 0 or normalized_width <= 0:
+        raise ValueError("椭圆章拉伸图片为空")
+    side = max(normalized_height, normalized_width)
+    normalized = cv2.resize(
+        normalized,
+        (side, side),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", normalized)
+    if not ok:
+        raise ValueError("椭圆章拉伸图片编码失败")
+    encoded.tofile(str(destination))
+    return destination
+
+
+def _save_ellipse_annulus_unwrapped(
+    gray: np.ndarray,
+    mask: np.ndarray,
+    destination: str | Path,
+) -> bool:
+    """Unwrap a normalized oval's annulus with ellipse-aware sampling.
+
+    ``warpPolar`` assumes both boundaries are concentric circles.  Even after
+    an oval is stretched, the printed inner/outer borders are not perfectly
+    concentric, so polar sampling creates the duplicated/wavy text seen in
+    the v6 result.  Fit the two visible ellipse borders and sample between
+    them directly instead.
+    """
+    contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    fitted = []
+    for contour in contours:
+        if len(contour) < 20 or cv2.contourArea(contour) < mask.size * 0.01:
+            continue
+        try:
+            ellipse = cv2.fitEllipse(contour)
+            (cx, cy), (axis_a, axis_b), angle = ellipse
+            mean_axis = (float(axis_a) + float(axis_b)) / 2.0
+            if mean_axis <= 0:
+                continue
+            points = contour[:, 0].astype(np.float32)
+            theta = np.deg2rad(float(angle))
+            dx, dy = points[:, 0] - cx, points[:, 1] - cy
+            x_rot = dx * np.cos(theta) + dy * np.sin(theta)
+            y_rot = -dx * np.sin(theta) + dy * np.cos(theta)
+            radial_error = np.sqrt(
+                (x_rot / (float(axis_a) / 2.0)) ** 2
+                + (y_rot / (float(axis_b) / 2.0)) ** 2
+            )
+            fitted.append(
+                (mean_axis, float(np.median(np.abs(radial_error - 1.0))), ellipse)
+            )
+        except (cv2.error, ValueError, ZeroDivisionError):
+            continue
+    if len(fitted) < 2:
+        return False
+    # Reject contours that are mostly connected glyph blobs; real oval
+    # borders have a much tighter ellipse residual.
+    clean = [item for item in fitted if item[1] <= 0.06]
+    if len(clean) < 2:
+        return False
+    outer = max(clean, key=lambda item: item[0])
+    inner_candidates = [
+        item for item in clean
+        if outer[0] * 0.35 < item[0] < outer[0] * 0.88
+    ]
+    if not inner_candidates:
+        return False
+    inner = max(inner_candidates, key=lambda item: item[0])
+    (outer_cx, outer_cy), _, _ = outer[2]
+    (inner_cx, inner_cy), _, _ = inner[2]
+    center_x = (float(outer_cx) + float(inner_cx)) / 2.0
+    center_y = (float(outer_cy) + float(inner_cy)) / 2.0
+    width = gray.shape[1]
+    output_width = max(1200, min(2200, width * 2))
+    output_height = max(96, round(output_width * 0.065))
+
+    def radius(ellipse, angles):
+        (_, _), (axis_a, axis_b), angle = ellipse
+        radians = angles - np.deg2rad(float(angle))
+        return 1.0 / np.sqrt(
+            (np.cos(radians) / (float(axis_a) / 2.0)) ** 2
+            + (np.sin(radians) / (float(axis_b) / 2.0)) ** 2
+        )
+
+    strips = []
+    for phase in (0.0, 2.0 * np.pi / 3.0, 4.0 * np.pi / 3.0):
+        angles = np.linspace(
+            np.pi / 2.0 + phase,
+            np.pi / 2.0 + phase + 2.0 * np.pi,
+            output_width,
+            endpoint=False,
+        )
+        outer_radius = radius(outer[2], angles) * 0.98
+        inner_radius = radius(inner[2], angles) * 1.08
+        fraction = np.linspace(0.0, 1.0, output_height, dtype=np.float32)[:, None]
+        radial = outer_radius[None, :] * (1.0 - fraction) + inner_radius[None, :] * fraction
+        map_x = (center_x + radial * np.cos(angles)[None, :]).astype(np.float32)
+        map_y = (center_y + radial * np.sin(angles)[None, :]).astype(np.float32)
+        strips.append(
+            cv2.remap(
+                gray,
+                map_x,
+                map_y,
+                cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=255,
+            )
+        )
+    gap = np.full((18, output_width), 255, dtype=np.uint8)
+    output = np.vstack((strips[0], gap, strips[1], gap, strips[2]))
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", output)
+    if not ok:
+        raise ValueError("椭圆环形文字展开图片编码失败")
+    encoded.tofile(str(destination))
+    return True
+
+
 def save_unwrapped_seal(
     source: str | Path,
     destination: str | Path,
-    region: SealRegion,
+    region: SealRegion | None,
     *,
     robust_bounds: bool = False,
     exclude_boxes: list[tuple[float, float, float, float]] | None = None,
+    elliptical: bool = False,
+    color: str = "red",
+    normalized: bool = False,
 ) -> bool:
     """Unwrap circular stamp text into a horizontal line for conventional OCR.
 
@@ -914,15 +1144,21 @@ def save_unwrapped_seal(
     """
     image = _read_image(source)
     height, width = image.shape[:2]
-    x1, y1 = int(region.x * width), int(region.y * height)
-    x2 = int((region.x + region.width) * width)
-    y2 = int((region.y + region.height) * height)
-    crop = image[y1:y2, x1:x2]
+    if region is None:
+        # The ellipse route may already have rotated and colour-isolated the
+        # QingTong crop.  In that case the whole file is the local stamp and
+        # no page-coordinate region should be applied a second time.
+        crop = image
+    else:
+        x1, y1 = int(region.x * width), int(region.y * height)
+        x2 = int((region.x + region.width) * width)
+        y2 = int((region.y + region.height) * height)
+        crop = image[y1:y2, x1:x2]
     # Use the same strict chroma gate as the visible color-isolated artifact.
     # The permissive detector mask is intentionally unsuitable here: faint
     # red JPEG fringes around black table lines become thick horizontal bars
     # after polar unwrapping and can erase the curved company name.
-    mask = _ocr_color_mask(crop, region.color)
+    mask = _ocr_color_mask(crop, region.color if region is not None else color)
     for box in exclude_boxes or ():
         if not box or len(box) != 4:
             continue
@@ -942,7 +1178,7 @@ def save_unwrapped_seal(
     # that crop as a rectangular stamp prevents polar unwrapping of the curved
     # company name.  Reviewed service-center rectangles are materially wider;
     # 1.65 keeps those linear while recovering the ambiguous circular cases.
-    if seal_region_is_rectangular(source, region):
+    if region is not None and seal_region_is_rectangular(source, region):
         scale = 1500 / max(1, w)
         normalized = cv2.resize(canvas, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         destination = Path(destination)
@@ -952,6 +1188,19 @@ def save_unwrapped_seal(
             raise ValueError("矩形印章校正图片编码失败")
         encoded.tofile(str(destination))
         return False
+    if elliptical and normalized:
+        # Keep anti-aliased red strokes for the v6 recognizer; hard threshold
+        # turns the thin oval company glyphs into broken blobs.
+        b, g, r = (channel.astype(np.float32) for channel in cv2.split(crop))
+        if (region.color if region is not None else color) == "red":
+            dominance = r - np.maximum(g, b)
+        else:
+            dominance = b - np.maximum(g, r)
+        gray = 255.0 - np.clip(dominance * (255.0 / 160.0), 0.0, 255.0)
+        if _save_ellipse_annulus_unwrapped(
+            gray.astype(np.uint8), mask, destination
+        ):
+            return False
     # Normalize the colored-ink bounding box to a square before polar
     # unwrapping.  Padding a 2:1 oval into a square leaves its text on an
     # ellipse, which a circular polar transform bends into waves.  Stretching
@@ -959,7 +1208,7 @@ def save_unwrapped_seal(
     # making oval company text horizontal enough for conventional OCR.
     points = cv2.findNonZero(mask)
     used_robust_bounds = False
-    if points is not None:
+    if points is not None and not normalized:
         robust = _robust_round_seal_bounds(mask) if robust_bounds else None
         if robust is not None:
             bx1, by1, bx2, by2 = robust
@@ -972,7 +1221,11 @@ def save_unwrapped_seal(
             bx2, by2 = min(w, bx + bw + pad_x), min(h, by + bh + pad_y)
         canvas = canvas[by1:by2, bx1:bx2]
     size = max(canvas.shape[:2])
-    square = cv2.resize(canvas, (size, size), interpolation=cv2.INTER_CUBIC)
+    square = (
+        canvas
+        if normalized and canvas.shape[0] == canvas.shape[1]
+        else cv2.resize(canvas, (size, size), interpolation=cv2.INTER_CUBIC)
+    )
     radius = size / 2
     polar = cv2.warpPolar(
         square,
@@ -988,7 +1241,10 @@ def save_unwrapped_seal(
         # full-width black bar above/below every text strip and can dominate
         # OCR detection.  Company glyphs sit just inside this border, so keep
         # the 42%–94% radial band rather than the complete outer radius.
-        outer = shifted[:, int(radius * 0.42) : int(radius * 0.94)]
+        inner_radius, outer_radius = (
+            (0.54, 0.90) if elliptical else (0.42, 0.94)
+        )
+        outer = shifted[:, int(radius * inner_radius) : int(radius * outer_radius)]
         strip = cv2.rotate(outer, cv2.ROTATE_90_COUNTERCLOCKWISE)
         strips.append(cv2.resize(strip, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC))
     gap = np.full((18, max(strip.shape[1] for strip in strips)), 255, dtype=np.uint8)

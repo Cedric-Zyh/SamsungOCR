@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .image_processing import save_rectangular_seal_bands
-from .ocr_backends import backend_label, recognize_text
+from .ocr_backends import backend_label
+from .paddle_ocr import recognize_line
 from .parser import compare_seal_text, normalize_text
 from .recognition_utils import _dedupe
 from .seal_rules import _reconstruct_business_acceptance_from_mobile_bands
@@ -65,10 +66,9 @@ def _resolve_mobile_company_conflict(
                 try:
                     current_texts = [
                         row.text
-                        for row in recognize_text(
+                        for row in recognize_line(
                             band_path,
-                            backend="paddle",
-                            min_text_height=0.012,
+                            model_variant="mobile",
                         )
                         if row.text
                     ]

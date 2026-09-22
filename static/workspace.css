@@ -235,7 +235,6 @@ body:is([data-active-page="progress"],[data-active-page="records"]) .hero .subti
 .records-section { padding:16px; border-radius:10px; box-shadow:none; }
 .records-section .import-date-bar { padding-bottom:10px; gap:10px; }
 .records-section #record-count { margin-left:auto; color:#718096; font-variant-numeric:tabular-nums; }
-.records-section #export-excel { color:#536278; border-color:#d2d9e2; background:#fff; font-weight:500; }
 .records-section .record-tabs { gap:24px; }
 .records-section .record-filter-note { padding:8px 0; font-size:11px; }
 .record-filter-table .records-table { table-layout:fixed; width:100%; min-width:1018px; }

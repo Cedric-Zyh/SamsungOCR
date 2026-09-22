@@ -237,6 +237,7 @@ def _apply_business_and_review_guards(
 ) -> None:
     decision.audit_date_candidate = False
     decision.audit_date_note = ""
+    business_time_warning = ""
     if decision.actual_date is None:
         decision.actual_date, decision.date_row = _find_low_confidence_date_audit(
             evidence.date_rows
@@ -248,12 +249,41 @@ def _apply_business_and_review_guards(
                 if 0.50 <= decision.date_row.y <= 0.69
                 else "远下方手写候选，待人工确认"
             )
+    # The capped display-only row may still fall inside the normal footer
+    # band, in which case the complete-date selector finds it before this
+    # review fallback runs.  It is still an audit candidate and must retain
+    # the same low-confidence/business-order protections.
+    if (
+        decision.actual_date is not None
+        and decision.date_row is not None
+        and float(decision.date_row.confidence) <= 0.25
+    ):
+        decision.audit_date_candidate = True
+        decision.audit_date_note = "日期行重复识别候选，待人工确认"
     if consensus.cross_year_consensus is not None:
         # Four mandatory Paddle engine/geometry cells with a literal
         # four-digit year outweigh the business-order plausibility
         # heuristic. Keep the anomalous year as a reliable mismatch.
         decision.rejected_date = None
         decision.creation_date = parse_date(evidence.fields.get("制单日期", ""))
+    elif decision.audit_date_candidate:
+        # A capped audit candidate is intentionally shown to the reviewer
+        # even when the business-date guard flags it as earlier than the
+        # creation/waybill date.  Dropping it here would turn a visible OCR
+        # reading such as ``2026年2月2日`` back into a blank date.  Keep the
+        # candidate and record the business-order concern; its audit cap still
+        # prevents automatic pass or rejection.
+        _, rejected, lower_bound = _reject_date_before_creation(
+            decision.actual_date,
+            evidence.fields.get("制单日期", ""),
+            evidence.fields.get("运单号", ""),
+        )
+        decision.creation_date = lower_bound
+        if rejected is not None:
+            business_time_warning = (
+                f"OCR 日期早于最早出库业务日期 {lower_bound.isoformat()}，"
+                "保留为人工复核候选"
+            )
     else:
         decision.actual_date, decision.rejected_date, decision.creation_date = (
             _reject_date_before_creation(
@@ -309,6 +339,9 @@ def _apply_business_and_review_guards(
     decision.date_check = compare_dates(
         evidence.fields.get("要求到货", ""), decision.actual_date
     )
+    if business_time_warning:
+        decision.date_check["business_time_warning"] = business_time_warning
+        decision.date_check["message"] += f"；{business_time_warning}"
     if evidence.rejected_date_evidence:
         decision.date_check["rejected_candidates"] = evidence.rejected_date_evidence
     if consensus.cross_year_consensus is not None and evidence.rejected_date_evidence:

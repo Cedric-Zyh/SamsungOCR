@@ -7,10 +7,11 @@ import {createRecognitionPlan} from './recognition_plan.mjs?v=20260918-no-vision
 import {createReview} from './review.mjs?v=20260920-view-review-mode';
 import {createReviewEvidence} from './review_evidence.mjs?v=20260918-no-vision';
 import {createReviewQueue} from './review_queue.mjs';
-import {createProgress} from './progress.mjs?v=20260920-progress-detail';
+import {createProgress} from './progress.mjs?v=20260922-multi-status-filter';
 import {createReport} from './report.mjs';
 import {createNavigation} from './navigation.mjs';
 import {createProcessHistory} from './process_history.mjs?v=20260920-progress-detail';
+import {createRetentionSettings} from './retention_settings.mjs';
 
 /** Composition root: controllers communicate through explicit callbacks.
  * Constructing an application performs no requests or event registration. */
@@ -29,6 +30,7 @@ export function createApplication(environment, options = {}) {
     ui,
     api
   });
+  const retention_settings = createRetentionSettings({environment, ui, api});
   const records = createRecords({
     ReceiptWorkbench,
     environment,
@@ -184,6 +186,7 @@ export function createApplication(environment, options = {}) {
     if (initialized) return;
     initialized = true;
     process_history.initialize();
+    retention_settings.initialize();
     records.initialize();
     recognition_plan.initialize();
     imports.initialize();
@@ -202,7 +205,8 @@ export function createApplication(environment, options = {}) {
   }
 
   return {initialize, state, pollQueue, invalidateResultViews, refreshVisibleResults,
-    records, imports, recognition_plan, review, review_evidence, review_queue, progress, report, navigation, process_history};
+    records, imports, recognition_plan, review, review_evidence, review_queue, progress, report, navigation, process_history,
+    retention_settings};
 }
 
 export function browserEnvironment(window, libraries) {

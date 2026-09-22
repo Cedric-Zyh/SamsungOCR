@@ -29,7 +29,6 @@ from .image_processing import (
 # steers which derivative crops the local pass prepares.  "red" is the tolerant
 # branch: it keeps the original crop and both colour masks available.
 REMOTE_COLOR = "red"
-REMOTE_SHAPE = "矩形"
 REMOTE_SOURCE = "清瞳印章区域"
 
 # The policies ``compare_qingtong_seal`` can emit.  Anything else means the
@@ -37,6 +36,21 @@ REMOTE_SOURCE = "清瞳印章区域"
 REMOTE_POLICIES = frozenset(
     {"qingtong_template_and_ocr", "qingtong_any_channel", "qingtong_all_channel"}
 )
+
+
+def _qingtong_shape_label(value) -> str:
+    """Display QingTong's shape hint without pretending it is local truth."""
+    label = str(value or "").strip().lower()
+    return {
+        "rectangle": "矩形",
+        "rect": "矩形",
+        "矩形": "矩形",
+        "ellipse": "椭圆",
+        "oval": "椭圆",
+        "椭圆": "椭圆",
+        "circle": "圆形",
+        "圆形": "圆形",
+    }.get(label, "未知章型")
 
 
 def _valid_box(value) -> tuple[float, float, float, float] | None:
@@ -157,7 +171,7 @@ def qingtong_region_artifacts(
                 "api_index": item["api_index"],
                 "color": region.color if region else REMOTE_COLOR,
                 "role": region.role if region else "",
-                "shape": REMOTE_SHAPE,
+                "shape": _qingtong_shape_label(item.get("cls")),
                 "source": REMOTE_SOURCE,
                 "ocr_backend": ocr_backend_label,
                 "note": note,

@@ -505,13 +505,6 @@ export function createRecords({
     $('#bulk-pass').addEventListener('click', () => bulkReview('确认通过', '通过'));
     $('#bulk-pending').addEventListener('click', () => bulkReview('待复核', '需人工复核'));
 
-    $('#export-excel').addEventListener('click', () => {
-      const params = new URLSearchParams(new FormData($('#filters')));
-
-      window.location.href = `/api/export.xlsx?${params}`;
-      if (recordsState.batchFilter) setBatchStep(4);
-    });
-
     $('#records-page-prev').addEventListener('click', () => loadRecords({page: Math.max(1, recordsState.recordPage - 1), scrollToTable: true}));
     $('#records-page-next').addEventListener('click', () => loadRecords({page: recordsState.recordPage + 1, scrollToTable: true}));
 

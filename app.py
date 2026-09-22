@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import shutil
-import subprocess
 import sys
 import threading
+import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory
@@ -22,7 +24,7 @@ from receipt_ocr.review import (
 )
 from receipt_ocr.recognition_config import validate_config, run_configured
 from receipt_ocr.field_schema import OUTPUT_FIELDS, PRINTED_FIELDS, HANDWRITTEN_FIELDS, derive_signature_check, recognition_fields
-from receipt_ocr.database import Database, now_iso
+from receipt_ocr.database import DEFAULT_RETENTION_DAYS, Database, now_iso
 from receipt_ocr.job_store import JobStore
 from receipt_ocr.job_worker import JobWorker
 from receipt_ocr.job_service import ReceiptJobService
@@ -47,8 +49,13 @@ from receipt_ocr.seal_orientation import SEAL_ORIENTATION_MODES
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "数据"
-STORAGE_DIR = BASE_DIR / "storage"
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+DATA_DIR = RESOURCE_DIR / "数据"
+if getattr(sys, "frozen", False):
+    default_storage = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "SamsungReceipt"
+    STORAGE_DIR = Path(os.getenv("SAMSUNG_RECEIPT_DATA_DIR", default_storage)).expanduser().resolve()
+else:
+    STORAGE_DIR = BASE_DIR / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 PREVIEW_DIR = STORAGE_DIR / "previews"
 ARTIFACT_DIR = STORAGE_DIR / "artifacts"
@@ -60,58 +67,11 @@ RESULT_FILTERS = (
     "filename", "order_id", "customer", "date", "import_date", "overall", "review_status",
     "text_match", "search_prefix", "search", "date_status", "seal_status", "task_id", "ocr_backend",
 )
-_BUNDLED_NODE = Path(
-    "/Users/zhuyihao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+app = Flask(
+    __name__,
+    static_folder=str(RESOURCE_DIR / "static"),
+    template_folder=str(RESOURCE_DIR / "templates"),
 )
-
-
-def resolve_node_executable() -> Path | None:
-    """Resolve Node without embedding a macOS-only path on Windows."""
-    configured = os.getenv("WORKSPACE_NODE", "").strip()
-    if configured:
-        candidate = Path(configured).expanduser()
-        return candidate.resolve() if candidate.is_file() else None
-    discovered = shutil.which("node")
-    if discovered:
-        return Path(discovered).resolve()
-    return _BUNDLED_NODE if _BUNDLED_NODE.is_file() else None
-
-
-def export_subprocess_environment() -> dict[str, str]:
-    """Keep Paddle's OpenMP workaround out of artifact-tool's runtime."""
-    environment = os.environ.copy()
-    environment.pop("KMP_USE_SHM", None)
-    return environment
-
-
-def _export_machine_scope(
-    all_machine_results: list[dict],
-    exported_results: list[dict],
-    requested_backend: str,
-) -> list[dict]:
-    """Match export-summary accuracy to the exact rows in the workbook."""
-    result_ids = {
-        int(item.get("id") or 0) for item in exported_results
-        if int(item.get("id") or 0) > 0
-    }
-    filenames = {
-        str(item.get("filename") or "") for item in exported_results
-        if str(item.get("filename") or "")
-    }
-    scoped = [
-        item for item in all_machine_results
-        if (not requested_backend or item.get("ocr_backend") == requested_backend)
-        and (
-            int(item.get("id") or 0) in result_ids
-            if result_ids else str(item.get("filename") or "") in filenames
-        )
-    ]
-    return scoped
-
-
-NODE_EXECUTABLE = resolve_node_executable()
-
-app = Flask(__name__)
 app.config.update(MAX_CONTENT_LENGTH=500 * 1024 * 1024, JSON_AS_ASCII=False,
                   BACKGROUND_WORKER=True, TEMPLATES_AUTO_RELOAD=True)
 analyzer = ReceiptAnalyzer()
@@ -119,12 +79,130 @@ database = Database(DATABASE_PATH)
 seal_reference_matcher = SealReferenceMatcher(ARTIFACT_DIR)
 _initialized = False
 _initialization_lock = threading.Lock()
+_retention_cleanup_lock = threading.Lock()
+_last_retention_cleanup = 0.0
 job_store = JobStore(database)
 job_worker = None
 
 
+def _storage_references() -> tuple[set[str], set[str], set[str]]:
+    """Return upload, preview and artifact names still referenced by rows."""
+    uploads, previews, artifacts = set(), set(), set()
+    with database.connect() as connection:
+        for row in connection.execute(
+            "SELECT stored_name,preview_name,result_json FROM results WHERE deleted_at=''"
+        ):
+            stored_name = str(row["stored_name"] or "")
+            if stored_name and not stored_name.startswith("sample:"):
+                uploads.add(Path(stored_name).name)
+            preview_name = str(row["preview_name"] or "")
+            if preview_name:
+                previews.add(Path(preview_name).name)
+            artifacts.update(re.findall(
+                r"/files/artifacts/([A-Za-z0-9_-]+)(?:/|\b)", row["result_json"] or ""
+            ))
+        has_jobs = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_jobs'"
+        ).fetchone()
+        if has_jobs:
+            for row in connection.execute("SELECT stored_name FROM recognition_jobs WHERE stored_name<>''"):
+                stored_name = str(row["stored_name"] or "")
+                if not stored_name.startswith("sample:"):
+                    uploads.add(Path(stored_name).name)
+    return uploads, previews, artifacts
+
+
+def _cleanup_expired_storage(purge: dict) -> dict[str, int]:
+    """Delete files no longer referenced after retention cleanup."""
+    try:
+        cutoff_timestamp = datetime.fromisoformat(str(purge.get("cutoff"))).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        cutoff_timestamp = None
+    referenced_uploads, referenced_previews, referenced_artifacts = _storage_references()
+    removed = {"uploads": 0, "previews": 0, "artifacts": 0, "exports": 0}
+    artifact_tokens = set()
+    for row in purge.get("records") or []:
+        stored_name = str(row.get("stored_name") or "")
+        if stored_name and not stored_name.startswith("sample:"):
+            candidate = (UPLOAD_DIR / Path(stored_name).name).resolve()
+            if candidate.parent == UPLOAD_DIR.resolve() and candidate.name not in referenced_uploads and candidate.is_file():
+                candidate.unlink(missing_ok=True)
+                removed["uploads"] += 1
+        preview_name = str(row.get("preview_name") or "")
+        if preview_name:
+            candidate = (PREVIEW_DIR / Path(preview_name).name).resolve()
+            if candidate.parent == PREVIEW_DIR.resolve() and candidate.name not in referenced_previews and candidate.is_file():
+                candidate.unlink(missing_ok=True)
+                removed["previews"] += 1
+        artifact_tokens.update(re.findall(
+            r"/files/artifacts/([A-Za-z0-9_-]+)(?:/|\b)", row.get("result_json") or ""
+        ))
+    for token in artifact_tokens - referenced_artifacts:
+        candidate = (ARTIFACT_DIR / token).resolve()
+        if candidate.parent == ARTIFACT_DIR.resolve() and candidate.is_dir():
+            shutil.rmtree(candidate, ignore_errors=True)
+            removed["artifacts"] += 1
+    if cutoff_timestamp is None:
+        return removed
+
+    def is_old(path: Path) -> bool:
+        try:
+            return path.stat().st_mtime < cutoff_timestamp
+        except OSError:
+            return False
+
+    for directory, references, key in ((UPLOAD_DIR, referenced_uploads, "uploads"),
+                                       (PREVIEW_DIR, referenced_previews, "previews")):
+        if directory.is_dir():
+            for path in directory.iterdir():
+                if path.is_file() and path.name not in references and is_old(path):
+                    path.unlink(missing_ok=True)
+                    removed[key] += 1
+    if ARTIFACT_DIR.is_dir():
+        for path in ARTIFACT_DIR.iterdir():
+            if path.is_dir() and path.name not in referenced_artifacts and is_old(path):
+                shutil.rmtree(path, ignore_errors=True)
+                removed["artifacts"] += 1
+    if EXPORT_DIR.is_dir():
+        for path in EXPORT_DIR.iterdir():
+            if path.is_file() and is_old(path):
+                path.unlink(missing_ok=True)
+                removed["exports"] += 1
+    return removed
+
+
+def _purge_expired_data() -> dict:
+    try:
+        purge = database.purge_expired()
+        purge["files"] = _cleanup_expired_storage(purge)
+        if purge.get("deleted_results") or any(purge["files"].values()):
+            app.logger.info(
+                "已按保留天数清理数据：记录 %s，任务 %s，文件 %s",
+                purge.get("deleted_results", 0), purge.get("deleted_tasks", 0), purge["files"],
+            )
+        return purge
+    except Exception:
+        app.logger.exception("按保留天数清理数据失败")
+        return {"retention_days": database.get_retention_days(), "deleted_results": 0,
+                "deleted_jobs": 0, "deleted_tasks": 0, "files": {}}
+
+
+def _maybe_purge_expired_data() -> None:
+    """Keep a long-running server within the retention window without scanning on every request."""
+    global _last_retention_cleanup
+    now = time.monotonic()
+    if now - _last_retention_cleanup < 3600:
+        return
+    with _retention_cleanup_lock:
+        now = time.monotonic()
+        if now - _last_retention_cleanup < 3600:
+            return
+        _purge_expired_data()
+        _last_retention_cleanup = now
+
+
 def initialize(*, start_worker: bool = True) -> None:
-    global _initialized, job_store, job_worker
+    global _initialized, job_store, job_worker, _last_retention_cleanup
     if job_worker is not None:
         raise RuntimeError('后台任务已启动，请勿重复初始化服务')
     for directory in (UPLOAD_DIR, PREVIEW_DIR, ARTIFACT_DIR, EXPORT_DIR):
@@ -132,6 +210,8 @@ def initialize(*, start_worker: bool = True) -> None:
     database.initialize()
     job_store = JobStore(database)
     job_store.initialize()
+    _purge_expired_data()
+    _last_retention_cleanup = time.monotonic()
     database.recover_interrupted_tasks()
     database.enforce_uncertain_review_queue()
     seal_reference_matcher.refresh(
@@ -154,6 +234,7 @@ def ensure_initialized() -> None:
         with _initialization_lock:
             if not _initialized:
                 initialize()
+    _maybe_purge_expired_data()
 
 
 def _configured_analyze(*args, recognition_config=None, previous_fields=None, **kwargs):
@@ -184,6 +265,8 @@ def index():
         ocr_backend_catalog=backend_catalog(),
         seal_recognition_modes=SEAL_RECOGNITION_MODES,
         seal_orientation_modes=SEAL_ORIENTATION_MODES,
+        retention_days=database.get_retention_days(),
+        retention_default_days=DEFAULT_RETENTION_DAYS,
     )
 
 
@@ -202,6 +285,47 @@ def ocr_backends():
         },
         "seal_audit": describe_seal_audit(),
     })
+
+
+def _settings_payload() -> dict:
+    return {
+        "retention_days": database.get_retention_days(),
+        "default_retention_days": DEFAULT_RETENTION_DAYS,
+    }
+
+
+@app.get("/api/settings")
+def get_settings():
+    return jsonify(_settings_payload())
+
+
+def _update_retention_settings():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict) or "retention_days" not in payload:
+        return jsonify(error="请提供保留天数"), 400
+    try:
+        database.set_retention_days(payload["retention_days"])
+        purge = _purge_expired_data()
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify({**_settings_payload(), "deleted_results": purge.get("deleted_results", 0),
+                    "deleted_jobs": purge.get("deleted_jobs", 0),
+                    "deleted_tasks": purge.get("deleted_tasks", 0),
+                    "files": purge.get("files", {})})
+
+
+@app.patch("/api/settings")
+def update_settings():
+    return _update_retention_settings()
+
+
+@app.route("/api/settings/retention", methods=["GET", "PATCH"])
+@app.route("/api/settings/retention-days", methods=["GET", "PATCH"])
+@app.route("/api/settings/data-retention", methods=["GET", "PATCH"])
+def retention_settings():
+    if request.method == "GET":
+        return jsonify(_settings_payload())
+    return _update_retention_settings()
 
 
 @app.post("/api/tasks")
@@ -993,54 +1117,6 @@ def report():
         "coverage": round(len(truth) / dataset_images, 4) if dataset_images else 0.0,
     }
     return jsonify(report_data)
-
-
-@app.get("/api/export.xlsx")
-def export_excel():
-    filters = {key: request.args.get(key, "") for key in RESULT_FILTERS}
-    results = database.query_receipts(filters=filters, latest_by_filename=True)["items"]
-    all_machine_results = database.list_original_results(
-        limit=5000, completed_tasks_only=True
-    )
-    requested_backend = str(request.args.get("ocr_backend", "")).strip()
-    machine_results = _export_machine_scope(
-        all_machine_results, results, requested_backend
-    )
-    accuracy = evaluate_results(
-        machine_results, load_ground_truth(GROUND_TRUTH_PATH)
-    )
-    accuracy["scope_backend"] = requested_backend
-    accuracy["scope_backend_label"] = (
-        backend_label(requested_backend) if requested_backend else "全部后端最新结果"
-    )
-    accuracy["scope_export_rows"] = len(results)
-    report_data = operational_report(
-        results,
-        database.all_history(),
-        accuracy,
-    )
-    export_id = uuid.uuid4().hex
-    input_path = EXPORT_DIR / f"{export_id}.json"
-    output_path = EXPORT_DIR / f"三星回单识别结果-{export_id[:8]}.xlsx"
-    input_path.write_text(json.dumps({"results": results, "report": report_data}, ensure_ascii=False), encoding="utf-8")
-    if NODE_EXECUTABLE is None:
-        return jsonify({
-            "error": "Excel 导出需要 Node.js",
-            "detail": "请安装 Node.js，或通过 WORKSPACE_NODE 指定 node.exe 的完整路径",
-        }), 503
-    command = [str(NODE_EXECUTABLE), str(BASE_DIR / "tools" / "build_export.mjs"), str(input_path), str(output_path)]
-    completed = subprocess.run(
-        command,
-        cwd=BASE_DIR,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=export_subprocess_environment(),
-    )
-    if completed.returncode != 0 or not output_path.exists():
-        app.logger.error("Excel export failed: %s", completed.stderr)
-        return jsonify({"error": "Excel 导出失败", "detail": completed.stderr[-1000:]}), 500
-    return send_file(output_path, as_attachment=True, download_name="三星回单识别结果.xlsx")
 
 
 @app.get("/files/selected-seal/<int:result_id>.png")

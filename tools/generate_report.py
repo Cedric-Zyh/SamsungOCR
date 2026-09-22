@@ -12,7 +12,7 @@ import app as app_module
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="离线生成与 /api/report 相同的准确率报表")
-    parser.add_argument("--backend", default="hybrid", help="OCR 后端筛选")
+    parser.add_argument("--backend", default="paddle_v6", help="OCR 后端筛选")
     parser.add_argument("--output", type=Path, required=True, help="JSON 输出路径")
     args = parser.parse_args()
 

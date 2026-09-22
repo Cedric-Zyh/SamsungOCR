@@ -16,7 +16,7 @@
 - 日期或印章证据不足时自动进入“待复核”，不会强行判定通过；
 - 原始机器值、人工修改值、修改时间、最终状态和复核历史；
 - 批量进度、失败原因、单张重试、筛选、批量确认与重新识别；
-- 每张回单一行的 Excel 导出及准确率/错误类型统计。
+- 页面内的准确率、错误类型统计和人工复核闭环。
 
 当前日期识别、印章识别及匹配评分的完整规则见 [`docs/日期识别、印章识别与匹配比较逻辑说明.md`](docs/日期识别、印章识别与匹配比较逻辑说明.md)。
 
@@ -1527,22 +1527,15 @@ Hybrid 重跑后该日期由 45% 人工候选提升为 100% 可靠匹配；日�
 
 浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001)。首页会按 `ground_truth.json` 动态列出当前全部已标注标准回单（目前 301 张），也可以一次拖入多图或选择整个文件夹。另有 10 个委托书/分页页面记录在 `document_ground_truth.json` 中，数据目录 311 张图片已全部按适用评测口径分类。
 
-识别结果保存于 `storage/results.db`。上传图片、标注预览、中间证据图和导出文件分别位于 `storage/uploads/`、`storage/previews/`、`storage/artifacts/` 和 `storage/exports/`。macOS 默认使用“混合 OCR（Paddle Mobile + Vision）”：表单与商品走 Paddle，手写日期与印章走 Vision；未安装 Paddle 时自动回退到系统 Vision。Windows 默认使用 PaddleOCR Mobile。两种平台都可以在上传区选择已安装且适用的其他后端。
+识别结果保存于 `storage/results.db`。上传图片、标注预览和中间证据图分别位于
+`storage/uploads/`、`storage/previews/` 和 `storage/artifacts/`。本地默认使用
+PP-OCRv6 Small；当前版本不再提供 Excel 导出，也不需要 Node.js。
 
 ## OCR 引擎与模型目录
 
-PaddleOCR 提供两档：
+当前本地模型只有 PP-OCRv6 Small：`PP-OCRv6_small_det` + `PP-OCRv6_small_rec`。旧任务中保存的 Paddle Mobile、Paddle Server 和混合后端编号会自动转到 PP-OCRv6 Small，不再加载已下线的 v5 模型。印章专用入口仍只处理印章区域，不参与页面和日期识别。
 
-- Mobile：`PP-OCRv5_mobile_det` + `PP-OCRv5_mobile_rec`，适合日常批量处理；
-- Server（大模型）：`PP-OCRv5_server_det` + `PP-OCRv5_server_rec`。它保留为用户可选和困难印章/日期的受限审计兜底，不替换默认 Mobile。最新困难样本中 Mobile/Server 都得到 10/10 字段、9/9 商品单元格和相同的安全日期结论，但 Server 用时 119.88 秒、Mobile 59.14 秒；67 行双页长表中 Server 1400/1800 像素配置与已核验 Mobile 商品真值的一致率分别为 94.69%/95.52%，主要错误是物料号 `0/O` 混淆，未显示整体收益。日期行专项中大模型能稳定补出个别完整年份日期，也会把 14 日读成 4 日；因此不同年份的 Server 结果必须在紧/宽裁剪一致后才能作为最高 35% 的人工证据，不能单模型自动放行。
-
-混合模式也提供两档：
-
-- `hybrid`：表单/商品使用 Paddle Mobile，日期/印章使用 macOS Vision；
-- `hybrid_server`：表单/商品使用 Paddle Server，日期/印章使用 macOS Vision；
-- Windows/Linux 没有 Vision 时不会报错，而是自动将日期/印章回退到 Paddle Mobile。每条结果会记录页面、日期和印章三个阶段实际使用的后端，便于复现与审计。
-
-本机检测到 `/Volumes/SN770/OCR/` 时会自动将 PaddleX 模型缓存写到该目录，避免占用系统盘；其他机器可以配置：
+本机检测到 `/Volumes/SN770/OCR/` 时会自动将 PaddleX 模型缓存写到该目录，其他机器可以配置：
 
 ```bash
 export PADDLE_MODEL_HOME="/你的大容量磁盘/OCR"
@@ -1556,20 +1549,6 @@ $env:PADDLE_MODEL_HOME = "D:\OCR"
 python app.py
 ```
 
-Server 整页默认在最长边超过 1400 像素时生成临时等比缩放副本，避免高分辨率扫描件把本地进程以退出码 137 终止；所有框坐标仍按归一化比例映射，原图和中间证据图不被覆盖。结果会记录实际上限。内存充足且更看重小字分辨率时可显式调高，例如：
-
-```bash
-export PADDLE_SERVER_MAX_SIDE=1800
-/Users/zhuyihao/anaconda3/bin/python app.py
-```
-
-```powershell
-$env:PADDLE_SERVER_MAX_SIDE = "1800"
-python app.py
-```
-
-本次长表测试中 1800 比 1400 多匹配 5 个商品单元格，但平均耗时从 76.48 秒增加到 154.94 秒，且仍不及 Mobile；因此 1400 保持为低内存安全默认值。
-
 ### PP-OCR 推理引擎（`PADDLE_OCR_ENGINE`）
 
 本地 PP-OCR 默认通过 ONNX Runtime 推理。同一张 1647×2392 回单整页识别由 9.8 秒降到约 1.7 秒，印章彩色隔离裁剪图约 3 倍加速，逐字输出与默认内核一致。首次使用会把每个模型转换一次并缓存在模型目录下的 `*_onnx` 子目录，此后加载约 0.4 秒；未安装 onnxruntime 的机器会自动回落到默认内核，不受影响。
@@ -1581,22 +1560,17 @@ export PADDLE_OCR_ENGINE=onnxruntime   # 显式启用（默认值）
 
 ### 印章二次审计（`SEAL_AUDIT_MODE`）
 
-印章识别在常规读取之外，还会对只保留章色墨水的衍生图做一次二次审计（补读浅色章、被表格线切断的章、错一字的章型）。它可能加载识别方案未选择的模型，因此由本开关统一决定：
+印章识别可以对章色处理图做补充复算。当前本地模型只有 PP-OCRv6 Small，不再加载 Paddle Mobile 或 Paddle Server。
 
-| 取值 | 行为 | 单张印章识别耗时 |
-| --- | --- | --- |
-| `auto`（默认） | 识别方案已允许 Server 时用它做跨模型审计，否则跳过并在结果里写明原因 | 命中 0.5～1.5 秒，未命中不加载 |
-| `server` | 始终用 PP-OCRv5 Server 跨模型审计，并为其放开阶段授权 | 约 11 秒（ONNX 引擎下） |
-| `local` | 改用本地轻量模型复算，不加载 Server | 约 2～4 秒 |
-| `off` | 完全跳过 | 约 1.5 秒 |
-
-默认 `auto` 与历史行为一致：命令行 `analyzer.analyze`（不设授权范围）会执行审计，网页端识别方案在未勾选 Server 时跳过。**注意该支路不是可有可无的兜底**——在 `数据/7266220440.jpg` 上，跳过审计时印章判定为「无法判断」，执行审计后才正确判为「匹配」（真值 `seal_should_match = true`）。批量场景若更看重吞吐，可显式设为 `local` 或 `off`。
-
-审计的实际后端、模式、是否参与匹配、以及被跳过的原因都会写入回单记录页的印章证据：`server_audit_backend` / `server_audit_mode` / `server_audit_used_for_matching` / `server_audit_skipped_reason`。
+| 取值 | 行为 |
+| --- | --- |
+| `auto`（默认） | 本地 v6 方案跳过同模型二次审计；远程印章方案按需使用 v6 复算 |
+| `local` | 对远程印章方案使用本地 v6 复算 |
+| `off` | 完全跳过印章二次审计 |
 
 ```bash
-export SEAL_AUDIT_MODE=server     # 打开完整的跨模型审计
-export SEAL_AUDIT_MODE=local      # 省时档：只用本地轻量模型复算
+export SEAL_AUDIT_MODE=local      # 对远程印章方案使用 v6 复算
+export SEAL_AUDIT_MODE=off        # 批量吞吐优先时关闭
 ```
 
 Windows 首次运行建议先执行专项自检；它会核对当前解释器、Paddle/PaddleOCR
@@ -1607,37 +1581,22 @@ python -m tools.windows_smoke --output storage\windows-smoke.json
 python -m pytest tests/test_ocr_backends.py tests/test_platform_runtime.py -q
 ```
 
-也可以使用项目自带的启动脚本，一次设置模型目录、Node 路径并在自检通过后启动：
+也可以使用项目自带的启动脚本，一次设置模型目录并在自检通过后启动：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\start_windows.ps1 `
   -Python "C:\Users\你的用户名\anaconda3\python.exe" `
-  -ModelHome "D:\OCR" `
-  -Node "C:\Program Files\nodejs\node.exe"
+  -ModelHome "D:\OCR"
 ```
 
-Windows 没有 Vision，默认使用 Paddle Mobile。选择 `hybrid` 时页面、日期和
-印章都会落到同一 Mobile 模型，因此原图/去色/日期行等不同预处理只作为候选，
-不当作独立模型印证；日期和印章置信度最高显示 68%，自动进入人工复核。若机器
-内存足够，可选择 `hybrid_server`，由 Server 识别整页、Mobile 识别日期/印章，
-但仍需满足跨模型严格规则。界面会显示当前路由和安全策略。
+Windows/Linux 同样使用 PP-OCRv6 Small；原图、去色和日期行等不同预处理只作为
+同一模型的候选证据，不当作独立模型印证。界面会显示当前路由和安全策略。
 
-Excel 导出还需要 Node.js。程序会依次读取 `WORKSPACE_NODE` 和系统 `PATH`；
-Windows 可在 Node 未加入 PATH 时显式设置：
-
-```powershell
-$env:WORKSPACE_NODE = "C:\Program Files\nodejs\node.exe"
-```
-
-缺少 Node 时接口会返回明确的 503 提示，不会生成损坏的空工作簿。
-Paddle 的 OpenMP 兼容设置不会传入 Excel 子进程，避免 OCR 成功后导出阶段受
-另一套原生运行时影响。
-
-也可以设置 `OCR_BACKEND=vision`、`OCR_BACKEND=paddle`、`OCR_BACKEND=paddle_server`、`OCR_BACKEND=hybrid` 或 `OCR_BACKEND=hybrid_server` 改变默认引擎。任务和每张回单都会保存实际使用的逻辑后端与阶段路由；重新识别时以界面当前选择为准。
+也可以设置 `OCR_BACKEND=paddle_v6` 改变默认引擎。旧的 `paddle`、`paddle_server`、`hybrid` 和 `hybrid_server` 设置会兼容转到 `paddle_v6`。
 
 应用启动时会关闭上次进程异常退出遗留的批次：状态改为“已中断”，未处理数量
-计入失败和待复核，并继续排除在正式准确率分母之外，避免 Server 大模型被系统
-终止后任务永久停留在“处理中”。
+计入失败和待复核，并继续排除在正式准确率分母之外，避免任务在进程终止后永久
+停留在“处理中”。
 
 ## 人工复核
 
@@ -1670,24 +1629,19 @@ export SEAL_API_KEY="你的密钥"
 ## 标注样单验收（当前 301 张标准回单 + 10 个文档路由页面）
 
 ```bash
-/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend vision
-/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend paddle
-/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend paddle_server
-/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend hybrid
-/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend hybrid_server
+/Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six --backend paddle_v6
 
-# 原始六张基线 + 人工修改、不可变机器原值、历史、筛选、证据图、批量安全规则和 Excel
+# 原始六张基线 + 人工修改、不可变机器原值、历史、筛选、证据图和批量安全规则
 /Users/zhuyihao/anaconda3/bin/python -m tools.e2e_six \
-  --backend hybrid --limit 6 --exercise-review \
-  --report-path storage/e2e-six-hybrid-acceptance.json \
-  --excel-path outputs/三星回单-六张端到端验收.xlsx
+  --backend paddle_v6 --limit 6 --exercise-review \
+  --report-path storage/e2e-six-hybrid-acceptance.json
 ```
 
 不启动 Web 服务也可以生成与页面相同口径的离线报表：
 
 ```bash
 /Users/zhuyihao/anaconda3/bin/python -m tools.generate_report \
-  --backend hybrid --output storage/accuracy-report-301-hybrid.json
+  --backend paddle_v6 --output storage/accuracy-report-301-paddle-v6.json
 ```
 
 下段保留各次回归和规则演进的历史累计数字；若与文首“最新验收快照”不同，
@@ -1699,14 +1653,12 @@ export SEAL_API_KEY="你的密钥"
 
 字段规则会记录 OCR 原值及校正来源；已复核 EAN 商品目录与客户签章主数据仅在同页重复字段或明确业务编号、站号、章类型提供独立证据时使用。客户名或仓库名只剩孤立表格笔画时，必须由另一行完整公司和一致的 SoldTo/ShipToCode 共同恢复。客户地址与收货地址仅差省级前缀、数字段完全一致且相似度至少 96% 时，才补回至多两个 OCR 漏字。EAN 为空时，只有物料号与已复核商品目录完全一致且目录 EAN 校验位有效才允许回填。Server 大模型的部分日期或印章文本只作为复核候选；证据不足、时间顺序冲突或偏离标准日期栏时继续进入人工复核。圆章展开后的公司名与章类型可能方向相反，只有公司名已经形成强证据、要求含明确章类型、同一颜色隔离圆章的 180° 展开图或保留章色旋转对照图又读出章类型时，才合并为可靠匹配；不同印章区域的公司名和通用“专用章”不得拼接。常规模型若已经读出一个完整但不同的近似公司全称，Server 后续结果只显示在审计界面、不得参与匹配覆盖这条反证。界面会展示日期区域原图、去章色、区域去线、日期行原图、日期行去章色、日期行去表格线，以及印章的颜色分离、圆周展开、圆章展开 180°、保留章色 90°/180°/270° 对照图和必要的矩形章旋转图。文档类型分流覆盖标准回单、商品续页、仓库货物接收委托书和未知页；未补充人工真值的图片不会进入准确率分母。
 
-可使用 `python -m tools.export_task <task_id> --output <文件.xlsx>` 离线复验指定批次导出。132 张阶段对 127/129/130 三张复核结果的工作簿检查确认：订单号列为文本、要求/实际日期列为 `yyyy-mm-dd`、中文和人工备注完整，且无公式错误。
-
 新增标准回单可以限制后端、文件名和数量并把结果写入数据库：
 
 ```bash
 /Users/zhuyihao/anaconda3/bin/python -m tools.batch_validate \
-  --backend hybrid --filename 7266702320.jpg --filename 7266933626.jpg \
-  --save-db --output storage/new-sample-pilot-hybrid.json
+  --backend paddle_v6 --filename 7266702320.jpg --filename 7266933626.jpg \
+  --save-db --output storage/new-sample-pilot-paddle-v6.json
 ```
 
 委托书、商品续页和双页回单使用独立真值与评估命令，不混入标准回单分母：
@@ -1745,6 +1697,16 @@ Hybrid 对“签章要求”会把同一行被 OCR 拆开的相邻文本框拼�
 ```bash
 /Users/zhuyihao/anaconda3/bin/python -m pytest -q
 ```
+
+## Windows 单机发布包
+
+仓库中的 `.github/workflows/build-windows.yml` 会在 GitHub Actions 的 Windows
+运行器上生成 `SamsungReceipt-windows-x64.zip`。推送 `v*` 标签后，压缩包会同时作为
+GitHub Release 附件发布；也可以在 Actions 页面手动运行工作流下载构建产物。
+
+压缩包内的 `启动.bat` 会启动本地服务并打开浏览器，运行数据保存在
+`%LOCALAPPDATA%\SamsungReceipt`，不会写入安装目录。首次使用需要联网下载 PaddleOCR
+模型；不需要安装 Node.js，也不需要安装 Excel 相关组件。
 
 macOS Vision 在某些受限沙箱中可能无法创建图像缓冲区；在本机 PyCharm/Terminal 中使用上述解释器运行即可。
 

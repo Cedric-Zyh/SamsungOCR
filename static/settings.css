@@ -57,6 +57,16 @@
 .settings-scope-note { border-top:1px solid var(--archive-soft-line); padding-top:16px; font-size:12px; line-height:1.8; }
 .settings-scope-note strong { display:block; font-size:12px; color:var(--archive-text); font-weight:500; }
 .settings-scope-note span { display:block; margin-top:5px; color:var(--archive-muted); }
+.retention-settings { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-top:16px!important; }
+.retention-settings-copy h2 { font-size:14px!important; }
+.retention-settings-copy p { margin:5px 0 0; color:var(--archive-muted); font-size:12px; }
+.retention-form { display:flex; align-items:center; gap:9px; flex-wrap:wrap; color:var(--archive-text); font-size:12px; }
+.retention-input-wrap { display:flex; align-items:center; gap:6px; }
+.retention-input-wrap input { width:82px; padding:7px 8px; border:1px solid var(--archive-line); border-radius:2px; background:var(--archive-paper); color:var(--archive-ink); font:inherit; }
+.retention-input-wrap input:focus { border-color:var(--archive-accent); outline:2px solid rgba(148,115,67,.14); }
+.retention-input-wrap span { color:var(--archive-muted); }
+.retention-save-status { min-width:100px; color:var(--archive-success); }
+.retention-save-status[data-tone="error"] { color:var(--archive-danger); }
 .settings-page .settings-note { position:relative; color:var(--archive-warning); background:#ede5d6; padding:10px 12px; border:1px solid #d8cbb3; border-radius:2px; margin:10px 0 0; font-size:12px; line-height:1.8; }
 .settings-page .settings-note-error { color:var(--archive-danger); background:#f2e3dc; border-color:#d9b8aa; margin:0 0 14px; }
 .settings-page #plan-page-note,.settings-page #remote-plan-note { color:var(--archive-text); background:#eae6de; border-color:var(--archive-soft-line); }

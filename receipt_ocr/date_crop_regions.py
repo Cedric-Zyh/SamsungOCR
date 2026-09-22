@@ -104,6 +104,7 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
     )
     region.evidence.line_rows = []
     region.evidence.accepted_line_rows = []
+    region.evidence.display_line_rows = []
     region.evidence.line_variants = []
     region.evidence.display_line_variants = []
     region.evidence.cross_model_month_day_confirmed = False
@@ -111,10 +112,14 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
         from .paddle_ocr import recognize_line
 
         model_variant = variant_of(region.evidence.line_backend) or "mobile"
+        # The date decision is intentionally based only on the three images
+        # exposed in the review UI: line original, line with stamp colour
+        # removed, and the outer-frame-cleaned line.  The old table-line OCR
+        # was useful for experiments but could inject a conflicting day that
+        # the reviewer could not see.
         for preprocessing, candidate, strict_only in (
             ("日期行原图", region.images.line_raw, False),
             ("日期行去印章色", region.images.line_color_clean, False),
-            ("日期行去表格线", region.images.line_table_clean, True),
         ):
             try:
                 current_rows = recognize_line(candidate, model_variant=model_variant)
@@ -172,6 +177,11 @@ def _recognize_region_lines(run: DateCropRun, region: DateCropRegion) -> None:
             except Exception:
                 display_rows = []
             display_rows = normalize_date_only_rows(display_rows)
+            region.evidence.display_line_rows.extend(display_rows)
+            # The third visible image is part of the same decision set.  It
+            # uses the same local line coordinate system as the other two.
+            region.evidence.line_rows.extend(display_rows)
+            region.evidence.accepted_line_rows.extend(display_rows)
             region.evidence.display_line_variants.append(
                 {
                     "preprocessing": "日期行去外框",

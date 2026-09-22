@@ -39,6 +39,7 @@ _CHANNEL_KEYS = (
     "confidence",
     "requirement_coverage",
     "all_recognized",
+    "display_text",
 )
 
 

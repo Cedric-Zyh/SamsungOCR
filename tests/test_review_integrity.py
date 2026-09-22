@@ -1,6 +1,5 @@
 from copy import deepcopy
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -143,24 +142,12 @@ def test_bulk_review_rollback_on_later_failure(database, monkeypatch):
     assert all(database.history(i) == [] for i in ids)
 
 
-def test_filter_and_export_include_all_associated_pages(database, monkeypatch, tmp_path):
+def test_filter_includes_all_associated_pages(database):
     paginated_pair(database)
     client = web.app.test_client()
     rows = client.get('/api/results?order_id=ORDER-123&page=1&page_size=1').get_json()
     assert rows['total'] == 1
     assert len(rows['items'][0]['product_table']['rows']) == 2
-    captured = []
-    def export(command, **kwargs):
-        from pathlib import Path
-        captured.append(json.loads(Path(command[-2]).read_text()))
-        Path(command[-1]).write_bytes(b'test-workbook')
-        return SimpleNamespace(returncode=0, stderr='')
-    monkeypatch.setattr(web, 'EXPORT_DIR', tmp_path)
-    monkeypatch.setattr(web, 'NODE_EXECUTABLE', 'node')
-    monkeypatch.setattr(web.subprocess, 'run', export)
-    response = client.get('/api/export.xlsx?order_id=ORDER-123')
-    assert response.status_code == 200
-    assert len(captured[0]['results'][0]['product_table']['rows']) == 2
 
 
 def test_reviewable_pagination_excludes_failures_and_busy_associated_pages(database):

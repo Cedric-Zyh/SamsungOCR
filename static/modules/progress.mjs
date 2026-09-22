@@ -5,7 +5,7 @@ import {confirmInline} from './inline_confirm.mjs';
 
 const WORK_PAGE_SIZE = 50;
 const START_BATCH_SIZE = 5000;
-import {WORK_FILTERS, DOCUMENT_TYPES, overviewStatus, overviewType, overviewCustomer, overviewCounts, matchesOverview, selectionKey, deletionTarget} from './workbench_overview.mjs';
+import {WORK_FILTERS, DOCUMENT_TYPES, overviewStatus, overviewType, overviewCustomer, overviewCounts, matchesOverview, workFilterValues, selectionKey, deletionTarget} from './workbench_overview.mjs';
 
 export function createProgress({
   environment, ui, importsState, progressState, recordsState, reportState, resultsState, reviewState,
@@ -15,6 +15,30 @@ export function createProgress({
   const {$, $$, toast} = ui;
   const selected = new Set();
   let shownItems = [], deleting = false;
+  function activeWorkFilters() {
+    // A null value means the initial/default scalar filter is still in use;
+    // an empty array is an intentional "全部状态" selection.
+    return workFilterValues(progressState.workFilters === null || progressState.workFilters === undefined
+      ? progressState.workFilter : progressState.workFilters);
+  }
+  function setWorkFilters(filters) {
+    const values = workFilterValues(filters);
+    progressState.workFilters = values;
+    progressState.workFilter = values.length === 0 ? 'all'
+      : values.length === 1 ? values[0]
+      : values.length === 2 && values.includes('ready') && values.includes('running') ? 'processing' : 'multi';
+  }
+  function setWorkFilter(filter) {
+    // Programmatic queue actions select a logical filter and clear any manual
+    // multi-selection that was active before the action.
+    progressState.workFilters = null;
+    progressState.workFilter = filter;
+  }
+  function hasOnlyWorkFilter(filter) {
+    const values = activeWorkFilters();
+    const expected = workFilterValues(filter);
+    return values.length === expected.length && expected.every(value => values.includes(value));
+  }
   const calendar = createImportCalendar({environment, ui, api, prefix: 'progress-calendar', popup: '#progress-calendar',
     readDate: () => $('#progress-date').value,
     selectDate: day => { $('#progress-date').value = day; changeProcessingDay(); }});
@@ -22,7 +46,7 @@ export function createProgress({
   async function showQueuedRetry(task) {
     $('#progress-date').value = (task.created_at || '').slice(0, 10) || localToday();
     try { localStorage.setItem('receipt-progress-date', $('#progress-date').value); } catch (_) {}
-    progressState.workFilter = 'processing';
+    setWorkFilter('processing');
     progressState.workVisibleLimit = WORK_PAGE_SIZE;
     location.hash = 'progress';
     toast('已加入后台识别队列，可以关闭页面。', 'success');
@@ -126,20 +150,30 @@ export function createProgress({
   }
 
   function renderWorkbenchRows() {
-    if (!Object.hasOwn(WORK_FILTERS, progressState.workFilter)) progressState.workFilter = 'review';
-    const items = progressState.workItems || [], visible = ReceiptWorkbench.ordered(items).filter(item => matchesOverview(item, progressState.workFilter, ReceiptWorkbench, progressState.workType || '', progressState.workSearch || ''));
+    if (progressState.workFilters !== null && progressState.workFilters !== undefined) {
+      progressState.workFilters = workFilterValues(progressState.workFilters);
+    } else if (!Object.hasOwn(WORK_FILTERS, progressState.workFilter)) {
+      setWorkFilter('review');
+    }
+    const filters = activeWorkFilters();
+    const items = progressState.workItems || [], visible = ReceiptWorkbench.ordered(items).filter(item => matchesOverview(item, filters, ReceiptWorkbench, progressState.workType || '', progressState.workSearch || ''));
     const limit = progressState.workVisibleLimit || WORK_PAGE_SIZE, shown = visible.slice(0, limit);
-    $$('[data-work-filter]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.workFilter === progressState.workFilter)));
+    $$('[data-work-filter]').forEach(button => {
+      const value = button.dataset.workFilter;
+      const pressed = value === 'all' ? !filters.length : filters.includes(value);
+      button.setAttribute('aria-pressed', String(pressed));
+    });
     $$('[data-work-count]').forEach(label => label.textContent = items.filter(item => matchesOverview(item, label.dataset.workCount, ReceiptWorkbench)).length);
     shownItems = shown;
     const existing = new Set(items.filter(selectable).map(selectionKey));
     for (const key of selected) if (!existing.has(key)) selected.delete(key);
     renderOverview(items);
-    const label = WORK_FILTERS[progressState.workFilter];
+    const label = filters.length ? (filters.length === 2 && filters.includes('ready') && filters.includes('running')
+      ? WORK_FILTERS.processing : filters.map(value => WORK_FILTERS[value]).join('、')) : WORK_FILTERS.all;
     $('#workbench-visible-count').textContent = `${label} ${visible.length} 张`;
     if ($('#workbench-total-label')) $('#workbench-total-label').textContent = `当天共 ${items.length} 张`;
     if ($('#workbench-list-title')) $('#workbench-list-title').textContent = `${label}单据`;
-    if ($('#workbench-reason-heading')) $('#workbench-reason-heading').textContent = ['processing', 'ready', 'running'].includes(progressState.workFilter) ? '处理进度' : '需要关注 / 核验结果';
+    if ($('#workbench-reason-heading')) $('#workbench-reason-heading').textContent = filters.length && filters.every(value => ['ready', 'running'].includes(value)) ? '处理进度' : '需要关注 / 核验结果';
     if ($('#workbench-page-note')) $('#workbench-page-note').textContent = `已显示 ${shown.length} / ${visible.length} 张`;
     if ($('#workbench-more')) {
       $('#workbench-more').classList.toggle('hidden', shown.length >= visible.length);
@@ -224,7 +258,7 @@ export function createProgress({
       const customerName = record.fields?.['客户名称'] || '';
       const fileSubtitle = [customerName, order ? `订单 ${order}` : ''].filter(Boolean).join(' · ');
       return `<tr class="work-item work-item-${category}"><td><input type="checkbox" class="workbench-row-check" data-work-select="${escapeHtml(selectionKey(item))}" aria-label="选择 ${escapeHtml(item.filename)}" ${selected.has(selectionKey(item)) ? 'checked' : ''} ${!selectable(item) || deleting ? 'disabled' : ''}><span class="file-line"><strong title="${escapeHtml(item.filename)}">${escapeHtml(filenameParts(item.filename).name)}</strong>${fileSubtitle ? `<small title="${escapeHtml(fileSubtitle)}">${escapeHtml(fileSubtitle)}</small>` : ''}</span></td><td class="status-cell"><span class="workbench-row-status" data-status="${overviewStatus(item, ReceiptWorkbench)}">${WORK_FILTERS[overviewStatus(item, ReceiptWorkbench)] || '已取消'}</span>${typeTag}</td><td class="attention-cell">${resultHtml}</td><td class="note-cell">${noteHtml}</td><td>${actionGroup}</td></tr>`;
-    }).join('') || `<tr><td colspan="5" class="empty-state"><strong>${!items.length ? '这一天还没有回单' : `暂无符合条件的${label}单据`}</strong><p>${!items.length ? '选择其他日期，或点击上方“导入回单”。' : progressState.workFilter === 'review' && items.some(item => ReceiptWorkbench.category(item) === 'processing') ? '识别完成后，需要确认的回单会出现在这里。' : '可切换其他状态，或查看当天全部记录。'}</p></td></tr>`;
+    }).join('') || `<tr><td colspan="5" class="empty-state"><strong>${!items.length ? '这一天还没有回单' : `暂无符合条件的${label}单据`}</strong><p>${!items.length ? '选择其他日期，或点击上方“导入回单”。' : hasOnlyWorkFilter('review') && items.some(item => ReceiptWorkbench.category(item) === 'processing') ? '识别完成后，需要确认的回单会出现在这里。' : '可切换其他状态，或查看当天全部记录。'}</p></td></tr>`;
     if (progressState.queueMarkup !== markup) { $('#queue').innerHTML = markup; progressState.queueMarkup = markup; }
     syncSelection();
   }
@@ -237,8 +271,10 @@ export function createProgress({
     const button = $('#workbench-start-review');
     const queueToggle = $('#queue-toggle');
     const cancelAll = $('#workbench-cancel-all');
+    const processingOnly = hasOnlyWorkFilter('processing');
+    const reviewOnly = hasOnlyWorkFilter('review');
     queueToggle?.classList.remove('hidden');
-    cancelAll?.classList.toggle('hidden', progressState.workFilter !== 'processing');
+    cancelAll?.classList.toggle('hidden', !processingOnly);
     if (cancelAll) {
       const jobs = cancelableJobs();
       cancelAll.disabled = !jobs.length || !!progressState.queueCancelSaving || !!progressState.queueStartSaving || !!progressState.queueControlSaving;
@@ -247,9 +283,9 @@ export function createProgress({
       cancelAll.setAttribute('aria-busy', String(!!progressState.queueCancelSaving));
     }
     if (!button) return;
-    button.classList.toggle('hidden', progressState.workFilter !== 'review');
+    button.classList.toggle('hidden', !reviewOnly && !processingOnly);
     const ready = progressState.dailyReady && progressState.queueDay === $('#progress-date').value;
-    if (progressState.workFilter === 'processing') {
+    if (processingOnly) {
       button.textContent = '开始识别';
       button.disabled = !ready || !readyJobs().length || !!progressState.queueStartSaving;
       return;
@@ -287,7 +323,7 @@ export function createProgress({
       const result = await api('/api/jobs/cancel', {method: 'POST', json: {ids}});
       const count = Number(result.deleted_ids?.length) || 0;
       toast(`已取消并删除 ${count} 张待处理回单。`, 'success');
-      progressState.workFilter = 'processing';
+      setWorkFilter('processing');
       progressState.workVisibleLimit = WORK_PAGE_SIZE;
       await loadDailyResults({refreshRecords: false});
     } catch (error) {
@@ -328,7 +364,7 @@ export function createProgress({
         // A day change during the request must keep its own list and controls.
         if (progressState.queueDay === day && $('#progress-date').value === day) {
           for (const job of result.items || []) if (progressState.queueJobs.has(job.id)) progressState.queueJobs.set(job.id, job);
-          progressState.workFilter = 'processing'; progressState.workVisibleLimit = WORK_PAGE_SIZE;
+          setWorkFilter('processing'); progressState.workVisibleLimit = WORK_PAGE_SIZE;
         }
         if (result.control) progressState.queueControl = result.control;
       }
@@ -415,7 +451,7 @@ export function createProgress({
       counts.pending_review = items.filter(item => ReceiptWorkbench.category(item) === 'review').length;
       counts.passed = items.filter(item => ReceiptWorkbench.category(item) === 'passed').length;
       if (!progressState.workInitialFilterResolved) {
-        if (!progressState.workFilterChosen && progressState.workFilter === 'review' && counts.ready && !counts.pending_review) progressState.workFilter = 'processing';
+        if (!progressState.workFilterChosen && hasOnlyWorkFilter('review') && counts.ready && !counts.pending_review) setWorkFilter('processing');
         progressState.workInitialFilterResolved = true;
       }
       if (control.paused) counts.status = control.status === 'pausing' ? '暂停中' : '已暂停';
@@ -490,8 +526,16 @@ export function createProgress({
     $('#queue-start')?.addEventListener('click', startRecognition);
     $$('[data-work-filter]').forEach(button => button.addEventListener('click', () => {
       selected.clear();
-      progressState.workFilter = button.dataset.workFilter;
-      if (progressState.workFilter === 'all') { progressState.workType = ''; progressState.workSearch = ''; if ($('#workbench-search')) $('#workbench-search').value = ''; }
+      const filter = button.dataset.workFilter;
+      if (filter === 'all') {
+        setWorkFilters([]);
+        progressState.workType = ''; progressState.workSearch = '';
+        if ($('#workbench-search')) $('#workbench-search').value = '';
+      } else {
+        const filters = new Set(activeWorkFilters());
+        if (filters.has(filter)) filters.delete(filter); else filters.add(filter);
+        setWorkFilters([...filters]);
+      }
       progressState.workFilterChosen = true;
       progressState.workVisibleLimit = WORK_PAGE_SIZE;
       renderWorkbenchRows();
@@ -506,7 +550,7 @@ export function createProgress({
     $('#workbench-start-review')?.addEventListener('click', async () => {
       syncStartReview();
       if ($('#workbench-start-review').disabled) return;
-      if (progressState.workFilter === 'processing') { await startRecognition(); return; }
+      if (hasOnlyWorkFilter('processing')) { await startRecognition(); return; }
       const day = $('#progress-date').value, first = reviewItems()[0];
       progressState.workReviewOpening = true;
       syncStartReview();
@@ -568,7 +612,7 @@ export function createProgress({
         progressState.workPendingJobs ||= new Set(); progressState.workPendingJobs.add(id); start.disabled = true;
         try {
           await api('/api/jobs/start', {method: 'POST', json: {ids: [id]}});
-          progressState.workFilter = 'processing'; progressState.workVisibleLimit = WORK_PAGE_SIZE;
+          setWorkFilter('processing'); progressState.workVisibleLimit = WORK_PAGE_SIZE;
           await loadDailyResults({refreshRecords: false});
         } catch (error) { toast(error.message, 'danger'); start.disabled = false; }
         finally { progressState.workPendingJobs.delete(id); }
@@ -595,7 +639,7 @@ export function createProgress({
         button.disabled = true;
         try {
           await api(`/api/jobs/${encodeURIComponent(id)}/retry`, {method: 'POST'});
-          progressState.workFilter = 'processing'; progressState.workVisibleLimit = WORK_PAGE_SIZE;
+          setWorkFilter('processing'); progressState.workVisibleLimit = WORK_PAGE_SIZE;
           await loadDailyResults();
         }
         catch (error) { toast(error.message, 'danger'); button.disabled = false; }

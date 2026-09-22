@@ -87,7 +87,7 @@ def _recover_missing_product_grades(
         # Paddle's recognition-only model on the exact grade column.
         from .paddle_ocr import recognize_line
 
-        line_model = "server" if ocr_backend == "paddle_server" else "mobile"
+        line_model = "v6"
         recovered_by_index: dict[int, tuple[str, float]] = {}
         for index in missing_indexes:
             detail = product_table["rows"][index]

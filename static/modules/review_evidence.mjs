@@ -14,6 +14,52 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
     return `<label class="field-editor ${meta.low_confidence ? 'low-confidence' : ''}"><span>${escapeHtml(name)}<em>${escapeHtml(evidenceLabel)}</em></span><textarea ${meta.pending ? 'readonly' : ''} name="field:${escapeHtml(name)}" rows="${String(value).length > 45 ? 3 : 1}">${escapeHtml(value)}</textarea>${correctionNote}${meta.low_confidence ? '<small>低置信度，请人工检查</small>' : ''}</label>`;
   }
 
+  function mergeSealArtifacts(items) {
+    const merged = [];
+    const byStamp = new Map();
+    for (const item of items || []) {
+      // The local and dedicated routes enumerate the same region set, but
+      // their role labels can differ slightly. Index + ink color is the
+      // stable physical-stamp identity for this evidence payload.
+      const key = `${item.index ?? ''}|${item.color ?? ''}`;
+      const current = byStamp.get(key);
+      if (!current) {
+        const copy = {...item};
+        byStamp.set(key, copy);
+        merged.push(copy);
+        continue;
+      }
+      // The regular and dedicated routes describe the same physical box.
+      // Keep one image set and attach the other route's readings to it.
+      if (item.seal_model_readings?.length) {
+        current.seal_model_readings = item.seal_model_readings;
+        current.seal_model_backend = item.seal_model_backend || '';
+      }
+      for (const [name, value] of Object.entries(item)) {
+        if (name === 'seal_model_readings' || name === 'seal_model_backend') continue;
+        if ((current[name] == null || current[name] === '') && value) current[name] = value;
+      }
+      if (current.shape !== '椭圆' && item.shape === '椭圆') current.shape = '椭圆';
+    }
+    return merged;
+  }
+
+  function sealSourceResults(item) {
+    const rows = [];
+    const regularRing = [item.unwrapped_text, item.secondary_unwrapped_text].filter(Boolean).join(' | ');
+    const regularType = item.round_type_band_text || '';
+    const regularText = [regularRing, regularType].filter(Boolean).join(' | ');
+    if (regularText) rows.push(`<div class="seal-source-row"><b>${escapeHtml(item.ocr_backend || '本地 OCR')}</b><span>${escapeHtml(regularText)}</span></div>`);
+    if (item.seal_model_readings?.length) {
+      const readings = item.seal_model_readings;
+      const ring = readings.filter(row => ['ellipse_unwrapped', 'unwrapped'].includes(row.variant)).flatMap(row => row.texts || []).filter(Boolean);
+      const type = readings.filter(row => ['ellipse_type_band', 'round_type_band'].includes(row.variant)).flatMap(row => row.texts || []).filter(Boolean);
+      const dedicatedText = [...new Set([...ring, ...type])].join(' | ');
+      if (dedicatedText) rows.push(`<div class="seal-source-row"><b>${escapeHtml(item.seal_model_backend || '印章专用模型')}</b><span>${escapeHtml(dedicatedText)}</span></div>`);
+    }
+    return rows.length ? `<div class="seal-source-results"><small>多来源识别结果</small>${rows.join('')}</div>` : '';
+  }
+
   function renderProductTable(table, root) {
     const section = $('[data-product-section]', root), target = $('[data-product-table]', root);
     if (!table?.rows?.length) { target.innerHTML = `<p class="empty-state">${table?.status === '未执行' ? '本次未开启商品明细识别' : table?.status === '识别失败' ? '商品明细识别失败' : '本回单没有识别到商品明细'}</p>`; return; }
@@ -43,6 +89,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
       return;
     }
     if (!artifacts.length) { target.innerHTML = '<div class="empty-state">没有保存的中间处理图（旧记录可重新识别生成）</div>'; return; }
+    if (reviewState.artifactTab === 'seals') artifacts = mergeSealArtifacts(artifacts);
     if (reviewState.artifactTab === 'date') {
       target.innerHTML = artifacts.map(item => {
         activeArtifactItem = item;
@@ -138,7 +185,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
         activeArtifactItem = item;
         const reference = item.visual_reference_match;
         const orientationInfo = item.orientation
-          ? `<article class="artifact-group"><h4>${item.orientation.anchor_text ? '圆章文字方向' : '矩形印章方向'} <small>${escapeHtml(item.orientation.status || '')}${item.orientation.angle != null ? ` · 检测角度 ${Number(item.orientation.angle).toFixed(1)}°` : ''}${item.orientation.confidence ? ` · ${percent(item.orientation.confidence)}` : ''}</small></h4><div class="artifact-grid">${artifactCard('方向校正前原图', item.orientation_original_url || item.original_url)}${item.color_isolated_oriented_url ? artifactCard('按章型文字旋正后的保留章色图', item.color_isolated_oriented_url) : ''}${item.orientation.applied_rotation === 180 ? artifactCard('自动旋转 180° 后（后续 OCR 输入区域）', item.orientation_corrected_url) : ''}</div></article>` : '';
+          ? `<article class="artifact-group"><h4>${item.shape === '椭圆' ? '椭圆章文字方向' : (item.orientation.anchor_text ? '圆章文字方向' : '矩形印章方向')} <small>${escapeHtml(item.orientation.status || '')}${item.orientation.angle != null ? ` · 检测角度 ${Number(item.orientation.angle).toFixed(1)}°` : ''}${item.orientation.confidence ? ` · ${percent(item.orientation.confidence)}` : ''}${item.orientation.ellipse_ocr_source ? ' · OCR 已使用最终拉伸校正图' : ''}</small></h4></article>` : '';
         const consensus = reference?.consensus_matches || [];
         const consensusInfo = ['multi_reference_consensus', 'high_purity_multi_reference_consensus', 'chromatic_crop_multi_reference_consensus', 'color_mask_multi_reference_consensus', 'strong_prefix_color_mask_multi_reference_consensus'].includes(reference?.route)
           ? ` · 多参考一致 ${reference.consensus_reference_count || consensus.length} 份（${consensus.map(row => `${escapeHtml(row.reference_filename || '')} ${['color_mask_multi_reference_consensus', 'strong_prefix_color_mask_multi_reference_consensus'].includes(reference?.route) ? `墨迹 ${percent(row.color_mask_score || 0)}` : `${row.homography_inliers || 0}内点`}`).join('、')}）`
@@ -181,10 +228,26 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
         const codeText = [item.code_line_text, item.secondary_code_line_text].filter(Boolean).join(' | ');
         const unwrapText = [item.unwrapped_text, item.secondary_unwrapped_text, item.server_audit_text].filter(Boolean).join(' | ');
         const rotatedText = [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ');
-        if (item.seal_model_backend) {
-          return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · Paddle 印章专用</h4><div class="artifact-grid">${(item.seal_model_readings || []).map(reading => `<div>${artifactCard(reading.label, reading.url, reading.error ? `识别失败：${reading.error}` : (reading.texts || []).join(' | '))}<small>${reading.used_for_matching ? '独立读取后参与比对' : '原图仅供对照，不参与匹配'}${reading.observations?.length ? ` · 置信度 ${reading.observations.map(row => percent(row.confidence)).join(' / ')}` : ''}</small></div>`).join('')}</div></article>`;
+        if (item.seal_model_backend && !item.unwrapped_url) {
+          const readings = item.seal_model_readings || [];
+          const readingCard = reading => reading ? `<div>${artifactCard(reading.label, reading.url, reading.error ? `识别失败：${reading.error}` : (reading.texts || []).join(' | '))}<small>${reading.used_for_matching ? '独立读取后参与比对' : '原图仅供对照，不参与匹配'}${reading.observations?.length ? ` · 置信度 ${reading.observations.map(row => percent(row.confidence)).join(' / ')}` : ''}</small></div>` : '';
+          const findReading = variant => readings.find(reading => reading.variant === variant);
+          const primaryReadings = ['original', 'oriented', 'ellipse_normalized', 'ellipse_type_band', 'ellipse_unwrapped']
+            .map(findReading).filter(Boolean);
+          const debugReadings = readings.filter(reading => !primaryReadings.includes(reading));
+          const primaryCards = primaryReadings.map(readingCard).join('');
+          const debugCards = debugReadings.map(readingCard).join('');
+          return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color || '')} · ${escapeHtml(item.shape || '未知形状')} · Paddle 印章专用</h4><div class="artifact-grid">${primaryCards}</div>${debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;
         }
-        return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>圆章跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.conflict_mobile_band_text ? `<small>Mobile 矩形分带：${escapeHtml(item.conflict_mobile_band_text)}</small><small class="${item.conflict_mobile_band_resolution ? '' : 'low-note'}">${escapeHtml(item.conflict_mobile_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${item.color_isolated_oriented_url ? '旋正后圆章章型横向分带' : '圆章章型分带'}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_mobile_text || item.robust_server_text ? `<small>稳健圆心 Mobile：${escapeHtml(item.robust_mobile_text || '未识别')}</small><small>稳健圆心 Server：${escapeHtml(item.robust_server_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.server_audit_text ? `<small>Server 大模型复核：${escapeHtml(item.server_audit_text)}</small>` : ''}${item.server_audit_rejection_reason ? `<small class="low-note">${escapeHtml(item.server_audit_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${artifactCard('印章原始区域', item.original_url)}${artifactCard('颜色分离高对比图', item.isolated_url)}${item.color_isolated_url ? artifactCard('保留章色白底图', item.color_isolated_url) : ''}${item.color_isolated_oriented_url ? artifactCard('按章型文字旋正后的保留章色图', item.color_isolated_oriented_url) : ''}${item.round_type_band_url ? artifactCard(item.color_isolated_oriented_url ? '旋正后圆章章型横向分带' : '圆章章类型横向分带', item.round_type_band_url) : ''}${reference?.candidate_chromatic_crop_url ? artifactCard('章色稳健裁剪图（SIFT）', reference.candidate_chromatic_crop_url) : ''}${reference?.candidate_trimmed_chromatic_crop_url ? artifactCard('去稀疏噪点章色裁剪图（SIFT）', reference.candidate_trimmed_chromatic_crop_url) : ''}${item.code_line_url ? artifactCard('矩形编号章数字行', item.code_line_url) : ''}${artifactCard(item.shape === '矩形' ? '矩形印章校正图' : '圆章环形文字展开图', item.unwrapped_url)}${(item.unwrapped_band_urls || []).map((url, index) => artifactCard(`圆章展开独立分带 ${index + 1}`, url)).join('')}${item.robust_unwrapped_url ? artifactCard('稳健边界圆章展开图', item.robust_unwrapped_url) : ''}${(item.robust_unwrapped_band_urls || []).map((url, index) => artifactCard(`稳健圆心独立分带 ${index + 1}`, url)).join('')}${(item.conflict_mobile_band_urls || []).map((url, index) => artifactCard(`矩形章横向分带 ${index + 1}`, url)).join('')}${item.unwrapped_rotated_url ? artifactCard('圆章展开 180° 图', item.unwrapped_rotated_url) : ''}${item.color_isolated_rotations_url ? artifactCard('保留章色旋转对照图', item.color_isolated_rotations_url) : ''}${item.rotated_url ? artifactCard('矩形印章 180° 旋转图', item.rotated_url) : ''}${referenceCard}</div></article>`;
+        const ellipse = item.shape === '椭圆';
+        const typeBandLabel = ellipse
+            ? (item.color_isolated_oriented_url ? '旋正后椭圆章章型横向分带' : '椭圆章章型横向分带')
+            : (item.color_isolated_oriented_url ? '旋正后圆章章型横向分带' : '圆章章型分带');
+        const unwrapLabel = ellipse ? '椭圆环形文字展开图' : (item.shape === '矩形' ? '矩形印章校正图' : '圆章环形文字展开图');
+        const unwrap180Label = ellipse ? '椭圆展开 180° 图' : '圆章展开 180° 图';
+        const primaryCards = `${artifactCard('印章原始区域', item.original_url)}${item.color_isolated_oriented_url ? artifactCard('旋正后的保留章色图', item.color_isolated_oriented_url) : ''}${ellipse && item.ellipse_normalized_url ? artifactCard('椭圆拉伸校正图（后续 OCR 输入）', item.ellipse_normalized_url) : ''}${item.round_type_band_url ? artifactCard(typeBandLabel, item.round_type_band_url) : ''}${item.code_line_url ? artifactCard('矩形编号章数字行', item.code_line_url) : ''}${artifactCard(unwrapLabel, item.unwrapped_url)}`;
+        const debugCards = `${artifactCard('颜色分离高对比图', item.isolated_url)}${item.color_isolated_url ? artifactCard('保留章色白底图', item.color_isolated_url) : ''}${reference?.candidate_chromatic_crop_url ? artifactCard('章色稳健裁剪图（SIFT）', reference.candidate_chromatic_crop_url) : ''}${reference?.candidate_trimmed_chromatic_crop_url ? artifactCard('去稀疏噪点章色裁剪图（SIFT）', reference.candidate_trimmed_chromatic_crop_url) : ''}${(item.unwrapped_band_urls || []).map((url, index) => artifactCard(`${ellipse ? '椭圆' : '圆章'}展开独立分带 ${index + 1}`, url)).join('')}${item.robust_unwrapped_url ? artifactCard(`稳健边界${ellipse ? '椭圆' : '圆章'}展开图`, item.robust_unwrapped_url) : ''}${(item.robust_unwrapped_band_urls || []).map((url, index) => artifactCard(`稳健${ellipse ? '椭圆' : '圆心'}独立分带 ${index + 1}`, url)).join('')}${(item.conflict_mobile_band_urls || []).map((url, index) => artifactCard(`矩形章横向分带 ${index + 1}`, url)).join('')}${item.unwrapped_rotated_url ? artifactCard(unwrap180Label, item.unwrapped_rotated_url) : ''}${item.color_isolated_rotations_url ? artifactCard('保留章色旋转对照图', item.color_isolated_rotations_url) : ''}${item.rotated_url ? artifactCard('矩形印章 180° 旋转图', item.rotated_url) : ''}${referenceCard}`;
+        return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>${ellipse ? '椭圆' : '圆章'}跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.conflict_mobile_band_text ? `<small>Mobile 矩形分带：${escapeHtml(item.conflict_mobile_band_text)}</small><small class="${item.conflict_mobile_band_resolution ? '' : 'low-note'}">${escapeHtml(item.conflict_mobile_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${typeBandLabel}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_mobile_text || item.robust_server_text ? `<small>稳健圆心 Mobile：${escapeHtml(item.robust_mobile_text || '未识别')}</small><small>稳健圆心 Server：${escapeHtml(item.robust_server_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.server_audit_text ? `<small>Server 大模型复核：${escapeHtml(item.server_audit_text)}</small>` : ''}${item.server_audit_rejection_reason ? `<small class="low-note">${escapeHtml(item.server_audit_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${primaryCards}</div>${sealSourceResults(item)}${debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;
       }).join('');
     }
   }
@@ -213,10 +276,10 @@ export function createReviewEvidence({environment, ui, reviewState, api, fieldSc
       label === '印章原始区域' ? (item.isolated_text || item.secondary_original_text || '') :
       label === '颜色分离高对比图' ? (item.isolated_text || '') :
       label === '保留章色白底图' ? [item.color_isolated_text, item.secondary_color_isolated_text].filter(Boolean).join(' | ') :
-      label === '圆章章类型横向分带' || label === '旋正后圆章章型横向分带' ? (item.round_type_band_text || '') :
+      label === '圆章章类型横向分带' || label === '旋正后圆章章型横向分带' || label === '椭圆章章型横向分带' || label === '旋正后椭圆章章型横向分带' ? (item.round_type_band_text || '') :
       label === '矩形编号章数字行' ? [item.code_line_text, item.secondary_code_line_text].filter(Boolean).join(' | ') :
-      label === '圆章环形文字展开图' || label === '矩形印章校正图' ? [item.unwrapped_text, item.secondary_unwrapped_text, item.server_audit_text].filter(Boolean).join(' | ') :
-      label === '圆章展开 180° 图' || label === '矩形印章 180° 旋转图' ? [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ') :
+      label === '圆章环形文字展开图' || label === '椭圆环形文字展开图' || label === '矩形印章校正图' ? [item.unwrapped_text, item.secondary_unwrapped_text, item.server_audit_text].filter(Boolean).join(' | ') :
+      label === '圆章展开 180° 图' || label === '椭圆展开 180° 图' || label === '矩形印章 180° 旋转图' ? [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ') :
       ''
     );
     const text = String(inferredText || '').trim();
