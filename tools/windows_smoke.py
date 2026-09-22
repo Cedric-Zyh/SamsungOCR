@@ -82,6 +82,13 @@ def _collect(*, write_check: bool) -> tuple[dict, list[str]]:
 
 
 def main() -> int:
+    # GitHub-hosted Windows runners may expose cp1252 as the console encoding.
+    # The audit report deliberately contains Chinese labels, so make stdout
+    # UTF-8 before printing the JSON report.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
     parser = argparse.ArgumentParser(
         description="三星回单 Windows PaddleOCR 路由/依赖/模型目录自检"
     )
