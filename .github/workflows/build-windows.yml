@@ -48,6 +48,8 @@ jobs:
           $stderrPath = Join-Path $workdir "smoke.stderr.log"
           $process = Start-Process -FilePath "$workdir\SamsungReceipt.exe" -WorkingDirectory $workdir -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
           $ready = $false
+          $lastStatus = ""
+          $lastBody = ""
           try {
             1..60 | ForEach-Object {
               if ($ready) { return }
@@ -58,14 +60,19 @@ jobs:
               }
               Start-Sleep -Seconds 2
               try {
-                $response = Invoke-WebRequest -Uri http://127.0.0.1:5001/ -UseBasicParsing -TimeoutSec 5
+                $response = Invoke-WebRequest -Uri http://127.0.0.1:5001/ -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 5
+                $lastStatus = [string]$response.StatusCode
+                $lastBody = [string]$response.Content
                 if ($response.StatusCode -eq 200) { $ready = $true }
+                elseif ($response.StatusCode -ge 400) {
+                  throw "首页返回 HTTP $($response.StatusCode)：`n$lastBody"
+                }
               } catch { }
             }
             if (-not $ready) {
               $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
               $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
-              throw "打包后的程序未能在 120 秒内提供首页。标准输出：`n$stdout`n标准错误：`n$stderr"
+              throw "打包后的程序未能在 120 秒内提供首页。最后 HTTP 状态：$lastStatus`n最后响应：$lastBody`n标准输出：`n$stdout`n标准错误：`n$stderr"
             }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
