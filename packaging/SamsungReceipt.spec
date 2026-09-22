@@ -10,8 +10,9 @@ from PyInstaller.utils.hooks import (
 )
 
 
-SPEC_DIR = Path(SPECPATH).resolve()
-ROOT = SPEC_DIR.parent if SPEC_DIR.name.lower() == "packaging" else SPEC_DIR
+SPEC_LOCATION = Path(SPECPATH).resolve()
+SPEC_DIR = SPEC_LOCATION if SPEC_LOCATION.is_dir() else SPEC_LOCATION.parent
+ROOT = SPEC_DIR.parent
 
 datas = [
     (str(ROOT / "templates"), "templates"),
