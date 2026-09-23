@@ -52,7 +52,7 @@ def _recognize_local_seals(
     # The temporary corrected page is used by ALL later local OCR routes,
     # including specialized SealOCR and optional secondary/audit models.
     with tempfile.TemporaryDirectory(prefix="seal-orientation-") as temp_dir:
-        if orientation_mode in {"none", "doc_ori"}:
+        if orientation_mode in {"none", "doc_ori", "combined"}:
             corrected, decisions = source, {}
         else:
             corrected, decisions = prepare_rectangles(source, regions, temp_dir)

@@ -83,19 +83,31 @@ def recognize_regions(
             # remain untouched and auditable.
             artifact["orientation"] = {}
             oriented = None
-            if ((artifact["shape"] in {"圆形", "椭圆"} or orientation_mode == "doc_ori")
+            if ((artifact["shape"] in {"圆形", "椭圆"} or orientation_mode in {"doc_ori", "combined"})
                     and prepared_paths.get("color_isolated")):
                 try:
                     from .seal_orientation import (
                         prepare_ellipse_stamp,
                         prepare_round_stamp,
                         prepare_round_stamp_doc_ori,
+                        prepare_round_stamp_combined,
                     )
 
                     oriented_path = directory / f"seal-{index}-color-isolated-oriented.png"
                     if orientation_mode == "doc_ori":
                         oriented, decision = prepare_round_stamp_doc_ori(
                             prepared_paths["color_isolated"], oriented_path
+                        )
+                    elif artifact["shape"] == "椭圆":
+                        oriented, decision = prepare_ellipse_stamp(
+                            prepared_paths["color_isolated"],
+                            oriented_path,
+                            model_variant="v6",
+                        )
+                    elif orientation_mode == "combined":
+                        oriented, decision = prepare_round_stamp_combined(
+                            prepared_paths["color_isolated"], oriented_path,
+                            model_variant="v6",
                         )
                     elif orientation_mode == "polygon":
                         orient = (

@@ -85,10 +85,10 @@ test('acceptance rules support any, all and no comparison for all three checks',
   });
 });
 
-test('seal orientation defaults preserve old settings and all three modes persist and restore', () => {
+test('seal orientation defaults preserve old settings and all four modes persist and restore', () => {
   const old = harness({saved:sealTest(), orientationNode:true});
   assert.equal(old.controller.readRecognitionPlan().seal_orientation, 'polygon');
-  for (const mode of ['none', 'polygon', 'doc_ori']) {
+  for (const mode of ['none', 'polygon', 'doc_ori', 'combined']) {
     old.ids['seal-orientation-mode'].value = mode;
     old.ids['seal-orientation-mode'].fire('change');
     assert.equal(old.writes.at(-1).plan.seal_orientation, mode);

@@ -26,7 +26,7 @@ def test_invalid_or_unavailable_plan():
         validate_config({'seal': ['qingtong']}, api_enabled=False)
 
 
-@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori'])
+@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori', 'combined'])
 def test_seal_orientation_selection_is_validated(mode):
     cleaned = validate_config({'seal': ['paddle'], 'seal_orientation': mode})
     assert cleaned['seal_orientation'] == mode
@@ -34,7 +34,7 @@ def test_seal_orientation_selection_is_validated(mode):
         validate_config({'seal': ['paddle'], 'seal_orientation': 'unknown'})
 
 
-@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori'])
+@pytest.mark.parametrize('mode', ['none', 'polygon', 'doc_ori', 'combined'])
 def test_seal_orientation_reaches_stage_with_classifier_scope(mode):
     calls = []
     class Fake:
@@ -46,6 +46,8 @@ def test_seal_orientation_reaches_stage_with_classifier_scope(mode):
 
     result = run_configured(Fake(), 'unused.jpg', None,
                             config={'seal': ['paddle'], 'seal_orientation': mode})
+    # ``combined`` chooses its coarse quarter-turn from the stamp-type row and
+    # never calls the document-orientation classifier.
     assert calls == [(mode, mode == 'doc_ori')]
     assert result['seal_orientation_mode'] == mode
 

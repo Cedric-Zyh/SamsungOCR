@@ -94,6 +94,10 @@ const ReceiptWorkbench = (() => {
   }
   function imageSources(record) {
     const sources = [], seen = new Set();
+    const usableOrientation = item => item?.color_isolated_oriented_url &&
+      !(item.orientation?.mode === 'doc_ori' && !(Number(item.orientation.confidence) >= 0.9));
+    const orientationLabel = item => item?.orientation?.mode === 'doc_ori'
+      ? '文档方向粗校正' : '按章型文字旋正';
     function add(url, label, group) {
       if (typeof url !== 'string' || !url.startsWith('/files/') || seen.has(url)) return;
       seen.add(url); sources.push({url, label, group});
@@ -106,9 +110,10 @@ const ReceiptWorkbench = (() => {
         const selectedArtifact = sealArtifacts.find(item =>
           item.api_index === selectedIndex || item.index === selectedIndex
         ) || (Number.isInteger(selectedIndex) ? sealArtifacts[selectedIndex] : null);
-        const oriented = selectedArtifact?.color_isolated_oriented_url ||
-          sealArtifacts.find(item => item.color_isolated_oriented_url)?.color_isolated_oriented_url;
-        if (oriented) add(oriented, '印章区域 · 按章型文字旋正', 'seal');
+        const orientedArtifact = usableOrientation(selectedArtifact) ? selectedArtifact :
+          sealArtifacts.find(usableOrientation);
+        const oriented = orientedArtifact?.color_isolated_oriented_url;
+        if (oriented) add(oriented, `印章区域 · ${orientationLabel(orientedArtifact)}`, 'seal');
         const corrected = !oriented && sealArtifacts.find(item =>
           item.orientation?.applied_rotation === 180 && item.orientation_corrected_url);
         if (corrected) add(corrected.orientation_corrected_url, '印章区域 · 已自动旋转 180°', 'seal');
@@ -131,12 +136,12 @@ const ReceiptWorkbench = (() => {
         // detected stamp-type line has been deskewed.  Make that same image
         // the primary seal preview; the unrotated crop remains available in
         // the evidence panel for audit.
-        const oriented = key === 'seals' && item.color_isolated_oriented_url;
+        const oriented = key === 'seals' && usableOrientation(item) && item.color_isolated_oriented_url;
         const corrected = item.orientation?.applied_rotation === 180
           ? item.orientation_corrected_url || item.original_url : item.original_url;
         const url = oriented || corrected;
         if (url && !seen.has(url)) add(url, oriented
-          ? `${label} ${++index} · 按章型文字旋正`
+          ? `${label} ${++index} · ${orientationLabel(item)}`
           : item.orientation?.applied_rotation === 180
             ? `${label} ${++index} · 已自动旋转 180°` : `${label} ${++index}`, group);
       }

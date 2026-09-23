@@ -221,6 +221,10 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                         stage_scope.add(route["page"])
                     if stage == "seal":
                         stage_scope |= seal_audit_providers
+                        # Only the doc_ori mode calls the four-way document
+                        # classifier.  ``combined`` picks its coarse quarter-turn
+                        # from the stamp-type row itself, so it must not claim a
+                        # provider it never uses.
                         if config.get("seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE) == "doc_ori":
                             stage_scope.add(DOC_ORIENTATION_PROVIDER)
                     reused = method == 'danzhengtong' and 'fixture' in danzhengtong_cache

@@ -72,13 +72,14 @@ def _collect_primary_region_evidence(
     if (
         is_paddle_backend(request.ocr_backend)
         and request.orientation_mode != "none"
-        and (not evidence.rectangular or request.orientation_mode == "doc_ori")
+        and (not evidence.rectangular or request.orientation_mode in {"doc_ori", "combined"})
     ):
         try:
             from .seal_orientation import (
                 prepare_ellipse_stamp,
                 prepare_round_stamp,
                 prepare_round_stamp_doc_ori,
+                prepare_round_stamp_combined,
             )
 
             oriented_path = Path(temp_dir) / f"seal-{index}-color-isolated-oriented.png"
@@ -88,6 +89,12 @@ def _collect_primary_region_evidence(
                 )
             elif evidence.elliptical:
                 oriented, evidence.orientation = prepare_ellipse_stamp(
+                    evidence.color_isolated,
+                    oriented_path,
+                    model_variant=variant_of(request.ocr_backend) or "mobile",
+                )
+            elif request.orientation_mode == "combined":
+                oriented, evidence.orientation = prepare_round_stamp_combined(
                     evidence.color_isolated,
                     oriented_path,
                     model_variant=variant_of(request.ocr_backend) or "mobile",
@@ -286,12 +293,21 @@ def _collect_primary_region_evidence(
             left, top, right, bottom = [float(value) for value in source_type_box]
             box_width = max(0.0, right - left)
             box_height = max(0.0, bottom - top)
+            # A ring mask may only erase one horizontal text row.  After a
+            # coarse quarter-turn the type row sits diagonally in the source
+            # crop, so mapping its tight oriented box back produces a large,
+            # roughly square bounding box (measured 527x845 on a 1000x1022
+            # crop).  Masking that removes a diagonal slice of the circular
+            # company name instead -- it cost ``京凌`` on 7266220440.jpg.
+            # Requiring a row-like aspect keeps a slightly tilted row maskable
+            # while a diagonal one is left in the 展开图, which reads correctly.
+            row_like = box_height <= 0 or box_width / box_height >= 1.8
             # A diagonal detector polygon can cover most of the circular crop
             # even though it represents only the centre ``收货专用章`` text.
             # Do not use such a broad box to erase the ring before unwrapping;
             # that was the reason some otherwise clear red ring lettering
             # produced a nearly blank black/white展开图.
-            if (
+            if row_like and (
                 box_width <= mask_width * 0.65
                 or box_height <= mask_height * 0.45
             ):
@@ -307,7 +323,9 @@ def _collect_primary_region_evidence(
             else:
                 evidence.orientation["ring_type_mask_box"] = None
                 evidence.orientation["ring_type_mask_skipped"] = (
-                    "章型检测框覆盖过大，保留环形文字展开区域"
+                    "章型检测框非单行（斜置）或覆盖过大，保留环形文字展开区域"
+                    if not row_like
+                    else "章型检测框覆盖过大，保留环形文字展开区域"
                 )
         except (OSError, TypeError, ValueError, ZeroDivisionError):
             ring_exclude_boxes = []

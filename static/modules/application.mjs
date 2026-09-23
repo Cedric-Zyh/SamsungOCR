@@ -3,7 +3,7 @@ import {createUi} from './ui.mjs';
 import {createApi} from './api.mjs';
 import {createRecords} from './records.mjs?v=20260920-view-review-mode';
 import {createImports} from './imports.mjs';
-import {createRecognitionPlan} from './recognition_plan.mjs?v=20260918-no-vision';
+import {createRecognitionPlan} from './recognition_plan.mjs?v=20260923-four-way';
 import {createReview} from './review.mjs?v=20260920-view-review-mode';
 import {createReviewEvidence} from './review_evidence.mjs?v=20260918-no-vision';
 import {createReviewQueue} from './review_queue.mjs';

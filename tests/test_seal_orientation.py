@@ -7,7 +7,7 @@ from receipt_ocr import seal_orientation
 def test_doc_orientation_applies_predicted_correction_only(monkeypatch, tmp_path, angle):
     calls = []
     monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
-                        lambda source: {'angle': angle, 'confidence': .4724})
+                        lambda source: {'angle': angle, 'confidence': .99})
     def rotate(source, destination, correction):
         calls.append(correction)
         return destination
@@ -15,9 +15,128 @@ def test_doc_orientation_applies_predicted_correction_only(monkeypatch, tmp_path
     destination = tmp_path / 'corrected.png'
     oriented, decision = seal_orientation.prepare_round_stamp_doc_ori('input.png', destination)
     assert decision['mode'] == 'doc_ori'
-    assert decision['confidence'] == .4724
+    assert decision['confidence'] == .99
     assert calls == ([angle] if angle else [])
     assert oriented == (destination if angle else None)
+
+
+@pytest.mark.parametrize('angle', [0, 90, 180, 270])
+@pytest.mark.parametrize('confidence', [.4724, .7557, .8999, float('nan')])
+def test_doc_orientation_keeps_uncertain_input_without_guessing_type_mask(
+    monkeypatch, tmp_path, angle, confidence
+):
+    monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
+                        lambda source: {'angle': angle, 'confidence': confidence})
+    monkeypatch.setattr(seal_orientation, 'rotate_stamp_image',
+                        lambda *args: pytest.fail('uncertain direction must not rotate'))
+    oriented, decision = seal_orientation.prepare_round_stamp_doc_ori(
+        'input.png', tmp_path / 'corrected.png')
+    assert oriented is None
+    assert decision['angle'] == angle
+    assert decision['applied_rotation'] == 0
+    assert '置信度不足' in decision['status']
+    assert 'type_row_box' not in decision
+
+
+@pytest.mark.parametrize('angle', [0, 90, 180, 270])
+def test_doc_orientation_does_not_mask_ring_without_detected_type_row(
+    monkeypatch, tmp_path, angle
+):
+    from PIL import Image
+    source = tmp_path / 'ring.png'
+    Image.new('RGB', (200, 200), 'white').save(source)
+    monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
+                        lambda source: {'angle': angle, 'confidence': .99})
+    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
+    _, decision = seal_orientation.prepare_round_stamp_doc_ori(source, tmp_path / 'corrected.png')
+    assert 'type_row_box' not in decision
+    assert 'oriented_type_row_box' not in decision
+
+
+def test_combined_keeps_original_when_no_angle_reads_a_stamp_type_row(monkeypatch, tmp_path):
+    from PIL import Image
+    source = tmp_path / 'ring.png'
+    Image.new('RGB', (200, 200), 'white').save(source)
+    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.paddle_ocr.recognize_line', lambda *a, **k: [])
+    oriented, decision = seal_orientation.prepare_round_stamp_combined(
+        source, tmp_path / 'corrected.png')
+    assert oriented is None
+    assert decision['applied_rotation'] == 0
+    assert decision['coarse_rotation'] == 0
+    assert '未找到章型文字' in decision['status']
+    assert not (tmp_path / 'corrected.png').exists()
+    # Every right angle is compared, not only the classifier's single guess.
+    assert set(decision['four_way_candidates']) == {'0', '90', '180', '270'}
+
+
+def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
+    from pathlib import Path
+    from PIL import Image
+    from receipt_ocr.ocr_types import TextObservation
+
+    source = tmp_path / "input.png"
+    Image.new("RGB", (200, 200), "white").save(source)
+    rotations = []
+
+    def rotate(_source, destination, correction):
+        rotations.append(float(correction))
+        Image.new("RGB", (200, 200), "white").save(destination)
+        return destination
+
+    monkeypatch.setattr(seal_orientation, "rotate_stamp_image", rotate)
+    # Only the 90-degree candidate exposes a stamp-type polygon and a readable
+    # centre row, so it must win over the unrotated crop.
+    monkeypatch.setattr(
+        "receipt_ocr.paddle_ocr.detect_text_boxes",
+        lambda path, **_kwargs: (
+            [{
+                "text": "专用章",
+                "confidence": 0.91,
+                "angle": 6.5,
+                "points": [[40, 90], [160, 90], [160, 110], [40, 110]],
+            }]
+            if Path(path).name.startswith("coarse-90") else []
+        ),
+    )
+    monkeypatch.setattr(
+        "receipt_ocr.paddle_ocr.recognize_line",
+        lambda path, **_kwargs: (
+            [TextObservation("售后服务专用章", 0.93, 0, 0, 1, 1)]
+            if Path(path).name.startswith("coarse-90") else []
+        ),
+    )
+
+    oriented, decision = seal_orientation.prepare_round_stamp_combined(
+        source, tmp_path / "corrected.png"
+    )
+
+    assert oriented == tmp_path / "corrected.png"
+    assert oriented.is_file()
+    assert decision["mode"] == "combined"
+    assert decision["coarse_rotation"] == 90.0
+    assert decision["applied_rotation"] == 90.0
+    assert decision["fine_rotation"] == 6.5
+    assert decision["type_band_text"] == "售后服务专用章"
+    assert decision["anchor_text"] == "专用章"
+    assert "oriented_type_row_box" in decision
+    assert "type_row_box" in decision
+    # The fine pass runs per candidate before the comparison, so the coarse
+    # quarter-turn of each angle is measured first.
+    assert rotations == [90.0, 6.5, 180.0, 270.0]
+
+
+def test_combined_never_uses_document_orientation_classifier(monkeypatch, tmp_path):
+    from PIL import Image
+    source = tmp_path / 'ring.png'
+    Image.new('RGB', (200, 200), 'white').save(source)
+    monkeypatch.setattr(
+        seal_orientation, 'classify_doc_orientation',
+        lambda *_args: pytest.fail('combined must not call doc_ori'),
+    )
+    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.paddle_ocr.recognize_line', lambda *a, **k: [])
+    seal_orientation.prepare_round_stamp_combined(source, tmp_path / 'corrected.png')
 
 
 def test_orientation_none_bypasses_rectangle_direction_model(monkeypatch, tmp_path):

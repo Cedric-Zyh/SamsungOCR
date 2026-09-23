@@ -1,7 +1,7 @@
 import {escapeHtml, planLabels} from './ui.mjs';
 
 const methodLabels = {paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
-const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）'};
+const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）', combined:'两者结合'};
 const presetLabels = {danzhengtong:'单证通',full:'完整核验', date:'仅日期', seal:'仅印章', 'seal-test':'印章测试'};
 const localMethods = ['paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';
@@ -142,8 +142,10 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     if (orientationDescription) orientationDescription.textContent = orientation === 'none'
       ? '不改变印章方向，直接识别。'
       : orientation === 'doc_ori'
-        ? '使用 PP-LCNet_x1_0_doc_ori，按 0/90/180/270° 旋正。'
-        : '使用“用章/专用章”文本检测框的四点坐标估计角度。';
+        ? '使用 PP-LCNet_x1_0_doc_ori，置信度达到 90% 时按 0/90/180/270° 粗校正；低于阈值保留原方向。圆章环形文字仍可能误判，不能校正任意倾斜角。'
+        : orientation === 'combined'
+          ? '对 0/90/180/270 四个方向各做一次粗校正，再按“用章/专用章”文本框角度微调，取章型行识别最好的一档。'
+          : '使用“用章/专用章”文本检测框的四点坐标估计角度。';
     show('#remote-plan-note', usesRemotePlan());
     show('#plan-multi-note', Object.values(current).some(methods => methods.length > 1));
     show('#plan-requirement-note', (enabled('date') || enabled('seal')) && !enabled('fields'));
