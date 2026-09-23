@@ -26,7 +26,7 @@ hiddenimports = []
 
 # PaddleOCR loads model and pipeline modules lazily.  Collecting the package
 # modules here avoids a first-run failure that only appears after packaging.
-for package in ("paddle", "paddleocr", "paddlex"):
+for package in ("paddle", "paddleocr", "paddlex", "onnxruntime"):
     datas += collect_data_files(package, include_py_files=False)
     binaries += collect_dynamic_libs(package)
     hiddenimports += collect_submodules(package)
@@ -39,6 +39,7 @@ for distribution in (
     "paddlepaddle",
     "paddleocr",
     "paddlex",
+    "onnxruntime",
     "imagesize",
     "opencv-contrib-python",
     "pyclipper",
