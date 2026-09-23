@@ -31,10 +31,22 @@ for package in ("paddle", "paddleocr", "paddlex"):
     binaries += collect_dynamic_libs(package)
     hiddenimports += collect_submodules(package)
 
-# The application checks the installed PaddleOCR version before advertising
-# the PP-OCRv6 backend. PyInstaller does not bundle distribution metadata by
-# default, so include it or the frozen app reports that no OCR engine exists.
-datas += copy_metadata("paddleocr")
+# PaddleOCR/PaddleX inspect distribution metadata at runtime when they verify
+# the ``ocr-core`` extra. PyInstaller does not bundle ``*.dist-info`` folders
+# by default, so the frozen app can contain every module yet still report a
+# dependency error while creating the pipeline.
+for distribution in (
+    "paddlepaddle",
+    "paddleocr",
+    "paddlex",
+    "imagesize",
+    "opencv-contrib-python",
+    "pyclipper",
+    "pypdfium2",
+    "python-bidi",
+    "shapely",
+):
+    datas += copy_metadata(distribution)
 
 datas += collect_data_files("cv2", include_py_files=False)
 binaries += collect_dynamic_libs("cv2")
