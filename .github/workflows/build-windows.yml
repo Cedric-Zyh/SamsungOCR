@@ -1,4 +1,4 @@
-name: Build Windows single-user package
+name: Build Windows Tauri installer
 
 on:
   workflow_dispatch:
@@ -25,22 +25,33 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
       - name: Install runtime and build dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
+          corepack enable
+          corepack prepare pnpm@11.19.0 --activate
 
       - name: Run Windows environment check
         shell: pwsh
         run: python -m tools.windows_smoke --output windows-smoke.json
 
-      - name: Build executable
+      - name: Build bundled Flask/OCR service
         shell: pwsh
-        run: |
-          python -m PyInstaller --clean --noconfirm packaging/SamsungReceipt.spec
+        run: python -m PyInstaller --clean --noconfirm packaging/SamsungReceipt.spec
 
-      - name: Smoke test packaged application
+      - name: Smoke test bundled service
         shell: pwsh
         run: |
           $workdir = (Resolve-Path dist/SamsungReceipt).Path
@@ -48,54 +59,46 @@ jobs:
           $stderrPath = Join-Path $workdir "smoke.stderr.log"
           $process = Start-Process -FilePath "$workdir\SamsungReceipt.exe" -WorkingDirectory $workdir -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
           $ready = $false
-          $lastStatus = ""
-          $lastBody = ""
           try {
             1..60 | ForEach-Object {
               if ($ready) { return }
-              if ($process.HasExited) {
-                $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
-                $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
-                throw "打包后的程序提前退出（退出码 $($process.ExitCode)）。标准输出：`n$stdout`n标准错误：`n$stderr"
-              }
+              if ($process.HasExited) { throw "打包后的识别服务提前退出（退出码 $($process.ExitCode)）。" }
               Start-Sleep -Seconds 2
               try {
                 $response = Invoke-WebRequest -Uri http://127.0.0.1:5001/ -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 5
-                $lastStatus = [string]$response.StatusCode
-                $lastBody = [string]$response.Content
                 if ($response.StatusCode -eq 200) { $ready = $true }
-                elseif ($response.StatusCode -ge 400) {
-                  throw "首页返回 HTTP $($response.StatusCode)：`n$lastBody"
-                }
               } catch { }
             }
-            if (-not $ready) {
-              $stdout = if (Test-Path $stdoutPath) { Get-Content -Raw $stdoutPath } else { "" }
-              $stderr = if (Test-Path $stderrPath) { Get-Content -Raw $stderrPath } else { "" }
-              throw "打包后的程序未能在 120 秒内提供首页。最后 HTTP 状态：$lastStatus`n最后响应：$lastBody`n标准输出：`n$stdout`n标准错误：`n$stderr"
-            }
+            if (-not $ready) { throw "打包后的识别服务未能在 120 秒内提供首页。" }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
 
-      - name: Assemble package
+      - name: Stage bundled service for Tauri
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item packaging/启动.bat release/启动.bat
-          Copy-Item packaging/停止.bat release/停止.bat
-          Copy-Item packaging/README-Windows.txt release/README.txt
-          Copy-Item -Recurse dist/SamsungReceipt release/SamsungReceipt
-          Compress-Archive -Path release/* -DestinationPath SamsungReceipt-windows-x64.zip -Force
+          if (Test-Path desktop/resources/SamsungReceipt) { Remove-Item -Recurse -Force desktop/resources/SamsungReceipt }
+          New-Item -ItemType Directory -Force -Path desktop/resources/SamsungReceipt | Out-Null
+          Copy-Item -Recurse -Force dist/SamsungReceipt/* desktop/resources/SamsungReceipt
 
-      - name: Upload build artifact
+      - name: Install desktop dependencies
+        shell: pwsh
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri NSIS installer
+        shell: pwsh
+        working-directory: desktop
+        run: pnpm tauri build
+
+      - name: Upload Tauri installer
         uses: actions/upload-artifact@v4
         with:
-          name: SamsungReceipt-windows-x64
-          path: SamsungReceipt-windows-x64.zip
+          name: SamsungReceipt-windows-x64-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
 
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: SamsungReceipt-windows-x64.zip
+          files: desktop/src-tauri/target/release/bundle/nsis/*.exe

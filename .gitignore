@@ -9,10 +9,16 @@ previews/
 .env
 config/seal_api_key
 node_modules
+desktop/node_modules/
 build/
 dist/
 release/
 windows-smoke.json
+*.tsbuildinfo
+
+# Tauri 本地构建产物和待打包的内部服务。
+desktop/src-tauri/target/
+desktop/resources/SamsungReceipt/
 
 # 本地运行产物、数据库、中间过程图和导出文件均可由源码重新生成。
 output/

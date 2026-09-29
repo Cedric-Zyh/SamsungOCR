@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "三星回单核验台桌面端权限",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

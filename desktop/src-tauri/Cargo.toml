@@ -1,0 +1,16 @@
+[package]
+name = "samsung-receipt-desktop"
+version = "0.1.0"
+description = "三星回单核验台桌面端"
+authors = ["Samsung Receipt Team"]
+edition = "2021"
+
+[lib]
+name = "samsung_receipt_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

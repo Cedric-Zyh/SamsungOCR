@@ -28,13 +28,13 @@
 python -m pip install -r requirements.txt
 ```
 
-启动本地服务：
+源码调试时可以启动本地服务：
 
 ```bash
 python app.py
 ```
 
-浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001)。如果使用推荐解释器，也可以直接运行：
+开发调试时可以在浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001)。如果使用推荐解释器，也可以直接运行：
 
 ```bash
 /Users/zhuyihao/anaconda3/bin/python app.py
@@ -231,8 +231,16 @@ receipt_ocr/
 - [`docs/清瞳印章双路判定.md`](docs/清瞳印章双路判定.md)
 - [`docs/工作台与复核区改版.md`](docs/工作台与复核区改版.md)
 
-## Windows 发布包
+## Windows 桌面安装包
 
-`.github/workflows/build-windows.yml` 会构建 `SamsungReceipt-windows-x64.zip`。推送 `v*` 标签后，压缩包会作为 GitHub Release 附件发布；也可以在 Actions 页面手动运行工作流。
+Windows 用户使用 Tauri 桌面安装包。GitHub Actions 在 Windows 服务器上完成 Python/OCR 服务打包、Tauri 构建和 NSIS 安装包生成；推送 `v*` 标签后，安装包会作为 GitHub Release 附件发布，也可以在 Actions 页面手动运行工作流。
 
-压缩包内的 `启动.bat` 会启动本地服务并打开浏览器。首次使用需要联网下载 PaddleOCR 模型，不需要安装 Node.js 或 Excel 组件。
+开发机可以在 `desktop/` 下执行：
+
+```bash
+cd desktop
+pnpm install
+pnpm tauri:dev:mac
+```
+
+Windows 本地构建脚本为 `desktop/scripts/build_installer.ps1`。它会先构建内部识别服务，再将服务作为桌面端资源打入 NSIS 安装包。用户只需要安装生成的桌面软件，窗口关闭时会同步结束本次启动的本地服务。
