@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {reviewReadiness, reviewKeyboardAction, normalizedReviewDate} = require('../static/modules/review_readiness.mjs');
-const {createReviewImage} = require('../static/modules/review_image.mjs');
-const {createReview} = require('../static/modules/review.mjs');
-const {dateAuditText, sealEvidenceMarkup} = require('../static/modules/review_provider_evidence.mjs');
-const workbench = require('../static/workbench.js');
+const {reviewReadiness, reviewKeyboardAction, normalizedReviewDate} = require('../static/modules/review/review_readiness.mjs');
+const {createReviewImage} = require('../static/modules/review/review_image.mjs');
+const {createReview} = require('../static/modules/review/review.mjs');
+const {dateAuditText, sealEvidenceMarkup} = require('../static/modules/review/review_provider_evidence.mjs');
+const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
 const item = () => ({id: 1, fields: {'要求到货': '2025-03-31', '签章要求': '上海客户收货章'},
   date_check: {actual: '2025-03-31', status: '匹配', reliable: true},

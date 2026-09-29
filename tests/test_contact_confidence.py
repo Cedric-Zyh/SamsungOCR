@@ -1,8 +1,8 @@
 import pytest
 
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.parser import estimate_field_confidences
-from receipt_ocr.requested_fields import printed_extras
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.domain.parsing import estimate_field_confidences
+from receipt_ocr.domain.fields.requested import printed_extras
 
 
 def row(text, confidence=.98, y=.32):

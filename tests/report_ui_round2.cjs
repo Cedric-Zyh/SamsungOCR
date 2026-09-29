@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createReport} = require('../static/modules/report.mjs');
+const {createReport} = require('../static/modules/report/report.mjs');
 
 function harness(api) {
   const nodes = new Map(), reportState = {}, resultsState = {};

@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createNavigation} = require('../static/modules/navigation.mjs');
-const {createReview} = require('../static/modules/review.mjs');
-const {createReviewQueue} = require('../static/modules/review_queue.mjs');
-const {createState} = require('../static/modules/state.mjs');
+const {createNavigation} = require('../static/modules/shell/navigation.mjs');
+const {createReview} = require('../static/modules/review/review.mjs');
+const {createReviewQueue} = require('../static/modules/review/review_queue.mjs');
+const {createState} = require('../static/modules/core/state.mjs');
 
 // Production controllers share their real state; only browser surfaces and I/O
 // are replaced so these tests exercise close/navigation races without storage.

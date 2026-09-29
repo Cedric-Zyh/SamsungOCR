@@ -1,11 +1,11 @@
 import json
 
-import app as app_module
+from receipt_ocr.web import application as app_module
 
-from app import _apply_human_edits
-from receipt_ocr.database import Database
+from receipt_ocr.web.application import _apply_human_edits
+from receipt_ocr.persistence.database import Database
 from receipt_ocr.evaluation import GROUND_TRUTH_FIELDS
-from receipt_ocr.parser import PRODUCT_COLUMNS
+from receipt_ocr.domain.parsing import PRODUCT_COLUMNS
 
 
 def sample_result(filename="7266301052.jpg"):

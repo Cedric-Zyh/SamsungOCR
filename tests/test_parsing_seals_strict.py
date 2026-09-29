@@ -1,6 +1,6 @@
 import pytest
 
-from receipt_ocr.parsing_seals import compare_seal_text_strict
+from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
 
 
 @pytest.mark.parametrize('expected,actual', [
@@ -67,6 +67,20 @@ def test_partial_candidate_wins_over_higher_similarity_wrong_text():
     result = compare_seal_text_strict('太原市伊加壹电子服务总汇', ['太原市伊服壹电子服务总汇', '电子服务'])
     assert result['status'] == '部分匹配'
     assert result['recognized'] == '电子服务'
+
+
+def test_seal_type_fragment_cannot_hide_company_typo():
+    result = compare_seal_text_strict(
+        '济南新宇航科技发展有限公司业务专用章',
+        [
+            '济南新字航科技发展有限公司业务专用章',
+            '业务专用章',
+            '济南新字航科技发展有限公司',
+        ],
+        mismatch_over_partial=True,
+    )
+    assert result['status'] == '不匹配'
+    assert result['recognized'] == '济南新字航科技发展有限公司业务专用章'
 
 
 def test_required_character_coverage_ranks_incorrect_text_before_sequence_similarity():

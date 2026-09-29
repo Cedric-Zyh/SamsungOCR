@@ -1,4 +1,4 @@
-from tools.audit_ground_truth_consistency import field_mismatches
+from tools.analysis.operations.audit_ground_truth_consistency import field_mismatches
 
 
 def _result(requirement: str, confidence: float = 0.998) -> dict:

@@ -1,4 +1,4 @@
-from tools.analyze_date_white_day_conflicts import select_saved_candidate
+from tools.analysis.date.analyze_date_white_day_conflicts import select_saved_candidate
 
 
 def _result(*, marker: bool = True, reliable: bool = False) -> dict:

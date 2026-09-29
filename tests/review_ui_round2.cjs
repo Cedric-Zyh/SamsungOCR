@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createReviewPreview} = require('../static/modules/review_preview.mjs');
-const {createReviewImage} = require('../static/modules/review_image.mjs');
+const {createReviewPreview} = require('../static/modules/review/review_preview.mjs');
+const {createReviewImage} = require('../static/modules/review/review_image.mjs');
 
 function element() {
   const listeners = new Map(), classes = new Set(), captures = new Set();

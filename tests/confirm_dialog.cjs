@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {confirmInline} = require('../static/modules/inline_confirm.mjs');
+const {confirmInline} = require('../static/modules/core/inline_confirm.mjs');
 
 function fixture() {
   const nodes = new Map();

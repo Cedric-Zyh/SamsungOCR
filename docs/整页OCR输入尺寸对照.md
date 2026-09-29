@@ -51,7 +51,7 @@
 ## 复现与验证
 
 ```sh
-python -m tools.benchmark_page_inputs --manifest docs/整页OCR对照样本.json --output output/page-input-benchmark --variants original image2048 detect2048 detect2560
+python -m tools.analysis.operations.benchmark_page_inputs --manifest docs/整页OCR对照样本.json --output output/page-input-benchmark --variants original image2048 detect2048 detect2560
 ```
 
 增加 `--profile --variants original` 可测量检测和识别的耗时。该选项针对当前安装的 PaddleX 本地单设备流程；包版本记录在输出的 `environment.json`。

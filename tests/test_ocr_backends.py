@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from receipt_ocr import ocr_backends
-from receipt_ocr import paddle_ocr
+from receipt_ocr.providers import catalog as ocr_backends
+from receipt_ocr.providers import paddle_runtime as paddle_ocr
 
 
 # Mock catalog that mirrors the post-Vision world: only local Paddle tiers plus
@@ -98,7 +98,7 @@ def test_server_backend_uses_large_model(monkeypatch):
         return []
 
     monkeypatch.setattr(ocr_backends, "backend_catalog", lambda: AVAILABLE)
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_text", fake_recognize)
+    monkeypatch.setattr("receipt_ocr.providers.paddle_runtime.recognize_text", fake_recognize)
     assert ocr_backends.recognize_text("unused.jpg", backend="paddle_server") == []
     assert captured["model_variant"] == "server"
 
@@ -131,7 +131,7 @@ def test_hybrid_alias_routes_date_and_seal_to_paddle_mobile(monkeypatch):
         return []
 
     monkeypatch.setattr(ocr_backends, "backend_catalog", lambda: AVAILABLE)
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_text", fake_paddle)
+    monkeypatch.setattr("receipt_ocr.providers.paddle_runtime.recognize_text", fake_paddle)
 
     assert ocr_backends.recognize_text("unused.jpg", backend="hybrid", stage="date") == []
     assert ocr_backends.recognize_text("unused.jpg", backend="hybrid", stage="seal") == []
@@ -173,7 +173,7 @@ def test_ppocrv6_provider_allows_its_own_scope_only(variant, expected, monkeypat
         seen.append(provider)
         return False
 
-    monkeypatch.setattr("receipt_ocr.recognition_scope.provider_allowed", fake_allowed)
+    monkeypatch.setattr("receipt_ocr.runtime.scope.provider_allowed", fake_allowed)
     assert paddle_ocr.recognize_text("unused.jpg", model_variant=variant) == []
     assert seen == [expected]
 
@@ -193,7 +193,7 @@ def test_ppocrv6_backend_selects_the_v6_model_variant(monkeypatch):
         return []
 
     monkeypatch.setattr(ocr_backends, "backend_catalog", lambda: V6_AVAILABLE)
-    monkeypatch.setattr("receipt_ocr.paddle_ocr.recognize_text", fake_recognize)
+    monkeypatch.setattr("receipt_ocr.providers.paddle_runtime.recognize_text", fake_recognize)
     assert ocr_backends.recognize_text("unused.jpg", backend="paddle_v6") == []
     assert captured["model_variant"] == "v6"
 
@@ -239,7 +239,7 @@ def test_lightweight_backend_accepts_ids_and_legacy_labels():
 )
 def test_single_paddle_safety_covers_every_paddle_tier(backend):
     """A lone Paddle model must never certify its own date/seal transforms."""
-    from receipt_ocr.recognition_safety import _apply_single_paddle_safety
+    from receipt_ocr.runtime.safety import _apply_single_paddle_safety
 
     date_check = {"confidence": 0.95, "reliable": True}
     seal_check = {"confidence": 0.95, "reliable": True}
@@ -253,7 +253,7 @@ def test_single_paddle_safety_covers_every_paddle_tier(backend):
 
 
 def test_single_paddle_safety_stays_off_for_cross_model_routes():
-    from receipt_ocr.recognition_safety import _apply_single_paddle_safety
+    from receipt_ocr.runtime.safety import _apply_single_paddle_safety
 
     date_check = {"confidence": 0.95, "reliable": True}
     seal_check = {"confidence": 0.95, "reliable": True}
@@ -264,7 +264,7 @@ def test_single_paddle_safety_stays_off_for_cross_model_routes():
 
 
 def test_single_paddle_exact_date_match_is_reliable():
-    from receipt_ocr.recognition_safety import _apply_single_paddle_safety
+    from receipt_ocr.runtime.safety import _apply_single_paddle_safety
 
     date_check = {
         "required": "2026-02-06",
@@ -295,8 +295,8 @@ def test_single_paddle_exact_date_match_is_reliable():
     ("", "未识别", False),
 ])
 def test_single_paddle_strict_seal_comparison(backend, text, status, reliable):
-    from receipt_ocr.parsing_seals import compare_seal_text_strict
-    from receipt_ocr.recognition_safety import _apply_single_paddle_safety
+    from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
+    from receipt_ocr.runtime.safety import _apply_single_paddle_safety
 
     seal_check = compare_seal_text_strict("北京集中维修中心业务章(3)", [text])
     _apply_single_paddle_safety(
@@ -310,8 +310,8 @@ def test_single_paddle_strict_seal_comparison(backend, text, status, reliable):
 
 
 def test_ppocrv6_is_selectable_in_a_recognition_plan():
-    from receipt_ocr.recognition_config import validate_config
-    from receipt_ocr.ocr_backends import backend_catalog
+    from receipt_ocr.application.plans import validate_config
+    from receipt_ocr.providers.catalog import backend_catalog
 
     if not {item["id"] for item in backend_catalog() if item["available"]} >= {"paddle_v6"}:
         pytest.skip("paddleocr>=3.7.0 is not installed")

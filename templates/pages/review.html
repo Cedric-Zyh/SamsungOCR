@@ -1,0 +1,70 @@
+  <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-dialog-title">
+  <header class="review-dialog-heading">
+    <h2 id="review-dialog-title">人工复核</h2>
+    <div class="review-dialog-tools"><span id="review-session-progress" role="status"></span><button id="toggle-review-queue" class="review-queue-toggle" type="button" aria-expanded="false" aria-controls="review-queue-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/></svg><span>复核列表</span></button><button type="button" class="review-dialog-close" data-close-modal aria-label="关闭人工复核，返回回单记录" autofocus><span>关闭</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+  </header>
+  <section data-page="review" class="review-page hidden">
+    <div class="review-workspace queue-collapsed"><aside id="review-queue-panel" class="review-queue" aria-label="待复核回单"><header class="review-queue-heading"><strong>本次复核列表</strong><button id="review-refresh" type="button" class="text-button">刷新</button></header><p id="review-scope-label" class="review-queue-scope"></p><span id="review-scope" class="sr-only" role="status"></span><div id="review-queue"></div><nav class="result-pagination review-pagination" aria-label="待复核回单分页"><span id="review-page-info" role="status"></span><button id="review-page-prev" type="button" class="mini-button" disabled>上一页</button><button id="review-page-next" type="button" class="mini-button" disabled>下一页</button></nav></aside><div id="review-modal" aria-labelledby="review-title"><section class="modal-panel"><header class="modal-header"><div><h2 id="review-title">人工复核</h2><p id="review-subtitle"></p></div><span class="review-save-state" data-save-state role="status"></span></header><div id="review-content" class="modal-content"></div></section></div><div id="review-empty" class="review-empty hidden"><span class="empty-mark" aria-hidden="true">✓</span><h2>当前范围已处理完</h2><p>没有需要继续处理的回单。</p><button type="button" class="secondary-button" data-close-modal>返回回单记录</button><button type="button" class="text-button" id="review-revisit">重新查看稍后处理项</button></div></div>
+  </section>
+  </dialog>
+  <template id="review-template">
+    <div class="review-layout">
+      <aside class="review-preview"><div class="image-toolbar"><div class="image-source-picker" role="group" aria-label="选择查看图片"><span class="image-source-label">查看</span><div class="image-source-buttons"><button type="button" class="mini-button" data-image-source-group="page" aria-label="查看整页回单" aria-pressed="false">整页</button><button type="button" class="mini-button" data-image-source-group="date" aria-label="查看日期区域" aria-pressed="false">日期</button><button type="button" class="mini-button" data-image-source-group="seal" aria-label="查看印章区域" aria-pressed="false">印章</button></div></div><div class="image-zoom-controls"><button type="button" class="mini-button" data-zoom="out" aria-label="缩小图片">−</button><span data-zoom-label>100%</span><button type="button" class="mini-button" data-zoom="in" aria-label="放大图片">＋</button><button type="button" class="mini-button" data-zoom="fit">适应宽度</button></div></div><div class="image-viewport" data-image-viewport><img data-preview alt="回单图片"><div class="image-empty hidden review-image-feedback" data-image-empty role="status" aria-live="polite"><span class="review-image-feedback-mark" aria-hidden="true"></span><strong data-image-message>没有可用的预览图片</strong><p data-image-detail></p><div class="review-image-feedback-actions"><button type="button" class="secondary-button hidden" data-image-retry>重新加载</button><button type="button" class="text-button hidden" data-image-fallback>查看整页回单</button></div></div></div><p class="image-caption" data-image-caption></p><p class="image-interaction-hint">拖动查看 · 按住 Ctrl / ⌘ 滚轮缩放</p></aside>
+      <div class="review-divider" data-review-divider role="separator" tabindex="0" aria-label="调整图片与复核面板宽度" aria-orientation="vertical" aria-valuemin="32" aria-valuemax="64" aria-valuenow="48" title="拖动调整宽度，或使用左右方向键"></div>
+      <form id="review-form" class="review-form"><input type="hidden" name="result_id"><div class="status-summary review-issues" data-status-summary></div>
+        <details class="review-block check-block" data-review-panel="main" data-check-card="date" open>
+          <summary><span class="check-title">签收日期</span><span class="check-summary" data-check-summary="date" hidden></span><span data-check-badge="date"></span></summary>
+          <div class="check-heading"><button type="button" class="mini-button" data-focus-image="date">查看日期区域</button></div>
+          <div class="review-comparison-pair date-comparison-pair">
+            <div class="review-comparison" data-date-comparison></div>
+            <div class="review-check-result" data-date-result></div>
+            <div class="review-comparison confirmed-date hidden" data-date-confirmed role="status"><span>签收日期<b data-confirmed-date-value></b></span><div class="confirmed-date-actions"><small data-date-save-note></small><button type="button" class="text-button" data-date-change>修改</button></div></div>
+          </div>
+          <input type="hidden" name="actual_date"><input type="hidden" name="actual_date_confirmed" value="false">
+          <fieldset class="date-confirmation">
+            <legend class="sr-only">确认签收日期</legend>
+            <div class="date-confirmation-prompt"><span data-date-question></span><div class="date-confirmation-options">
+              <button type="button" class="mini-button date-choice-icon" data-date-choice="same" aria-label="确认实际签收与要求到货同一天" title="确认实际签收与要求到货同一天" aria-pressed="false">同一天</button>
+              <button type="button" class="mini-button date-choice-icon" data-date-choice="different" aria-label="不是同一天，修改签收日期" title="不是同一天，修改日期" aria-pressed="false">修改日期</button>
+            </div></div>
+            <div class="date-editor hidden" data-date-editor><label class="review-value-label" for="date-correction">实际签收日期</label><div class="date-editor-controls"><input id="date-correction" type="date" name="date_correction"><button type="button" class="mini-button date-choice-icon" data-date-accept aria-label="确认修改后的签收日期" title="确认签收日期">确认日期</button></div><small data-date-hint></small></div>
+          </fieldset>
+          <details class="date-audit-details" data-date-audit><summary>日期识别依据</summary><div data-date-audit-content></div></details>
+        </details>
+        <details class="review-block check-block" data-review-check="seal" data-check-card="seal" open>
+          <summary><span class="check-title">客户印章</span><span class="check-summary" data-check-summary="seal" hidden></span><span data-check-badge="seal"></span></summary>
+          <div class="check-heading"><button type="button" class="mini-button" data-focus-image="seal">查看印章区域</button></div>
+          <div class="review-comparison-pair seal-comparison-pair">
+            <div class="review-comparison" data-seal-comparison></div>
+            <div class="review-comparison confirmed-seal" data-seal-value-row><span><span data-seal-value-label>识别印章</span><b data-seal-value></b></span><div class="confirmed-date-actions"><span data-seal-confirmation-status></span><small data-seal-save-note></small><button type="button" class="text-button" data-seal-change>修改文字</button></div></div>
+          </div>
+          <input type="hidden" name="seal_confirmed_match">
+          <div class="hidden" data-seal-editor><label class="review-value-label">修改印章内容<textarea name="seal_text" rows="2"></textarea></label></div>
+          <div class="date-confirmation-prompt seal-confirmation-prompt" data-seal-prompt><span>与签章要求一致？</span><div class="date-confirmation-options">
+            <button type="button" class="mini-button date-choice-icon" data-seal-choice="same" aria-label="确认印章与签章要求匹配" title="是，与签章要求匹配">印章匹配</button>
+            <button type="button" class="mini-button date-choice-icon" data-seal-choice="different" aria-label="确认印章与签章要求不匹配" title="否，与签章要求不匹配">不匹配</button>
+          </div></div>
+          <details class="date-audit-details" data-seal-audit><summary>印章识别依据</summary><div class="review-check-result" data-seal-result></div><div class="seal-dual-evidence hidden" data-seal-dual></div></details>
+        </details>
+        <details class="review-block check-block" data-review-panel="signature" data-check-card="signature" open>
+          <summary><span class="check-title">签名核对</span><span class="check-summary" data-check-summary="signature" hidden></span><span data-check-badge="signature"></span></summary>
+          <div class="review-comparison-pair signature-comparison-pair">
+            <div class="review-comparison" data-signature-contact></div>
+            <div class="review-comparison" data-signature-receiver></div>
+            <div class="review-comparison confirmed-signature hidden" data-signature-confirmed role="status"><span>签名核对<b data-confirmed-signature-status></b></span><div class="confirmed-date-actions"><small data-signature-save-note></small><button type="button" class="text-button" data-signature-change>修改</button></div></div>
+          </div>
+          <input type="hidden" name="signature_confirmed_match">
+          <div class="date-confirmation-prompt signature-confirmation-prompt" data-signature-prompt><span>仓库联系人与仓库接收人一致？</span><div class="date-confirmation-options"><button type="button" class="mini-button date-choice-icon" data-signature-choice="same" aria-label="确认签名一致" title="是，签名一致">匹配</button><button type="button" class="mini-button date-choice-icon" data-signature-choice="different" aria-label="确认签名不一致" title="否，签名不一致">不匹配</button></div></div>
+          <p class="review-nonblocking-note">签名核对仅供人工确认和记录，不影响整体通过判断。</p>
+        </details>
+        <details class="review-block" data-review-panel="fields"><summary>印刷字段 <span>7 项基础信息</span></summary><div class="editable-fields" data-fields></div></details>
+        <details class="review-block" data-review-panel="handwriting"><summary>签收填写 <span>签名</span></summary><h3>仓库接收人</h3><div class="editable-fields" data-handwritten-fields></div></details>
+        <details class="review-block product-review-block" data-product-section data-review-panel="products"><summary>商品明细 <span data-product-count></span></summary><div class="product-table-wrap" data-product-table></div></details>
+        <details class="review-block" data-review-panel="evidence"><summary>识别依据与处理图片</summary><div data-machine-summary></div><div data-variants></div><div class="artifact-tabs"><button type="button" class="artifact-tab active" data-artifact-tab="date">日期区域</button><button type="button" class="artifact-tab" data-artifact-tab="seals">印章区域</button><button type="button" class="artifact-tab" data-artifact-tab="signature_requirement">签章要求区域</button></div><div data-artifacts></div></details>
+        <details class="review-block" data-review-panel="history"><summary>修改记录</summary><div data-history class="history-list"></div></details>
+        <details class="review-block truth-block" data-review-panel="truth"><summary>样单标注 <span data-truth-status></span></summary><p>人工确认后，可将当前结果保存为评测真值。</p><div class="truth-controls"><label class="check-label"><input type="checkbox" name="save_ground_truth">同时保存为评测真值</label><label>印章真值结论<select name="truth_seal_should_match"><option value="">请选择人工结论</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select></label></div><div data-truth-history class="truth-history"></div></details>
+        <details class="review-block review-notes"><summary>备注与错误类型</summary><label>人工备注<textarea name="human_note" rows="2"></textarea></label><label>错误类型<select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select></label></details>
+        <div class="review-actions"><div class="review-footer-context"><p data-review-mode-note class="review-mode-note" role="status" aria-live="polite"></p><p data-review-readiness role="status" aria-live="polite"></p><p data-review-shortcuts>Ctrl / ⌘ + Enter 确认通过 · Ctrl / ⌘ + S 保存稍后 · Alt + D / S 定位日期 / 印章</p></div><button type="button" class="text-button" data-retry>重新识别</button><button type="button" class="secondary-button" data-save-pending>保存并稍后处理</button><button type="button" class="secondary-button review-reject" data-confirm-fail>确认不通过</button><button type="button" class="primary-button" data-confirm-pass>确认通过并继续</button><button type="button" class="primary-button view-enter-review hidden" data-enter-review>进入复核</button></div>
+      </form>
+    </div>
+  </template>

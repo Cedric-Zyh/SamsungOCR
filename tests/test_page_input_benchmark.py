@@ -1,4 +1,4 @@
-from tools.benchmark_page_inputs import evidence, summarize
+from tools.analysis.operations.benchmark_page_inputs import evidence, summarize
 
 
 def sample(variant, checks, *, name="a.jpg", seconds=2, footer=0.5):
@@ -48,7 +48,7 @@ def test_footer_anchor_regression_blocks_even_with_identical_text():
 
 
 def test_extra_product_rows_are_a_quality_regression(monkeypatch):
-    import tools.benchmark_page_inputs as module
+    import tools.analysis.operations.benchmark_page_inputs as module
 
     monkeypatch.setattr(module, "parse_fields", lambda rows: {})
     monkeypatch.setattr(
@@ -62,7 +62,7 @@ def test_extra_product_rows_are_a_quality_regression(monkeypatch):
 
 
 def test_profile_preserves_prediction_objects_and_records_generator_work(monkeypatch):
-    import tools.benchmark_page_inputs as module
+    import tools.analysis.operations.benchmark_page_inputs as module
 
     times = iter([10, 12.5])
     monkeypatch.setattr(module.time, "perf_counter", lambda: next(times))

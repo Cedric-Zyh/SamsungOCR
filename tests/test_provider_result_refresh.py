@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-from receipt_ocr.database import Database
+from receipt_ocr.persistence.database import Database
 from receipt_ocr.provider_result_refresh import REFRESH_ACTION, refresh_provider_result
-from tools.refresh_provider_results import refresh_database
+from tools.analysis.operations.refresh_provider_results import refresh_database
 
 
 def saved_result():

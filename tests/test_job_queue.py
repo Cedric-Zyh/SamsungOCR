@@ -11,10 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from receipt_ocr.database import Database, now_iso
-from receipt_ocr.job_store import JobStore, result_revision
-from receipt_ocr.job_worker import JobWorker, ProcessLock
-from receipt_ocr.job_service import ReceiptJobService
+from receipt_ocr.persistence.database import Database, now_iso
+from receipt_ocr.jobs.store import JobStore, result_revision
+from receipt_ocr.jobs.worker import JobWorker, ProcessLock
+from receipt_ocr.jobs.service import ReceiptJobService
 
 
 OPTIONS = dict(ocr_backend='vision', seal_recognition_mode='local', recognition_config=None)
@@ -350,9 +350,9 @@ def test_process_crash_releases_ownership_and_next_worker_recovers(store):
     job = queued(store)
     script = '''
 import os, sys, threading
-from receipt_ocr.database import Database
-from receipt_ocr.job_store import JobStore
-from receipt_ocr.job_worker import JobWorker
+from receipt_ocr.persistence.database import Database
+from receipt_ocr.jobs.store import JobStore
+from receipt_ocr.jobs.worker import JobWorker
 store = JobStore(Database(sys.argv[1]))
 def crash(job):
     os._exit(0)
@@ -398,7 +398,7 @@ def test_deleted_jobs_are_not_resurrected_in_daily_progress(store):
 
 @pytest.fixture
 def web_queue(store, tmp_path, monkeypatch):
-    import app as web
+    from receipt_ocr.web import application as web
     for name, child in [('UPLOAD_DIR', 'uploads'), ('PREVIEW_DIR', 'previews'),
                          ('ARTIFACT_DIR', 'artifacts'), ('DATA_DIR', 'data')]:
         directory = tmp_path / child
@@ -407,7 +407,6 @@ def web_queue(store, tmp_path, monkeypatch):
     monkeypatch.setattr(web, 'database', store.database)
     monkeypatch.setattr(web, 'job_store', store)
     monkeypatch.setattr(web, 'job_worker', None)
-    monkeypatch.setattr(web, 'resolve_backend', lambda name: 'vision')
     monkeypatch.setattr(web, 'analyzer', SimpleNamespace(seal_api=SimpleNamespace(enabled=False)))
     return web
 

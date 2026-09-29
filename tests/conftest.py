@@ -4,9 +4,9 @@ import pytest
 
 @pytest.fixture(scope='session', autouse=True)
 def isolated_application(tmp_path_factory):
-    import app as web
-    from receipt_ocr.database import Database
-    from receipt_ocr.seal_reference import SealReferenceMatcher
+    from receipt_ocr.web import application as web
+    from receipt_ocr.persistence.database import Database
+    from receipt_ocr.recognition.seal.reference.matcher import SealReferenceMatcher
 
     root = tmp_path_factory.mktemp('application')
     patch = pytest.MonkeyPatch()

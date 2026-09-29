@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createProgress} = require('../static/modules/progress.mjs');
-const {createState} = require('../static/modules/state.mjs');
-const {workbenchAttention} = require('../static/modules/progress_presentation.mjs');
-const ReceiptWorkbench = require('../static/workbench.js');
-const ReceiptQueue = require('../static/queue_state.js');
+const {createProgress} = require('../static/modules/workbench/workbench.mjs');
+const {createState} = require('../static/modules/core/state.mjs');
+const {workbenchAttention} = require('../static/modules/workbench/presentation.mjs');
+const ReceiptWorkbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
+const ReceiptQueue = require('../static/modules/core/queue.mjs').ReceiptQueue;
 
 function node(dataset = {}) {
   const events = new Map(), classes = new Set();
@@ -66,7 +66,7 @@ test('workbench starts with pending review and excludes resolved and cancelled r
   await h.controller.loadDailyResults();
   assert.match(h.$('#queue').innerHTML, /receipt-1.jpg/);
   assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-2|receipt-3|cancelled.jpg|waiting.jpg/);
-  assert.equal((h.$('#queue').innerHTML.match(/<td/g) || []).length, 3);
+  assert.equal((h.$('#queue').innerHTML.match(/<td/g) || []).length, 5);
   assert.equal(h.$('#workbench-total-label').textContent, '当天共 5 张');
   assert.deepEqual(h.counts.map(count => count.textContent), [1, 1, 0]);
   assert.equal(h.$('#progress-note').textContent, '');
@@ -306,7 +306,8 @@ test('initial ready-list fallback preserves explicit filters and never switches 
   await h.controller.loadDailyResults();
   assert.equal(h.state.progress.workFilter, 'review');
   await h.filters[2].dispatch('click'); await h.controller.loadDailyResults();
-  assert.equal(h.state.progress.workFilter, 'failed');
+  assert.equal(h.state.progress.workFilter, 'multi');
+  assert.deepEqual(h.state.progress.workFilters, ['review', 'failed']);
   const later = harness(); later.data = []; await later.controller.loadDailyResults();
   later.jobs = [readyJob('later')]; await later.controller.loadDailyResults();
   assert.equal(later.state.progress.workFilter, 'review');

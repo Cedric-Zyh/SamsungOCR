@@ -1,4 +1,4 @@
-from tools.analyze_seal_references import build_safe_rerun_plan
+from tools.analysis.seal.analyze_seal_references import build_safe_rerun_plan
 
 
 def test_reference_rerun_plan_contains_only_current_positive_candidates():

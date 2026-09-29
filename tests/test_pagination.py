@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.database import Database
-from receipt_ocr.pagination import merge_paginated_results, page_identity
+from receipt_ocr.persistence.database import Database
+from receipt_ocr.domain.documents.pagination import merge_paginated_results, page_identity
 
 
 def result(filename: str, kind: str, row_number: str, *, task_id: str = "task") -> dict:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from receipt_ocr.image_processing import (
+from receipt_ocr.imaging.processing import (
     SealRegion,
     _robust_round_seal_bounds,
     _save_ellipse_annulus_unwrapped,
@@ -16,6 +16,7 @@ from receipt_ocr.image_processing import (
     save_rectangular_seal_bands,
     save_round_seal_type_band,
     save_unwrapped_seal_bands,
+    save_receipt_date_crop,
     seal_region_is_rectangular,
     seal_region_is_elliptical,
     seal_region_shape,
@@ -50,6 +51,23 @@ def test_ellipse_annulus_requires_two_reliable_borders(tmp_path):
     destination = tmp_path / "missing.png"
     assert not _save_ellipse_annulus_unwrapped(255 - mask, mask, destination)
     assert not destination.exists()
+
+
+def test_ellipse_annulus_can_estimate_missing_inner_border(tmp_path):
+    import cv2
+
+    mask = np.zeros((400, 400), dtype=np.uint8)
+    cv2.ellipse(mask, (200, 200), (180, 160), 0, 0, 360, 255, 4)
+    gray = np.full_like(mask, 255)
+    cv2.putText(gray, "ring", (100, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, 80, 3)
+    destination = tmp_path / "single-border-unwrapped.png"
+
+    assert _save_ellipse_annulus_unwrapped(
+        gray, mask, destination, single_line=True
+    )
+    output = cv2.imread(str(destination), cv2.IMREAD_GRAYSCALE)
+    assert output is not None
+    assert output.shape[1] >= 1000
 
 
 def test_ellipse_normalized_stage_stretches_color_safe_crop_to_square(tmp_path):
@@ -115,6 +133,31 @@ def test_pale_colored_ink_is_kept_but_neutral_form_text_is_not():
     red, _ = _color_masks(image)
     assert red[0, 0] == 255
     assert red[0, 1] == 0
+
+
+def test_date_red_cleanup_keeps_dark_handwriting_at_stamp_overlap(tmp_path):
+    """A red stamp must not erase the dark second ``1`` in ``11``."""
+    import cv2
+
+    image = np.full((500, 700, 3), 255, dtype=np.uint8)
+    # Pink stamp pixels cover the whole date line, including the second digit.
+    image[235:285, 500:690] = (150, 150, 230)
+    cv2.putText(image, "11", (545, 270), cv2.FONT_HERSHEY_SIMPLEX, 1.45, (0, 0, 0), 4)
+    source = tmp_path / "date-source.png"
+    clean = tmp_path / "date-clean.png"
+    assert cv2.imwrite(str(source), image)
+
+    save_receipt_date_crop(
+        source,
+        clean,
+        0.4,
+        tight=True,
+    )
+
+    output = cv2.imread(str(clean), cv2.IMREAD_GRAYSCALE)
+    assert output is not None
+    # Both digit strokes remain dark after the red stamp is suppressed.
+    assert (output < 100).sum() > 20
 
 
 def test_wide_oval_is_not_misclassified_as_rectangular_stamp(tmp_path):

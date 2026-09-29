@@ -1,0 +1,33 @@
+    <section data-page="progress" class="hidden workbench-page">
+      <section class="workbench-overview-card" aria-labelledby="workbench-overview-title">
+        <div class="workbench-overview-head">
+          <div class="workbench-overview-title"><span id="workbench-overview-title">处理概览</span><span class="workbench-state-pill" id="workbench-state-pill">加载中</span></div>
+          <div class="workbench-overview-actions">
+            <a class="mini-button" href="#import">＋ 导入回单</a>
+            <button id="queue-start" type="button" class="primary-button" disabled>开始识别</button>
+            <button id="queue-toggle" type="button" class="mini-button" disabled>暂停</button>
+            <button id="overview-delete" type="button" class="mini-button row-cancel" disabled>删除所选</button>
+          </div>
+        </div>
+        <div class="workbench-overview-progress">
+          <div><span class="workbench-overview-eyebrow">已处理单据</span><strong><span id="overview-completed">—</span><em>/ <span id="overview-total">—</span> 张</em></strong><small>包含待复核、通过、不通过和识别失败</small></div>
+          <div class="overview-progress-detail"><div><span>当日处理进度</span><b id="overview-percent">—</b></div><div class="progress-track" role="progressbar" aria-label="当天回单处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress"></span></div><small id="overview-remaining">正在加载当天数据…</small><span id="task-summary" class="sr-only" role="status"></span></div>
+        </div>
+        <div class="workbench-filter-buttons workbench-state-cards" aria-label="按处理状态筛选，可同时选择多个状态">
+          <button type="button" data-work-filter="ready" aria-pressed="false"><span class="stat-label">待开始</span><strong data-work-count="ready">—</strong></button>
+          <button type="button" data-work-filter="running" aria-pressed="false"><span class="stat-label">处理中</span><strong data-work-count="running">—</strong></button>
+          <button type="button" data-work-filter="review" aria-pressed="true"><span class="stat-label">待复核</span><strong data-work-count="review">—</strong></button>
+          <button type="button" data-work-filter="passed" aria-pressed="false"><span class="stat-label">通过</span><strong data-work-count="passed">—</strong></button>
+          <button type="button" data-work-filter="rejected" aria-pressed="false"><span class="stat-label">不通过</span><strong data-work-count="rejected">—</strong></button>
+          <button type="button" data-work-filter="failed" aria-pressed="false"><span class="stat-label">失败</span><strong data-work-count="failed">—</strong></button>
+        </div>
+        <div class="workbench-type-counts" id="workbench-type-counts" aria-label="按客户筛选"></div>
+        <div class="workbench-queue-footer"><span class="queue-scope-label">后台队列</span><span id="queue-control-label" role="status"></span><button id="refresh-progress" type="button" class="text-button">刷新</button><p id="queue-pause-notice" class="queue-pause-notice hidden" role="status"></p></div>
+      </section>
+      <p id="progress-note" class="progress-note" role="status">正在加载当天待办…</p>
+      <section id="task-section" class="hidden workbench-tasks" aria-labelledby="workbench-list-title">
+        <div class="workbench-taskbar"><div class="workbench-list-heading"><h2 id="workbench-list-title">待复核单据</h2><span id="workbench-visible-count" role="status"></span></div><div class="workbench-list-tools"><input id="workbench-search" type="search" placeholder="搜索文件名、订单号" aria-label="搜索文件名或订单号"><button type="button" class="text-button" data-work-filter="all" aria-pressed="false">查看全部单据 ↗</button><button id="workbench-start-review" type="button" class="mini-button" disabled>开始复核</button></div></div>
+        <div class="table-wrap workbench-table-wrap" tabindex="0" role="region" aria-label="当天待办列表，可滚动查看"><table class="workbench-table"><colgroup><col class="workbench-file-col"><col class="workbench-status-col"><col class="workbench-result-col"><col class="workbench-meta-col"><col class="workbench-action-col"></colgroup><thead><tr><th scope="col"><input type="checkbox" id="workbench-select-all" aria-label="选择当前显示的单据"> 回单 / 客户</th><th scope="col">状态</th><th scope="col" id="workbench-reason-heading">需要关注 / 核验结果</th><th scope="col">备注 / 时间</th><th scope="col">操作</th></tr></thead><tbody id="queue"><tr><td colspan="5" class="empty-state">正在加载待办…</td></tr></tbody></table></div>
+        <div class="workbench-list-footer"><span id="workbench-page-note" role="status"></span><button id="workbench-more" type="button" class="text-button hidden">再显示 50 张</button></div>
+      </section>
+    </section>

@@ -6,12 +6,12 @@ import sys
 def test_import_does_not_initialize_or_recover_live_database():
     root = Path(__file__).resolve().parents[1]
     script = '''
-from receipt_ocr.database import Database
+from receipt_ocr.persistence.database import Database
 def forbidden(*args, **kwargs):
     raise AssertionError('import attempted database access')
 Database.connect = forbidden
 Database.initialize = forbidden
-import app
+from receipt_ocr.web import application as app
 assert app._initialized is False
 '''
     result = subprocess.run([sys.executable, '-c', script], cwd=root,
@@ -20,7 +20,7 @@ assert app._initialized is False
 
 
 def test_first_request_initializes_once(monkeypatch):
-    import app as web
+    from receipt_ocr.web import application as web
     calls = []
     def initialize():
         calls.append(True)

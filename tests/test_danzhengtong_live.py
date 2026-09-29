@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from receipt_ocr import danzhengtong as dzt
-from receipt_ocr.recognition_config import run_configured
+from receipt_ocr.application.plans import run_configured
 
 
 def settings(**kwargs):
@@ -71,19 +71,19 @@ def test_real_pipeline_uploads_once_polls_and_maps_all_stages(monkeypatch, tmp_p
 
 
 def cached_stage(stage, *, actual='2025-02-10', required='2025-02-10',
-                 seal_text='太原市伊加壹电子服务总汇', requirement='太原市伊加壹电子服务总汇', simulated=False):
-    from receipt_ocr.document_context import DocumentContext
+                 seal_text='太原市伊加壹电子服务总汇', requirement='太原市伊加壹电子服务总汇'):
+    from receipt_ocr.application.context import DocumentContext
     values = commit()
     values['签收日期']['value'] = actual
     values['收货客户印章']['value'] = seal_text
-    cache = {'fixture': dzt.normalize_result(values), 'trace': {'simulated': simulated}}
+    cache = {'fixture': dzt.normalize_result(values),
+             'trace': {'mode': 'real', 'simulated': False, 'status': 'completed'}}
     return dzt.stage_result(DocumentContext('unused.jpg'), stage, cache,
                             {'要求到货': required, '签章要求': requirement})
 
 
 @pytest.mark.parametrize('trace,fields,accepted', [
     ({'mode':'real','simulated':False,'status':'completed'}, {'客户名称':'测试客户'}, True),
-    ({'mode':'mock','simulated':True,'status':'completed'}, {'客户名称':'模拟客户'}, False),
     ({'mode':'real','simulated':False,'status':'failed'}, {'客户名称':'测试客户'}, False),
     ({'mode':'real','simulated':False}, {'客户名称':'测试客户'}, False),
     ({'mode':'real','simulated':False,'status':'completed'}, {'客户名称':'  ', '合计数量':None}, False),
@@ -111,7 +111,7 @@ def test_accepting_fields_does_not_override_known_document_routing():
 
 
 def test_date_only_provider_does_not_claim_fields_were_accepted():
-    from receipt_ocr.document_context import DocumentContext
+    from receipt_ocr.application.context import DocumentContext
     cache = {'fixture':dzt.normalize_result(commit()),
              'trace':{'mode':'real','simulated':False,'status':'completed'}}
     result = dzt.stage_result(DocumentContext('unused.jpg'), 'date', cache, {'要求到货':'2025-08-27'})
@@ -133,16 +133,6 @@ def test_provider_date_uses_returned_value_and_names_source(actual, required, st
     assert check['source'] == check['backend'] == '单证通'
     assert check['raw_text'] == actual
     assert 'confidence' not in check
-
-
-@pytest.mark.parametrize('stage', ['date', 'seal'])
-def test_simulated_provider_match_stays_unconfirmed(stage):
-    result = cached_stage(stage, simulated=True)
-    check = result[f'{stage}_check']
-    assert check['status'] == '匹配'
-    assert check['reliable'] is False
-    assert check['source'] == '单证通（模拟）'
-    assert dzt.MOCK_NOTICE in result['stage_review_reasons']
 
 
 @pytest.mark.parametrize('text,requirement,status', [
@@ -230,23 +220,33 @@ def test_default_http_session_ignores_proxy_environment(monkeypatch, tmp_path):
 def test_recognition_serializes_documents(monkeypatch):
     entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
     calls = []
-    def recognize_mock(self, source, **kwargs):
+
+    def submit_file(self, source, **kwargs):
         calls.append(source)
         if source == 'first':
             entered.set()
             assert release.wait(3)
-        return {}, {}
-    monkeypatch.setattr(dzt.Client, 'recognize_mock', recognize_mock)
-    first, second = dzt.Client(dzt.Settings(mode='mock')), dzt.Client(dzt.Settings(mode='mock'))
+        self.jobs[source] = {'status': 'submitted'}
+        return {'data': {'reqUuid': source}}
+
+    monkeypatch.setattr(dzt.Client, 'submit_file', submit_file)
+    monkeypatch.setattr(dzt.Client, 'get_result', lambda *a, **kw: {'data': {'commitResult': commit()}})
+    monkeypatch.setattr(dzt.time, 'sleep', lambda _: None)
+    first, second = dzt.Client(settings()), dzt.Client(settings())
     with ThreadPoolExecutor(max_workers=2) as pool:
         one = pool.submit(first.recognize, 'first')
         assert entered.wait(2)
+
         def start_second():
             second_started.set()
             return second.recognize('second')
+
         two = pool.submit(start_second)
-        assert second_started.wait(2)
-        assert calls == ['first']
-        release.set()
-        one.result(2); two.result(2)
-    assert calls == ['first','second']
+        try:
+            assert second_started.wait(2)
+            assert calls == ['first']
+        finally:
+            release.set()
+        assert one.result(2)[1]['status'] == 'completed'
+        assert two.result(2)[1]['status'] == 'completed'
+    assert calls == ['first', 'second']

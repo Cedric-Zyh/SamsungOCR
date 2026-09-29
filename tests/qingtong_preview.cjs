@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {imageSources} = require('../static/workbench.js');
+const {imageSources} = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
 function record() {
   return {id:23, review_revision:'version+1', preview_url:'/files/previews/page.jpg',

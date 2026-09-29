@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createImports} = require('../static/modules/imports.mjs');
-const ReceiptImport = require('../static/import_files.js');
+const {createImports} = require('../static/modules/imports/imports.mjs');
+const ReceiptImport = require('../static/modules/core/import_files.mjs').ReceiptImport;
 
 function harness({legacy = false, failUpload = false, failSetup = false, groupSize = 5000} = {}) {
   const nodes = new Map(), requests = [], notices = [], startStates = [];

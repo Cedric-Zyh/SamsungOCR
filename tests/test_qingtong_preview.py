@@ -4,10 +4,10 @@ from io import BytesIO
 import pytest
 from PIL import Image, ImageDraw
 
-import app as web
-from receipt_ocr.database import Database
-from receipt_ocr.qingtong_preview import render_selected_seal, selected_seal_xyxy
-from receipt_ocr.qingtong_seal import compare_qingtong_seal
+from receipt_ocr.web import application as web
+from receipt_ocr.persistence.database import Database
+from receipt_ocr.recognition.seal.providers.qingtong import render_selected_seal, selected_seal_xyxy
+from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
 
 
 def check(box=(130, 40, 180, 90)):

@@ -88,7 +88,7 @@ CnOCR 在这里扮演的角色只是 **ONNX 运行时 + 模型下载器**，模�
 
 ```
 backend_catalog()  →  /api/ocr-backends  →  templates/index.html 渲染勾选框
-                                            └─ static/modules/recognition_plan.mjs 读 checkbox
+                                            └─ static/modules/imports/recognition_plan.mjs 读 checkbox
         ↓
 recognize_text(path, backend, stage) → backend_route()[stage]
         ├─ "vision"                     → vision_ocr.recognize_text
@@ -118,18 +118,18 @@ MODEL_VARIANTS = {
 | 4 | `receipt_ocr/ocr_backends.py:23` `backend_catalog()` | 后端目录 | 界面不出现新选项 |
 | 5 | `receipt_ocr/ocr_backends.py:169` `recognize_text` 分支 | id → 模型档位映射 | 走到 `raise ValueError` |
 | 6 | `templates/index.html:122-123` | 勾选框白名单 + 标签字典 | **设置页不显示该方式** |
-| 7 | `static/modules/recognition_plan.mjs:3,5` | `methodLabels` / `localMethods` | 摘要显示 `undefined`，且提交时被判为"不支持" |
+| 7 | `static/modules/imports/recognition_plan.mjs:3,5` | `methodLabels` / `localMethods` | 摘要显示 `undefined`，且提交时被判为"不支持" |
 | 8 | `receipt_ocr/recognition_config.py:45` | 识别计划 method 白名单校验 | 提交时抛 "识别方式不可用：xxx" |
 | 9 | `receipt_ocr/recognition_safety.py:23` | 单一 Paddle 模型安全策略 | **单模型自证风险**（详见下） |
 | 10 | `receipt_ocr/field_rules.py:56` | 字段行重核是否可用 | 回退到 mobile 模型 |
-| 11 | `receipt_ocr/date_crop_regions.py:105` | 日期行 backend → 档位映射 | 用错模型重核日期 |
+| 11 | `receipt_ocr/recognition/date/crops.py:105` | 日期行 backend → 档位映射 | 用错模型重核日期 |
 | 12 | `receipt_ocr/evaluation.py:293` | 报表后端排序 | 仅顺序问题，功能不坏 |
 | 13 | `tests/test_ocr_backends.py:20,67+` | 既有断言 | 测试红 |
 
 需要**留意但可暂不改**的位置：
 
-- `receipt_ocr/date_slot_evidence.py:377,688` —— 用**后端标签文本**反推模型族（`"mobile" in label or "paddleocr" in label`）。所以新后端的**标签字符串不能随便起**：如果标签里带 "mobile" 会被误判成 mobile 档。
-- `receipt_ocr/date_slot_evidence.py` / `date_business_evidence.py` / `date_strict_evidence.py` 里大量 `"paddle" not in str(secondary_ocr_backend)` 判断 —— 决定跨模型证据是否成立。
+- `receipt_ocr/recognition/date/evidence.py:377,688` —— 用**后端标签文本**反推模型族（`"mobile" in label or "paddleocr" in label`）。所以新后端的**标签字符串不能随便起**：如果标签里带 "mobile" 会被误判成 mobile 档。
+- `receipt_ocr/recognition/date/evidence.py` / `date_business_evidence.py` / `date_strict_evidence.py` 里大量 `"paddle" not in str(secondary_ocr_backend)` 判断 —— 决定跨模型证据是否成立。
 
 ### 3.3 一个非常容易踩的坑
 
@@ -270,10 +270,10 @@ if len(physical) != 1 or not physical.issubset(
 - `receipt_ocr/recognition_config.py:45`：`{"vision", "paddle", "paddle_server", "paddle_v6"}`
 - `templates/index.html:122`：`backend.id in ['paddle','paddle_server','paddle_v6','vision']`
 - `templates/index.html:123`：标题字典和显示字典各加一条 `'paddle_v6':'Paddle v6 Small'`
-- `static/modules/recognition_plan.mjs:3`：`methodLabels` 加 `paddle_v6`
-- `static/modules/recognition_plan.mjs:5`：`localMethods` 加 `'paddle_v6'`
+- `static/modules/imports/recognition_plan.mjs:3`：`methodLabels` 加 `paddle_v6`
+- `static/modules/imports/recognition_plan.mjs:5`：`localMethods` 加 `'paddle_v6'`
 
-> 按项目既有约定：改完 `.mjs` 要 bump `application.mjs` 里的 `?v=`；改完 CSS 要 bump `templates/index.html` 的 `?v=`。（本次不涉及 CSS。）
+> 当前页面通过 `asset_url()` 按文件修改时间生成缓存版本，模块和样式入口不再维护手写 `?v=`。
 
 ### Step 6 — 收敛散落的字面量（建议顺做）
 
@@ -307,12 +307,12 @@ def variant_of(name: str | None) -> str: ...   # -> "mobile" / "server" / "v6"
 
 ```bash
 # 1) 同一批样本跑两遍
-/Users/zhuyihao/anaconda3/bin/python3 -m tools.batch_validate ... --backend paddle
-/Users/zhuyihao/anaconda3/bin/python3 -m tools.batch_validate ... --backend paddle_v6
-#   （单图先看一眼：python -m tools.inspect_ocr）
+/Users/zhuyihao/anaconda3/bin/python3 -m tools.analysis.operations.batch_validate ... --backend paddle
+/Users/zhuyihao/anaconda3/bin/python3 -m tools.analysis.operations.batch_validate ... --backend paddle_v6
+#   （单图先看一眼：python -m tools.analysis.operations.inspect_ocr）
 
 # 2) 出对照报告
-/Users/zhuyihao/anaconda3/bin/python3 -m tools.compare_backend_runs \
+/Users/zhuyihao/anaconda3/bin/python3 -m tools.analysis.operations.compare_backend_runs \
     --run paddle=storage/xxx-paddle.json \
     --run paddle_v6=storage/xxx-paddle-v6.json \
     --reference-backend paddle \
@@ -407,16 +407,16 @@ Step 1~5 + 7 是"能跑起来"的最小闭环，建议作为一个改动单元�
 | `receipt_ocr/recognition_safety.py` | 单模型安全策略的 `issubset({"paddle","paddle_server"})` 改为 `all(is_paddle_backend(...))` |
 | `receipt_ocr/recognition_config.py` | 计划校验白名单改用 `PADDLE_BACKENDS \| {"vision"}` |
 | `receipt_ocr/field_rules.py` | 签章要求行重核的 backend 判断与档位映射改为 helper |
-| `receipt_ocr/date_crop_regions.py` | 日期行绕过检测的路径改用 `is_lightweight_backend()`，并按实际后端 id 记录 `line_backend` |
-| `receipt_ocr/date_business_evidence.py` | 修复"靠标签文本反推模型族"——改用 `is_lightweight_backend()`，避免 v6 标签不含 "mobile" 导致的家族误判 |
+| `receipt_ocr/recognition/date/crops.py` | 日期行绕过检测的路径改用 `is_lightweight_backend()`，并按实际后端 id 记录 `line_backend` |
+| `receipt_ocr/recognition/date/evidence.py` | 修复"靠标签文本反推模型族"——改用 `is_lightweight_backend()`，避免 v6 标签不含 "mobile" 导致的家族误判 |
 | `templates/index.html` | 勾选框白名单与标签字典加入 `paddle_v6`（显示名 `Paddle v6 Small`） |
-| `static/modules/recognition_plan.mjs` | `methodLabels` / `localMethods` 加入 `paddle_v6` |
-| `static/modules/application.mjs` | 给 `recognition_plan.mjs` 补上 `?v=20260918-paddle-v6` 缓存穿透版本号 |
+| `static/modules/imports/recognition_plan.mjs` | `methodLabels` / `localMethods` 加入 `paddle_v6` |
+| `static/modules/shell/application.mjs` | 通过统一模块入口加载 `recognition_plan.mjs`，缓存版本由页面资源入口统一管理 |
 | `tests/test_ocr_backends.py` | 新增 11 个用例（v6 模型名、id↔provider 双向一致、scoped 白名单、路由、档位选择、版本门槛、标签不含 mobile、轻量档判定、三档安全策略、计划可校验） |
 | `tests/settings_ui.cjs` | 夹具加入 `paddle_v6`；新增 1 个前端用例 |
 | `requirements.txt` | `paddleocr==3.7.0` |
 
-**未改动（有意保留）**：`recognition_safety._ocr_model_config()` 里 `"PP-OCRv5 Server"` 字符串保持原样——它被 `tests/test_analyzer.py` 断言、且已写进存量导出 JSON，改字符串会造成兼容性破坏。v6 走该函数时返回 `{}`，与 Mobile 一致，语义正确。
+**未改动（有意保留）**：`recognition_safety._ocr_model_config()` 里 `"PP-OCRv5 Server"` 字符串保持原样——它被 `tests/test_application_analyzer.py` 断言、且已写进存量导出 JSON，改字符串会造成兼容性破坏。v6 走该函数时返回 `{}`，与 Mobile 一致，语义正确。
 
 ### 9.3 关键设计点
 
@@ -429,7 +429,7 @@ Step 1~5 + 7 是"能跑起来"的最小闭环，建议作为一个改动单元�
 **单元测试**：`pytest tests` → **2 failed, 916 passed**。
 两个失败（`test_settings_plan_presets_validation_and_persistence`、`test_workbench_todos_pagination_and_record_navigation`）经 `git stash` 对照确认**改动前后完全一致**，属于存在已久的测试与代码漂移，与本次改造无关。
 
-**5 张样本离线 A/B**（`tools/batch_validate.py` × `tools/compare_backend_runs.py`，样本 7266220437 / 439 / 440 / 7347 / 7266274552）：
+**5 张样本离线 A/B**（`tools/analysis/operations/batch_validate.py` × `tools/analysis/operations/compare_backend_runs.py`，样本 7266220437 / 439 / 440 / 7347 / 7266274552）：
 
 | 指标 | v5 Mobile | v6 Small | 结论 |
 | --- | --- | --- | --- |
@@ -458,5 +458,5 @@ Step 1~5 + 7 是"能跑起来"的最小闭环，建议作为一个改动单元�
 
 1. **后端已可用**：设置页「识别内容与方式」现在可勾选 `Paddle v6 Small`，可与其他方式多选做结果对照。
 2. **暂不建议设为默认**：5 张样本虽小，但 440 的日期错误是确定的单点回归；而 v6 的主要收益（27% 提速）在结算口径上尚未转化为准确率提升。
-3. **下一步**：若要继续推进，用 `tools/batch_validate.py` 把样本扩到 30~50 张（优先覆盖日期识别失败的案例集），重点看 `date_accuracy` 与 `date_decision_accuracy`，再决定是否扩大默认使用范围。
+3. **下一步**：若要继续推进，用 `tools/analysis/operations/batch_validate.py` 把样本扩到 30~50 张（优先覆盖日期识别失败的案例集），重点看 `date_accuracy` 与 `date_decision_accuracy`，再决定是否扩大默认使用范围。
 

@@ -1,7 +1,7 @@
 """Global search uses complete logical receipts and composes with other filters."""
 import pytest
 
-from receipt_ocr.database import _matches_filters
+from receipt_ocr.persistence.database import _matches_filters
 
 
 @pytest.mark.parametrize("query", ["发货", "Invoice-73", "客户甲", "ORD-19"])

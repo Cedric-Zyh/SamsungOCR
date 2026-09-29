@@ -11,7 +11,7 @@ def test_progress_projection_handles_retries_and_status_result_races():
         pytest.skip('Node is unavailable')
     script = '''
 const assert = require('node:assert/strict');
-const q = require('./static/queue_state.js');
+const q = require('./static/modules/core/queue.mjs').ReceiptQueue;
 const records = [{id:1,filename:'same.jpg',overall:'通过'}, {id:2,filename:'same.jpg',overall:'通过'}];
 const jobs = [{id:'retry',target_result_id:1,filename:'same.jpg',status:'running'},
               {id:'original',result_id:1,filename:'same.jpg',status:'succeeded'},
@@ -39,8 +39,8 @@ def test_workbench_keeps_processing_separate_from_verdict_and_skips_deferred_rev
         pytest.skip('Node is unavailable')
     script = '''
 const assert = require('node:assert/strict');
-const w = require('./static/workbench.js');
-const q = require('./static/queue_state.js');
+const w = require('./static/modules/core/workbench.mjs').ReceiptWorkbench;
+const q = require('./static/modules/core/queue.mjs').ReceiptQueue;
 const record = {id:1, filename:'a.jpg', review_status:'确认通过', final_result:'通过', fields:{客户名称:'客户'}};
 const running = q.rows([record], [{id:'retry', target_result_id:1, status:'running', filename:'a.jpg', final_result:'通过'}])[0];
 assert.equal(w.category(running), 'processing');
@@ -67,7 +67,7 @@ def test_review_date_requires_confirmation_and_preserves_required_calendar_start
         pytest.skip('Node is unavailable')
     script = '''
 const assert = require('node:assert/strict');
-const w = require('./static/workbench.js');
+const w = require('./static/modules/core/workbench.mjs').ReceiptWorkbench;
 const missing = w.dateReview('2025-03-31', '');
 assert.equal(missing.actual, '');
 assert.equal(missing.choice, '');

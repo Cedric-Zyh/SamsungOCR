@@ -3,8 +3,8 @@ from threading import Barrier
 
 import pytest
 
-from receipt_ocr.execution import measure, recognition_run, recognize_page
-from receipt_ocr.recognition_scope import provider_scope
+from receipt_ocr.runtime.execution import measure, recognition_run, recognize_page
+from receipt_ocr.runtime.scope import provider_scope
 
 
 def test_page_cache_is_per_run_backend_and_source():

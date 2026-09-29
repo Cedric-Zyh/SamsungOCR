@@ -1,0 +1,17 @@
+    <section data-page="import" class="hidden">
+
+    <section class="workspace batch-workspace">
+      <div class="upload-panel">
+        <div id="drop-zone" class="drop-zone small-drop" aria-label="上传回单图片">
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+          <div class="upload-icon">↥</div><h2>拖入图片或整个文件夹</h2><p>自动包含所有层级子文件夹中的 JPG、PNG、BMP、WEBP 图片</p>
+          <div class="button-row"><button type="button" class="primary-button" id="choose-file">选择图片</button><button type="button" class="secondary-button" id="choose-folder">选择文件夹</button></div>
+        </div>
+        <p id="folder-scan-status" class="import-hint" role="status"></p><p class="import-hint">图片先保存在本地，再点击“开始识别”。上传期间请保持页面打开。<br>识别方式可在<a href="#settings">设置</a>中调整。</p><p id="import-config" class="import-hint"></p>
+
+      </div>
+
+    </section>
+
+    </section>

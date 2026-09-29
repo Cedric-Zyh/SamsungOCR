@@ -8,10 +8,10 @@ import pytest
 import requests
 
 from receipt_ocr import danzhengtong as dzt
-from receipt_ocr.database import Database
-from receipt_ocr.job_store import JobStore
-from receipt_ocr.job_worker import JobWorker
-from receipt_ocr.recognition_progress import progress_reporting, report_dzt_progress
+from receipt_ocr.persistence.database import Database
+from receipt_ocr.jobs.store import JobStore
+from receipt_ocr.jobs.worker import JobWorker
+from receipt_ocr.runtime.progress import progress_reporting, report_dzt_progress
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def response(body):
 
 
 def test_queue_api_reports_actual_stage_while_provider_is_still_running(store, tmp_path, monkeypatch):
-    import app as web
+    from receipt_ocr.web import application as web
     source = tmp_path / 'sample.jpg'
     source.write_bytes(b'image')
     waiting, release = Event(), Event()
@@ -97,7 +97,7 @@ def test_wait_elapsed_survives_polls_and_reopen_but_resets_for_recovered_attempt
     event = {'provider': 'danzhengtong', 'stage': 'waiting', 'updated_at': '2026-09-11T19:00:00+08:00'}
     assert store.update_progress(job, event)
     assert store.update_progress(job, {**event, 'updated_at': '2026-09-11T19:01:00+08:00', 'poll_count': 20})
-    monkeypatch.setattr('receipt_ocr.recognition_progress.now_iso', lambda: '2026-09-11T19:01:30+08:00')
+    monkeypatch.setattr('receipt_ocr.runtime.progress.now_iso', lambda: '2026-09-11T19:01:30+08:00')
     reopened = JobStore(Database(store.database.path))
     progress = reopened.public(reopened.get(job['id']))['progress']
     assert progress['elapsed_seconds'] == 90
@@ -216,7 +216,7 @@ def test_wait_timeout_switches_progress_to_the_real_error(tmp_path, monkeypatch)
 def test_pause_stops_queries_and_resume_uses_same_request_without_resetting_deadline(
         store, tmp_path, monkeypatch, pause_at, resume):
     from datetime import datetime, timedelta
-    from receipt_ocr.document_context import DocumentContext
+    from receipt_ocr.application.context import DocumentContext
     elapsed, calls, events = [0.0], [], []
     pause_started = [False]
     source = tmp_path / 'sample.jpg'; source.write_bytes(b'image')
@@ -252,7 +252,7 @@ def test_pause_stops_queries_and_resume_uses_same_request_without_resetting_dead
     monkeypatch.setattr(dzt, 'Client', lambda: client)
     monkeypatch.setattr(dzt.time, 'sleep', sleep)
     monkeypatch.setattr(dzt.time, 'monotonic', lambda: elapsed[0])
-    monkeypatch.setattr('receipt_ocr.recognition_progress.now_iso', lambda:
+    monkeypatch.setattr('receipt_ocr.runtime.progress.now_iso', lambda:
         (datetime.fromisoformat('2026-09-11T19:00:00+08:00') + timedelta(seconds=elapsed[0])).isoformat())
     def update(event):
         events.append(event)

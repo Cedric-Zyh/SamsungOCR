@@ -3,9 +3,9 @@ from __future__ import annotations
 import copy
 from statistics import mean
 
-from .document_evaluation import evaluate_document_routing
+from .domain.documents.evaluation import evaluate_document_routing
 from .evaluation import evaluate_results
-from .parser import PRODUCT_COLUMNS, normalize_text
+from .domain.parsing import PRODUCT_COLUMNS, normalize_text
 
 
 def compare_backend_runs(

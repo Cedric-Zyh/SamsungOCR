@@ -1,7 +1,7 @@
 import json
 import sys
 
-from tools.windows_smoke import main
+from tools.analysis.operations.windows_smoke import main
 
 
 def test_simulated_windows_smoke_writes_auditable_report(tmp_path, monkeypatch):

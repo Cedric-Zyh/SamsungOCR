@@ -1,7 +1,7 @@
 from PIL import Image, ImageDraw
 import pytest
 
-from receipt_ocr.date_evidence import _save_date_line_crop
+from receipt_ocr.recognition.date.evidence import _save_date_line_crop
 
 
 @pytest.mark.parametrize("tight,stroke_top", [(True, 55), (False, 70)])

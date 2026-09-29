@@ -1,5 +1,5 @@
-from tools.analyze_date_missing_month_consensus import select_saved_candidate
-from tests.test_analyzer import _same_geometry_missing_month_artifacts
+from tools.analysis.date.analyze_date_missing_month_consensus import select_saved_candidate
+from tests.test_application_analyzer import _same_geometry_missing_month_artifacts
 
 
 def test_select_saved_candidate_does_not_need_truth():

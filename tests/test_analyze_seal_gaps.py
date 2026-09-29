@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from tools.analyze_seal_gaps import build_report
+from tools.analysis.seal.analyze_seal_gaps import build_report
 
 
 def test_seal_gap_report_uses_latest_immutable_machine_result(tmp_path):

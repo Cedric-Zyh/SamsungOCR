@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createImportCalendar} = require('../static/modules/import_calendar.mjs');
+const {createImportCalendar} = require('../static/modules/imports/import_calendar.mjs');
 
 function node() {
   const listeners = new Map(), classes = new Set();

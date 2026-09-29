@@ -9,7 +9,7 @@ from receipt_ocr.evaluation import (
     evaluate_results,
     save_ground_truth_entry,
 )
-from receipt_ocr.parser import PRODUCT_COLUMNS
+from receipt_ocr.domain.parsing import PRODUCT_COLUMNS
 
 
 def test_product_accuracy_is_measured_per_cell_and_row():
@@ -184,7 +184,7 @@ def test_safe_decision_metrics_separate_abstention_from_wrong_decision():
 
 
 def test_legacy_truth_reports_missing_new_fields_without_inventing_labels():
-    from receipt_ocr.field_schema import OUTPUT_FIELDS
+    from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS
     fields = {name: '正确' for name in GROUND_TRUTH_FIELDS}
     truth = {'sample.jpg': {'fields': fields, 'actual_date': '2025-01-05', 'seal_should_match': True}}
     result = {'id': 1, 'filename': 'sample.jpg', 'field_schema_version': 1,

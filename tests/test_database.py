@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from receipt_ocr.database import Database
+from receipt_ocr.persistence.database import Database
 
 
 def sample_result(filename="7266301052.jpg"):

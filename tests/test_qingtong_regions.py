@@ -15,14 +15,15 @@ import cv2
 import numpy as np
 import pytest
 
-from receipt_ocr import stage_seal
-from receipt_ocr.document_context import DocumentContext, StageRequest
-from receipt_ocr.image_processing import (
+from receipt_ocr.stages import seal as stage_seal
+from receipt_ocr.application.context import DocumentContext
+from receipt_ocr.domain.requests import StageRequest
+from receipt_ocr.imaging.processing import (
     read_image_size,
     save_pixel_region_crop,
 )
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.qingtong_regions import (
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.recognition.seal.providers.qingtong import (
     qingtong_region_boxes,
     qingtong_seal_regions,
 )
@@ -311,7 +312,7 @@ def test_local_mode_keeps_its_own_detection(tmp_path, monkeypatch):
 
 
 def _detected_region():
-    from receipt_ocr.image_processing import SealRegion
+    from receipt_ocr.imaging.processing import SealRegion
 
     return SealRegion(
         x=0.2, y=0.3, width=0.3, height=0.2, color="red",

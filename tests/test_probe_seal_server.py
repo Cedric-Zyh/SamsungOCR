@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from receipt_ocr.ocr_types import TextObservation
-from tools import probe_seal_server
+from receipt_ocr.domain.ocr import TextObservation
+from tools.analysis.seal import probe_seal_server
 
 
 def _row(text: str, confidence: float = 0.9) -> TextObservation:

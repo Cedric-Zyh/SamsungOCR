@@ -1,11 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {providerErrors} = require('../static/modules/provider_errors.mjs');
-const {workbenchAttention} = require('../static/modules/progress_presentation.mjs');
-const {createRecords} = require('../static/modules/records.mjs');
-const {createReview} = require('../static/modules/review.mjs');
-const workbench = require('../static/workbench.js');
-const {providerProgress} = require('../static/modules/provider_progress.mjs');
+const {providerErrors} = require('../static/modules/core/provider_errors.mjs');
+const {workbenchAttention} = require('../static/modules/workbench/presentation.mjs');
+const {createRecords} = require('../static/modules/records/records.mjs');
+const {createReview} = require('../static/modules/review/review.mjs');
+const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
+const {providerProgress} = require('../static/modules/workbench/provider_progress.mjs');
 
 const failure = '单证通文件上传失败：HTTP 503；服务暂不可用 <详情> "重试"';
 const record = () => ({id: 2841, filename: '7273687654.jpg', fields: {},

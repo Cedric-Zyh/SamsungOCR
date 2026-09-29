@@ -2,7 +2,27 @@ from pathlib import Path
 
 import pytest
 
-from receipt_ocr.seal_api import SealApiClient, resolve_seal_recognition_mode
+from receipt_ocr.recognition.seal.providers.api import SealApiClient, resolve_seal_recognition_mode
+
+
+def test_default_key_location_survives_module_move_and_working_directory(tmp_path, monkeypatch):
+    from receipt_ocr.recognition.seal.providers import api as seal_api
+
+    expected = Path(__file__).resolve().parents[1] / 'config' / 'seal_api_key'
+    monkeypatch.delenv('SEAL_API_KEY', raising=False)
+    monkeypatch.delenv('SEAL_API_KEY_FILE', raising=False)
+    monkeypatch.chdir(tmp_path)
+    original_read = Path.read_text
+
+    def read_key(path, *args, **kwargs):
+        if path == expected:
+            return 'test-default-key\n'
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', read_key)
+    client = SealApiClient()
+    assert seal_api.DEFAULT_API_KEY_FILE == expected
+    assert client.enabled and client.api_key == 'test-default-key'
 
 
 def test_seal_recognition_mode_defaults_to_local():
@@ -54,7 +74,7 @@ def test_qingtong_request_uses_configured_endpoint_and_header(
         captured.update(url=url, **kwargs)
         return Response()
 
-    monkeypatch.setattr("receipt_ocr.seal_api.requests.post", fake_post)
+    monkeypatch.setattr("receipt_ocr.recognition.seal.providers.api.requests.post", fake_post)
     result = SealApiClient().recognize(image)
 
     assert captured["url"] == "https://seal.qingtong.cn/api/v1/recognize"
@@ -79,7 +99,7 @@ def test_http_200_business_failure_falls_back_to_local(tmp_path: Path, monkeypat
             return {"code": 503, "message": "busy", "data": None}
 
     monkeypatch.setattr(
-        "receipt_ocr.seal_api.requests.post", lambda *_args, **_kwargs: Response()
+        "receipt_ocr.recognition.seal.providers.api.requests.post", lambda *_args, **_kwargs: Response()
     )
     result = SealApiClient().recognize(image)
 
@@ -96,7 +116,7 @@ def test_network_failure_falls_back_to_local(tmp_path: Path, monkeypatch):
     def fail(*_args, **_kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr("receipt_ocr.seal_api.requests.post", fail)
+    monkeypatch.setattr("receipt_ocr.recognition.seal.providers.api.requests.post", fail)
     result = SealApiClient().recognize(image)
 
     assert result["ok"] is False

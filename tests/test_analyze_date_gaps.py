@@ -2,7 +2,7 @@ import json
 import sqlite3
 from datetime import date
 
-from tools.analyze_date_gaps import (
+from tools.analysis.date.analyze_date_gaps import (
     _conflict_profile,
     _evidence_completeness,
     _parse_evidence_date,

@@ -2,9 +2,9 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.qingtong_seal import compare_qingtong_seal
-from receipt_ocr.decision import decide_overall
-from receipt_ocr.seal_reference_policy import apply_reference_evidence
+from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
+from receipt_ocr.domain.decision import decide_overall
+from receipt_ocr.recognition.seal.reference.policy import apply_reference_evidence
 
 REQUIRED = '北京恒远恒信科技发展有限公司收发货专用章'
 OTHER = '广州市星睿奇光电有限公司仓储部收货章'
@@ -207,7 +207,7 @@ def test_reference_matcher_does_not_override_qingtong_channel_match():
 
 
 def test_pending_save_preserves_ocr_channel_complete_match():
-    from app import _apply_human_edits
+    from receipt_ocr.web.application import _apply_human_edits
     check = compare_qingtong_seal(REQUIRED, response(seal(OTHER, REQUIRED)))
     record = {'fields': {'签章要求': REQUIRED, '要求到货': '2026-09-10'},
               'seal_check': check, 'date_check': {'actual': '2026-09-10'}}
@@ -219,7 +219,7 @@ def test_pending_save_preserves_ocr_channel_complete_match():
 
 @pytest.mark.parametrize('matches', [True, False])
 def test_explicit_seal_confirmation_persists_on_pending_save_with_machine_evidence(matches):
-    from app import _apply_human_edits, _confirmation_error
+    from receipt_ocr.web.application import _apply_human_edits, _confirmation_error
     check = compare_qingtong_seal(REQUIRED, response(seal(OTHER, REQUIRED)))
     record = {'fields': {'签章要求': REQUIRED, '要求到货': '2026-09-10'},
               'seal_check': check, 'date_check': {'actual': '2026-09-10'}}
@@ -234,7 +234,7 @@ def test_explicit_seal_confirmation_persists_on_pending_save_with_machine_eviden
 
 
 def test_editing_confirmed_seal_invalidates_previous_manual_choice():
-    from app import _apply_human_edits
+    from receipt_ocr.web.application import _apply_human_edits
     check = compare_qingtong_seal(REQUIRED, response(seal(OTHER, REQUIRED)))
     record = {'fields': {'签章要求': REQUIRED, '要求到货': '2026-09-10'}, 'seal_check': check}
     confirmed = _apply_human_edits(deepcopy(record), {'review_status': '待复核', 'seal_confirmed_match': True})

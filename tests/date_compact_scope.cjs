@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const workbench = require('../static/workbench.js');
-const {createReviewEvidence} = require('../static/modules/review_evidence.mjs');
+const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
+const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
 
 const artifacts = ['宽区域', '下方扩展区域', '紧凑区域', '远下方手写日期复核区域', '页面底部手写日期复核区域']
   .map((variant, index) => ({variant, original_url: `/files/date-${index}.jpg`}));

@@ -1,11 +1,16 @@
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.parsing_dates import (
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.domain.parsing.parsing_dates import (
     compare_partial_date_components,
     extract_date_components,
 )
-from receipt_ocr.stage_date import _tight_decision_rows
-from receipt_ocr.date_decision import DateDecision, DateConsensus, DateStageEvidence
-from receipt_ocr.date_selection import _apply_business_and_review_guards
+from receipt_ocr.stages.date import _tight_decision_rows
+from receipt_ocr.recognition.date.decision import (
+    DateDecision,
+    DateConsensus,
+    DateStageEvidence,
+    _select_complete_dates,
+)
+from receipt_ocr.recognition.date.decision import _apply_business_and_review_guards
 
 
 def test_partial_date_keeps_year_and_month_when_day_is_missing():
@@ -22,6 +27,40 @@ def test_partial_date_keeps_year_and_month_when_day_is_missing():
     assert extract_date_components(
         [TextObservation("2026", 0.8, 0.8, 0.55, 0.1, 0.04)]
     )["year"] == 2026
+
+
+def test_confirmed_full_date_keeps_the_21st_when_requirement_is_the_22nd():
+    row = TextObservation("2025年11月21日", 0.96, 0.8, 0.58, 0.1, 0.04)
+    evidence = DateStageEvidence(
+        fields={"要求到货": "2025-11-22"},
+        combined_rows=[row],
+        date_rows=[row],
+        date_artifacts=[],
+        has_receipt_footer=True,
+        anchor_y=0.47,
+    )
+    decision = DateDecision()
+    _select_complete_dates(evidence, decision, DateConsensus())
+
+    assert decision.actual_date.isoformat() == "2025-11-21"
+
+
+def test_compact_ocr_date_enters_exact_comparison_from_trusted_crop():
+    row = TextObservation("20258月16日", 0.91, 0.22, 0.22, 0.70, 0.70)
+    evidence = DateStageEvidence(
+        fields={"要求到货": "2025-08-17"},
+        combined_rows=[row],
+        date_rows=[row],
+        date_artifacts=[],
+        has_receipt_footer=True,
+        trusted_region=True,
+    )
+    decision = DateDecision()
+    _select_complete_dates(evidence, decision, DateConsensus())
+    _apply_business_and_review_guards(evidence, decision, DateConsensus())
+
+    assert decision.actual_date.isoformat() == "2025-08-16"
+    assert decision.date_check["status"] == "不匹配"
 
 
 def test_tight_rows_are_used_when_artifact_provenance_is_available():

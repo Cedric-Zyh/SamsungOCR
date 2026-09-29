@@ -3,15 +3,15 @@ from types import SimpleNamespace
 from copy import deepcopy
 import pytest
 
-from receipt_ocr import recognition_config as config_module
-from receipt_ocr.recognition_config import run_configured, validate_config
-from receipt_ocr.recognition_scope import provider_allowed, provider_scope
+from receipt_ocr.application import plans as config_module
+from receipt_ocr.application.plans import run_configured, validate_config
+from receipt_ocr.runtime.scope import provider_allowed, provider_scope
 
 
 @pytest.fixture(autouse=True)
 def available(monkeypatch):
-    from receipt_ocr import document_context
-    from receipt_ocr.ocr_types import TextObservation
+    from receipt_ocr.application import context as document_context
+    from receipt_ocr.domain.ocr import TextObservation
     monkeypatch.setattr(document_context, 'recognize_text', lambda *a, **kw: [])
     monkeypatch.setattr(document_context, 'classify_document', lambda rows: {'type': 'receipt', 'reliable': True, 'confidence': .99})
     monkeypatch.setattr(document_context, '_find_signature_requirement_row', lambda rows: TextObservation('签章要求', .99, .1, .47, .2, .02))
@@ -109,7 +109,7 @@ def test_no_comparison_mode_skips_date_seal_and_signature_gates():
 
 
 def test_default_rejection_standard_is_configurable_and_safe_by_default():
-    from receipt_ocr.decision import decide_overall
+    from receipt_ocr.domain.decision import decide_overall
     matched = {'status': '匹配', 'reliable': True}
     mismatched = {'status': '不匹配', 'reliable': True}
     assert decide_overall(mismatched, matched, [], {'reject_mode': 'none'}) == '需人工复核'
@@ -123,7 +123,7 @@ def test_default_rejection_standard_is_configurable_and_safe_by_default():
 
 
 def test_low_confidence_fields_can_be_checked_or_ignored():
-    from receipt_ocr.decision import decide_overall
+    from receipt_ocr.domain.decision import decide_overall
     matched = {'status': '匹配', 'reliable': True}
     assert decide_overall(matched, matched, ['存在低置信度字段'],
                           {'low_confidence_mode': 'check'}) == '需人工复核'
@@ -175,7 +175,7 @@ def test_provider_failure_does_not_silently_pass():
 
 
 def test_qingtong_only_never_calls_local_ocr_or_parsers(monkeypatch):
-    import receipt_ocr.analyzer as module
+    import receipt_ocr.application.analyzer as module
     def forbidden(*a, **kw):
         raise AssertionError('unselected local stage was called')
     for name in ['recognize_text', 'decode_qr', 'parse_fields', 'parse_product_table', 'detect_seal_regions']:
@@ -201,12 +201,11 @@ def test_provider_scope_is_restored():
 
 def test_task_keeps_plan_snapshot(tmp_path, monkeypatch):
     import json
-    import app as web
-    from receipt_ocr.database import Database
+    from receipt_ocr.web import application as web
+    from receipt_ocr.persistence.database import Database
     database = Database(tmp_path / 'results.db')
     database.initialize()
     monkeypatch.setattr(web, 'database', database)
-    monkeypatch.setattr(web, 'resolve_backend', lambda x: 'paddle')
     plan = {'fields':[], 'products':[], 'date':['paddle'], 'seal':[]}
     response = web.app.test_client().post('/api/tasks', json={'name':'date only', 'total':1, 'recognition_config':plan})
     assert response.status_code == 200
@@ -215,7 +214,7 @@ def test_task_keeps_plan_snapshot(tmp_path, monkeypatch):
 
 
 def test_field_only_skips_products_date_and_seal(monkeypatch):
-    import receipt_ocr.analyzer as module
+    import receipt_ocr.application.analyzer as module
     patch_dependency(monkeypatch, 'resolve_backend', lambda b:'paddle')
     patch_dependency(monkeypatch, 'recognize_text', lambda *a, **kw: [])
     patch_dependency(monkeypatch, 'decode_qr', lambda *a: '')
@@ -233,14 +232,14 @@ def test_field_only_skips_products_date_and_seal(monkeypatch):
 
 
 def test_direct_paddle_fallback_respects_selected_provider():
-    from receipt_ocr.paddle_ocr import recognize_line, recognize_text
+    from receipt_ocr.providers.paddle_runtime import recognize_line, recognize_text
     with provider_scope({'paddle_v6'}):
         assert recognize_line('does-not-exist.png', model_variant='server') == []
         assert recognize_text('does-not-exist.png', model_variant='mobile') == []
 
 
 def test_real_analyzer_reuses_page_between_fields_and_products(monkeypatch):
-    from receipt_ocr import analyzer as module
+    from receipt_ocr.application import analyzer as module
     calls = []
     patch_dependency(monkeypatch, 'recognize_text', lambda *a, **kw: calls.append(kw['backend']) or [])
     patch_dependency(monkeypatch, 'decode_qr', lambda *a: '')
@@ -309,8 +308,8 @@ def test_preview_rendered_once_with_date_and_seal_evidence(monkeypatch):
 
 def test_remote_request_overlaps_local_work_and_is_used_once(monkeypatch):
     from threading import Event
-    from receipt_ocr import analyzer as module
-    from receipt_ocr.execution import measure
+    from receipt_ocr.application import analyzer as module
+    from receipt_ocr.runtime.execution import measure
     remote_started, local_started = Event(), Event()
     requests = []
     def remote(source):
@@ -345,7 +344,7 @@ def test_remote_request_overlaps_local_work_and_is_used_once(monkeypatch):
 
 
 def test_prefetched_api_failure_keeps_local_fields_and_requires_review(monkeypatch):
-    from receipt_ocr import analyzer as module
+    from receipt_ocr.application import analyzer as module
     patch_dependency(monkeypatch, 'resolve_backend', lambda b: 'paddle')
     patch_dependency(monkeypatch, 'recognize_text', lambda *a, **kw: [])
     patch_dependency(monkeypatch, 'decode_qr', lambda *a: '')
@@ -365,7 +364,7 @@ def test_prefetched_api_failure_keeps_local_fields_and_requires_review(monkeypat
 
 @pytest.mark.parametrize('remote_text,expected', [('测试有限公司收货专用章', '匹配'), ('其他单位专用章', '匹配')])
 def test_qingtong_dual_verdict_is_preserved_with_local_variants(remote_text, expected):
-    from receipt_ocr.qingtong_seal import compare_qingtong_seal
+    from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
     external = {'enabled': True, 'ok': True, 'response': {'data': {'img_0': [
         {'matched_seal': {'label': '测试有限公司收货专用章'}, 'text_formatted': remote_text}]}}}
     class Fake:
@@ -391,7 +390,7 @@ def test_a_boxed_local_match_decides_over_a_qingtong_mismatch():
     pass re-read the same box without them.  Under ``any`` the local reading
     decides, instead of being discarded as a local guess.
     """
-    from receipt_ocr.qingtong_seal import compare_qingtong_seal
+    from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
     required = '测试有限公司收货专用章'
     external = {'enabled': True, 'ok': True, 'response': {'data': {'img_0': [
         {'matched_seal': {'label': f'{required}年月'}, 'text_formatted': f'{required}年月'}]}}}
@@ -421,7 +420,7 @@ def test_a_boxed_local_match_decides_over_a_qingtong_mismatch():
 
 def test_an_unmarked_local_variant_still_does_not_decide():
     """A local pass that detected its own region stays evidence-only."""
-    from receipt_ocr.qingtong_seal import compare_qingtong_seal
+    from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
     required = '测试有限公司收货专用章'
     external = {'enabled': True, 'ok': True, 'response': {'data': {'img_0': [
         {'matched_seal': {'label': f'{required}年月'}, 'text_formatted': f'{required}年月'}]}}}
@@ -445,8 +444,8 @@ def test_an_unmarked_local_variant_still_does_not_decide():
 @pytest.mark.parametrize('winning_channel', ['template', 'ocr', 'danzhengtong'])
 def test_any_one_of_three_exact_seal_channels_passes_full_pipeline(monkeypatch, winning_channel):
     from receipt_ocr import danzhengtong
-    from receipt_ocr.parsing_seals import compare_seal_text_strict
-    from receipt_ocr.qingtong_seal import compare_qingtong_seal
+    from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
+    from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
     required, wrong = '测试有限公司收货专用章', '错误单位签收章'
     remote = compare_seal_text_strict(required, [required if winning_channel == 'danzhengtong' else wrong])
     remote.update(backend='单证通', source='单证通', recognition_mode='danzhengtong', simulated=False)
@@ -476,7 +475,7 @@ def test_any_one_of_three_exact_seal_channels_passes_full_pipeline(monkeypatch, 
 
 def test_danzhengtong_match_is_not_vetoed_by_other_provider_failure(monkeypatch):
     from receipt_ocr import danzhengtong
-    from receipt_ocr.parsing_seals import compare_seal_text_strict
+    from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
     required = '测试有限公司收货专用章'
     check = compare_seal_text_strict(required, [required])
     check.update(backend='单证通', source='单证通', recognition_mode='danzhengtong', simulated=False)

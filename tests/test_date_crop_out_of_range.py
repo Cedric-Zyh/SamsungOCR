@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from receipt_ocr.date_crop_state import DateCropRun, DateCropServices
-from receipt_ocr.image_processing import DateCropOutOfRange, save_receipt_date_crop
+from receipt_ocr.recognition.date.workflow import DateCropRun, DateCropServices
+from receipt_ocr.imaging.processing import DateCropOutOfRange, save_receipt_date_crop
 
 # Measured on 7330644044.jpg (2479x3609).
 ANCHOR_Y = 0.7362
@@ -83,7 +83,7 @@ def _run(tmp_path: Path) -> DateCropRun:
 
 def test_collect_date_regions_only_processes_compact_window(tmp_path, monkeypatch):
     """The compact date region is the only active recognition window."""
-    from receipt_ocr import date_crop_workflow
+    from receipt_ocr.recognition.date import workflow as date_crop_workflow
 
     prepared: list[str] = []
     processed: list[str] = []
@@ -113,7 +113,7 @@ def test_collect_date_regions_only_processes_compact_window(tmp_path, monkeypatc
 
 def test_bottom_anchor_does_not_enable_extended_windows(tmp_path, monkeypatch):
     """A different anchor does not re-enable non-compact date windows."""
-    from receipt_ocr import date_crop_workflow
+    from receipt_ocr.recognition.date import workflow as date_crop_workflow
 
     prepared: list[str] = []
     monkeypatch.setattr(

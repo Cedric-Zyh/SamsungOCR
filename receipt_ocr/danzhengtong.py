@@ -1,4 +1,4 @@
-"""Single-document async gateway adapter. Mock mode never opens a connection."""
+"""Single-document async gateway adapter for the production service."""
 from copy import deepcopy
 from dataclasses import dataclass
 import json
@@ -7,20 +7,16 @@ import os
 from pathlib import Path
 import time
 import threading
-import uuid
 
 from .danzhengtong_errors import provider_error, safe_error_text
-from .recognition_progress import report_dzt_progress, recognition_paused
+from .runtime.progress import report_dzt_progress, recognition_paused
 
 ROOT = Path(__file__).resolve().parents[1]
 _SINGLE_DOCUMENT = threading.Lock()
 
-MOCK_NOTICE = '单证通模拟数据，仅用于接入调试，不代表当前单据的真实内容'
-
 
 @dataclass(frozen=True, repr=False)
 class Settings:
-    mode: str = 'real'
     base_url: str = 'https://api.sinotrans.com'
     upload_url: str = 'http://techfile.i.sinotrans.com:80/objectstorecloud/files/v2'
     upload_source_code: str = ''
@@ -38,6 +34,8 @@ class Settings:
     def load(cls):
         path = ROOT / 'config' / 'danzhengtong.local.json'
         local = json.loads(path.read_text()) if path.exists() else {}
+        if os.getenv('DZT_MODE', local.get('mode', 'real')) != 'real':
+            raise ValueError('单证通已移除模拟模式，请移除旧的 mode 或 DZT_MODE 配置')
         return cls(**{key: os.getenv('DZT_' + key.upper(), local.get(key, field.default))
                       for key, field in cls.__dataclass_fields__.items()})
 
@@ -45,8 +43,6 @@ class Settings:
 class Client:
     def __init__(self, settings=None, transport=None):
         self.settings = settings or Settings.load()
-        if self.settings.mode not in {'mock', 'real'}:
-            raise ValueError('DZT_MODE 只能是 mock 或 real')
         self.transport = transport
         self.jobs = {}
         self.poll_timeout = min(60, int(self.settings.poll_timeout_seconds))
@@ -55,7 +51,7 @@ class Client:
 
     def upload_file(self, source, *, file_name=None):
         """POST multipart to the file server; OCR credentials are never sent here."""
-        report_dzt_progress('uploading', simulated=self.settings.mode == 'mock')
+        report_dzt_progress('uploading', simulated=False)
         path = Path(source)
         name = Path(file_name or path.name).name
         extension = path.suffix.lstrip('.').lower()
@@ -65,29 +61,25 @@ class Client:
         if not all(form[key] for key in ('org_id', 'source_code', 'file_type', 'file_name')):
             raise ValueError('上传文件缺少组织、系统编码、文件名或后缀')
         response = None
-        if s.mode == 'mock':
-            file_id = 'mock-file-' + uuid.uuid4().hex
-            body = {'status': True, 'data': file_id, 'fileId': file_id, 'message': '模拟：文件上传成功'}
-        else:
-            if not s.upload_url:
-                raise ValueError('单证通文件上传地址未配置')
-            if not path.is_file():
-                raise ValueError('待上传文件不存在或不是普通文件')
-            if self.transport is None:
-                import requests
-                self.transport = requests.Session()
-                self.transport.trust_env = False
-            try:
-                with path.open('rb') as stream:
-                    # requests generates the multipart boundary. Do not set JSON headers.
-                    response = self.transport.request(
-                        'POST', s.upload_url, data=form,
-                        files={'file': (name, stream, mimetypes.guess_type(path.name)[0] or 'application/octet-stream')},
-                        timeout=60)
-                    response.raise_for_status()
-                    body = response.json()
-            except Exception as exc:
-                raise provider_error('文件上传', s, exception=exc, response=response) from None
+        if not s.upload_url:
+            raise ValueError('单证通文件上传地址未配置')
+        if not path.is_file():
+            raise ValueError('待上传文件不存在或不是普通文件')
+        if self.transport is None:
+            import requests
+            self.transport = requests.Session()
+            self.transport.trust_env = False
+        try:
+            with path.open('rb') as stream:
+                # requests generates the multipart boundary. Do not set JSON headers.
+                response = self.transport.request(
+                    'POST', s.upload_url, data=form,
+                    files={'file': (name, stream, mimetypes.guess_type(path.name)[0] or 'application/octet-stream')},
+                    timeout=60)
+                response.raise_for_status()
+                body = response.json()
+        except Exception as exc:
+            raise provider_error('文件上传', s, exception=exc, response=response) from None
         if not isinstance(body, dict) or body.get('status') is not True:
             raise provider_error('文件上传', s, response=response, body=body, detail='接口返回上传失败或格式错误')
         file_id = body.get('fileId') or body.get('data')
@@ -95,12 +87,11 @@ class Client:
             raise provider_error('文件上传', s, response=response, body=body, detail='上传响应缺少有效 fileId')
         # filePath can contain a signed download URL; never persist it in traces.
         return {'fileId': file_id, 'fileName': name,
-                'trace': {'simulated': s.mode == 'mock', 'url': s.upload_url,
+                'trace': {'simulated': False, 'url': s.upload_url,
                           'form': form, 'response': {'status': True, 'fileId': file_id}}}
 
     def submit_file(self, source, *, file_name=None):
-        if self.settings.mode == 'real':
-            self._validate_credentials()  # Fail before uploading if submission cannot run.
+        self._validate_credentials()  # Fail before uploading if submission cannot run.
         uploaded = self.upload_file(source, file_name=file_name)
         body = self.submit(uploaded['fileName'], uploaded['fileId'])
         self.jobs[body['data']['reqUuid']]['upload'] = uploaded['trace']
@@ -119,14 +110,12 @@ class Client:
             'files': [{'fileName': file_name, 'fileId': file_id}],
             'docType': 'SINGLE_LLM_EXTRACT_ASYNC',
             'appId': s.app_id, 'appKey': s.app_key, 'appSecret': s.app_secret,
-            'callBackUrl': s.callback_url or ('https://callback.example.com/ocr/samsung/notify' if s.mode == 'mock' else ''),
+            'callBackUrl': s.callback_url,
             'modelId': s.model_id, 'sysCode': s.sys_code, 'orgId': s.org_id,
         }
 
     def _request(self, method, path, **kwargs):
         s = self.settings
-        if s.mode != 'real':
-            raise RuntimeError('模拟模式禁止网络请求')
         self._validate_credentials()
         if self.transport is None:
             import requests
@@ -148,13 +137,9 @@ class Client:
         return body
 
     def submit(self, file_name, file_id):
-        report_dzt_progress('submitting', simulated=self.settings.mode == 'mock')
+        report_dzt_progress('submitting', simulated=False)
         payload = self.build_request(file_name, file_id)
-        if self.settings.mode == 'real':
-            body = self._request('POST', '/ocr/general-async/v1/extractGeneralDataAsync', json=payload)
-        else:
-            body = {'code': 200, 'data': {'recordId': 'mock-' + uuid.uuid4().hex,
-                    'reqUuid': 'mock-' + uuid.uuid4().hex}, 'message': '模拟：调用成功，请等待识别完成', 'status': True}
+        body = self._request('POST', '/ocr/general-async/v1/extractGeneralDataAsync', json=payload)
         data = body.get('data') or {}
         if body.get('status') is not True or not isinstance(data, dict) or not data.get('reqUuid'):
             raise provider_error('提交识别', self.settings, body=body, detail='受理失败或缺少 reqUuid')
@@ -175,46 +160,12 @@ class Client:
         return data['reqUuid']
 
     def get_result(self, req_uuid, *, timeout=30):
-        if self.settings.mode == 'real':
-            return self._request('GET', '/ocr/async/v1/getResultByReqUuid', params={'reqUuid': req_uuid}, timeout=timeout)
-        if self.jobs[req_uuid]['status'] == 'failed':
-            raise RuntimeError('模拟任务识别失败，不能取结果')
-        # This is OUR normalized fixture, not an assertion about the vendor schema.
-        return json.loads((ROOT / 'config' / 'danzhengtong.mock.json').read_text())
-
-    def query_after_delay(self, req_uuid):
-        """Query once after two seconds, independently of callback delivery."""
-        job = self.jobs[req_uuid]
-        job['query'] = {'delay_seconds': 2, 'strategy': 'fixed_delay', 'status': 'waiting'}
-        report_dzt_progress('waiting', simulated=self.settings.mode == 'mock', poll_count=0,
-                            timeout_seconds=self.poll_timeout)
-        time.sleep(2)
-        try:
-            result = self.get_result(req_uuid)
-        except Exception:
-            job['query']['status'] = 'failed'
-            raise
-        # A successful HTTP query alone does not establish recognition completion.
-        job['query']['status'] = 'received'
-        return result
-
-    def recognize_mock(self, source, *, file_name=None):
-        if self.settings.mode != 'mock':
-            raise RuntimeError('真实整单识别待联调：需真实结果字段映射')
-        submitted = self.submit_file(source, file_name=file_name)
-        req_uuid = submitted['data']['reqUuid']
-        result = self.query_after_delay(req_uuid)
-        self.jobs[req_uuid]['status'] = 'completed'
-        report_dzt_progress('completed', simulated=True)
-        return result, {'mode': 'mock', 'simulated': True, 'reqUuid': req_uuid,
-                        **deepcopy(self.jobs[req_uuid])}
-
+        return self._request('GET', '/ocr/async/v1/getResultByReqUuid',
+                             params={'reqUuid': req_uuid}, timeout=timeout)
 
     def recognize(self, source, *, file_name=None):
         # The existing queue is serial; also serialize direct/retry callers here.
         with _SINGLE_DOCUMENT:
-            if self.settings.mode == 'mock':
-                return self.recognize_mock(source, file_name=file_name)
             submitted = self.submit_file(source, file_name=file_name)
             req_uuid = submitted['data']['reqUuid']
             job = self.jobs[req_uuid]
@@ -283,7 +234,7 @@ class Client:
 
 def normalize_result(commit):
     """Map the verified single-scene response; preserve empty and numeric zero values."""
-    from .field_schema import OUTPUT_FIELDS
+    from .domain.fields.schema import OUTPUT_FIELDS
     fields, metadata = {}, {}
     for name in (*OUTPUT_FIELDS, '收货客户印章'):
         item = commit.get(name)
@@ -302,10 +253,10 @@ def normalize_result(commit):
 
 
 def stage_result(context, stage, cache, previous_fields=None):
-    from .pipeline import empty_result
-    from .field_schema import PRINTED_FIELDS
-    from .parser import compare_dates, parse_date
-    from .parsing_seals import compare_seal_text_strict
+    from .application.pipeline import empty_result
+    from .domain.fields.schema import PRINTED_FIELDS
+    from .domain.parsing import compare_dates, parse_date
+    from .domain.parsing.parsing_seals import compare_seal_text_strict
     from .provider_field_policy import accept_real_dzt_fields
     if 'error' in cache:
         raise RuntimeError(cache['error'])
@@ -318,47 +269,39 @@ def stage_result(context, stage, cache, previous_fields=None):
         except Exception as exc:
             cache['error'] = str(exc)
             settings = getattr(client, 'settings', None)
-            report_dzt_progress('failed', simulated=getattr(settings, 'mode', 'real') == 'mock',
+            report_dzt_progress('failed', simulated=False,
                                 error_message=safe_error_text(exc, settings))
             raise
     fixture, trace = cache['fixture'], cache['trace']
-    simulated = trace['simulated']
+    if trace.get('simulated') or fixture.get('simulated'):
+        raise ValueError('单证通已移除模拟模式，不能使用模拟识别结果')
     if context.primary_backend is None and not context.document_type.get('provider_fields_accepted'):
-        context.document_type['reasons'] = ['单证通模拟接入未验证文档类型' if simulated else '仅单证通识别，文档版式待复核']
-    if stage == 'fields' and not simulated:
+        context.document_type['reasons'] = ['仅单证通识别，文档版式待复核']
+    if stage == 'fields':
         context.document_type = accept_real_dzt_fields(context.document_type,
             fields={k: fixture['fields'][k] for k in PRINTED_FIELDS}, trace=trace)
     result = empty_result(context)
-    def metadata(values):
-        if not simulated:
-            return {key: deepcopy(fixture['metadata'][key]) for key in values}
-        return {key: {'value': value, 'original': value, 'source': '单证通（模拟）',
-                      'low_confidence': True, 'simulated': True} for key, value in values.items()}
     if stage == 'fields':
         result['fields'] = {k: fixture['fields'][k] for k in PRINTED_FIELDS}
-        result['field_metadata'] = metadata(result['fields'])
+        result['field_metadata'] = {key: deepcopy(fixture['metadata'][key]) for key in result['fields']}
     elif stage == 'handwriting':
         result['handwriting_fields'] = {k: fixture['fields'][k] for k in ('仓库接收人', '实收数量', '拒收数量')}
-        result['handwriting_metadata'] = metadata(result['handwriting_fields'])
+        result['handwriting_metadata'] = {key: deepcopy(fixture['metadata'][key]) for key in result['handwriting_fields']}
     elif stage == 'products':
-        if not simulated:
-            raise ValueError('当前单证通场景未提供商品明细，请选择本地商品识别')
-        result['product_table'] = deepcopy(fixture['product_table'])
+        raise ValueError('当前单证通场景未提供商品明细，请选择本地商品识别')
     elif stage == 'date':
         raw_date = fixture['fields']['签收日期']
         result['date_check'] = compare_dates((previous_fields or {}).get('要求到货', ''), parse_date(raw_date))
-        result['date_check'].update(reliable=not simulated and result['date_check']['status'] in {'匹配', '不匹配'},
-                                   simulated=simulated, backend='单证通',
-                                   source='单证通（模拟）' if simulated else '单证通', raw_text=raw_date,
+        result['date_check'].update(reliable=result['date_check']['status'] in {'匹配', '不匹配'},
+                                   simulated=False, backend='单证通', source='单证通', raw_text=raw_date,
                                    provider_ratio=fixture.get('metadata', {}).get('签收日期', {}).get('provider_ratio'))
     elif stage == 'seal':
         text = fixture['fields'].get('收货客户印章', '')
         result['seal_check'] = compare_seal_text_strict((previous_fields or {}).get('签章要求', ''), [text] if text else [])
-        result['seal_check'].update(reliable=not simulated and result['seal_check']['reliable'],
-                                   simulated=simulated, backend='单证通', recognition_mode='danzhengtong',
-                                   source='单证通（模拟）' if simulated else '单证通')
+        result['seal_check'].update(reliable=result['seal_check']['reliable'], simulated=False,
+                                   backend='单证通', recognition_mode='danzhengtong', source='单证通')
     else:
         raise ValueError('单证通暂不支持该识别阶段')
-    result['stage_review_reasons'] = [MOCK_NOTICE] if simulated else []
+    result['stage_review_reasons'] = []
     result['danzhengtong'] = deepcopy(trace)
     return result

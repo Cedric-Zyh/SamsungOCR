@@ -1,5 +1,5 @@
-import app as app_module
-from receipt_ocr.database import Database
+from receipt_ocr.web import application as app_module
+from receipt_ocr.persistence.database import Database
 
 
 def test_daily_results_combines_tasks_and_scopes_before_dedup(tmp_path, monkeypatch):
@@ -27,7 +27,7 @@ def test_daily_results_combines_tasks_and_scopes_before_dedup(tmp_path, monkeypa
 
 
 def test_workbench_includes_cross_day_retry_results_by_id(tmp_path, monkeypatch):
-    from receipt_ocr.job_store import JobStore
+    from receipt_ocr.jobs.store import JobStore
     db = Database(tmp_path / 'retry.db')
     db.initialize()
     store = JobStore(db)

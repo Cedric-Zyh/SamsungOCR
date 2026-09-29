@@ -5,19 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from receipt_ocr import (
-    document_context,
-    pipeline,
-    recognition_config,
-    stage_date,
-    stage_fields,
-    stage_products,
-    stage_seal,
-)
-from receipt_ocr.analyzer import ReceiptAnalyzer
-from receipt_ocr.document_context import DocumentContext, StageRequest
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.recognition_config import run_configured
+from receipt_ocr.application import context as document_context, plans as recognition_config
+from receipt_ocr.application import pipeline
+from receipt_ocr.stages import date as stage_date, fields as stage_fields, products as stage_products, seal as stage_seal
+from receipt_ocr.application.analyzer import ReceiptAnalyzer
+from receipt_ocr.application.context import DocumentContext
+from receipt_ocr.domain.requests import StageRequest
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.application.plans import run_configured
 
 
 def row(text, y=0.1):
@@ -260,7 +255,7 @@ def test_selected_provider_recovers_unknown_routing_before_date_and_remote_seal(
 
 
 def test_unknown_routing_cannot_use_unselected_provider(harness):
-    from receipt_ocr.recognition_scope import provider_scope
+    from receipt_ocr.runtime.scope import provider_scope
 
     _, state = harness
     state.kind = "unknown"

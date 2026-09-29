@@ -3,13 +3,13 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
 
-from receipt_ocr.field_rules import _recover_signature_requirement
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.pipeline import merge_stage
+from receipt_ocr.domain.fields.rules import _recover_signature_requirement
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.application.pipeline import merge_stage
 
 
 def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monkeypatch):
-    from receipt_ocr import paddle_ocr
+    from receipt_ocr.providers import paddle_runtime as paddle_ocr
 
     source = tmp_path / "page.png"
     image = Image.new("RGB", (1000, 1000), "white")
@@ -31,7 +31,7 @@ def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monk
         source, rows, value, "paddle_v6", artifact_dir=tmp_path / "artifacts",
         artifact_url_prefix="/files/artifacts/test", artifacts=artifacts,
     )
-    assert result is None  # Equal-length retry must not replace the primary.
+    assert result["value"] == value
     artifact = artifacts[0]
     directory = tmp_path / "artifacts" / "requirements"
     assert (directory / "signature-requirement.jpg").read_bytes() == observed[0]
@@ -53,8 +53,8 @@ def test_legacy_merge_keeps_requirement_images_separate_from_seals():
 
 
 def test_configured_fields_keep_requirement_images_without_any_seal_stage(monkeypatch):
-    from receipt_ocr import recognition_config as config
-    from receipt_ocr.document_context import DocumentContext
+    from receipt_ocr.application import plans as config
+    from receipt_ocr.application.context import DocumentContext
 
     artifact = {"original_url": "/files/artifacts/test/requirements/original.png"}
     stage = {"fields": {"签章要求": "客户收货章"}, "processing_artifacts": {

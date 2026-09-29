@@ -1,4 +1,4 @@
-from receipt_ocr.document_evaluation import evaluate_document_routing
+from receipt_ocr.domain.documents.evaluation import evaluate_document_routing
 
 
 def page(filename: str, kind: str, rows: list[str], *, item_id: int) -> dict:

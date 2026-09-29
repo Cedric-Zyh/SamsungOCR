@@ -95,7 +95,7 @@ def test_actual_errors_redact_credentials_and_signed_url_parameters():
 
 def test_stage_failures_survive_missing_comparison_requirements(monkeypatch):
     from receipt_ocr import danzhengtong
-    from receipt_ocr.recognition_config import run_configured
+    from receipt_ocr.application.plans import run_configured
     def fail(*a, **kw):
         raise RuntimeError('单证通文件上传失败：HTTP 503；文件服务不可用')
     monkeypatch.setattr(danzhengtong, 'stage_result', fail)

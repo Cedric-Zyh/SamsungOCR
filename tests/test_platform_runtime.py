@@ -1,4 +1,4 @@
-import app as app_module
+from receipt_ocr.web import application as app_module
 
 
 def test_index_displays_active_interpreter(monkeypatch):

@@ -1,5 +1,5 @@
-from receipt_ocr.document_types import classify_document
-from receipt_ocr.ocr_types import TextObservation
+from receipt_ocr.domain.documents.types import classify_document
+from receipt_ocr.domain.ocr import TextObservation
 
 
 def rows(*texts):

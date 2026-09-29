@@ -20,7 +20,7 @@ def test_recursive_folder_collection_keeps_all_batches_and_paths():
         pytest.skip('Node unavailable')
     script = r'''
 const assert = require('node:assert/strict');
-const imp = require('./static/import_files.js');
+const imp = require('./static/modules/core/import_files.mjs').ReceiptImport;
 const file = name => ({name, type: ''});
 const entry = name => ({name, isFile:true, file:resolve=>resolve(file(name))});
 const directory = (name, pages) => ({name, isDirectory:true, createReader:()=>{let i=0; return {readEntries:resolve=>resolve(pages[i++]||[])};}});

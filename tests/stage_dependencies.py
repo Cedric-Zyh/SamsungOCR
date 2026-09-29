@@ -7,40 +7,46 @@ specific stage under test directly. This helper is only for old shared mocks.
 from importlib import import_module
 
 DEPENDENCIES = {
-    "_recover_signature_requirement": ["field_rules", "stage_fields"],
-    "_save_date_line_crop": ["date_crops", "date_evidence"],
+    "_recover_signature_requirement": ["domain.fields.rules", "stages.fields"],
+    "_save_date_line_crop": ["recognition.date._internal.date_crops", "recognition.date.evidence"],
     "backend_label": [
-        "date_crops",
-        "pipeline",
-        "seal_crop_regular",
-        "seal_crop_mobile",
-        "seal_crop_audit",
-        "stage_fields",
-        "stage_seal",
+        "recognition.date._internal.date_crops",
+        "application.pipeline",
+        "recognition.seal.postprocess.regions",
+        "recognition.seal.ocr.secondary",
+        "stages.fields",
+        "stages.seal",
     ],
-    "backend_route": ["pipeline", "recognition_config"],
+    "backend_route": ["application.pipeline", "application.plans"],
     "backend_route_labels": [],
-    "decode_qr": ["document_context"],
-    "detect_seal_regions": ["stage_seal"],
-    "extract_region_text": ["seal_crop_regular"],
-    "parse_fields": ["stage_fields"],
-    "parse_product_table": ["product_rules", "stage_products"],
+    "decode_qr": ["application.context"],
+    "detect_seal_regions": ["stages.seal"],
+    "extract_region_text": ["recognition.seal.preprocess.regions"],
+    "parse_fields": ["stages.fields"],
+    "parse_product_table": ["domain.products.rules", "stages.products"],
     "recognize_text": [
-        "date_crops", "document_context", "product_rules",
-        "seal_crop_regular", "seal_crop_mobile", "seal_crop_audit_images",
-        "seal_crop_audit",
+        "recognition.date._internal.date_crops", "application.context", "domain.products.rules",
+        "recognition.seal.ocr.interface", "recognition.seal.ocr.region",
     ],
-    "resolve_backend": ["pipeline"],
-    "save_color_isolated_seal": ["seal_crop_regular"],
-    "save_isolated_seal": ["seal_crop_regular"],
-    "save_receipt_date_crop": ["date_crops"],
-    "save_region_crop": ["seal_crop_regular"],
-    "save_round_seal_type_band": ["seal_crop_audit_images"],
-    "save_unwrapped_seal": ["seal_crop_regular", "seal_crop_audit_images"],
-    "seal_region_is_rectangular": ["seal_crop_regular"],
+    "resolve_backend": ["application.pipeline"],
+    "save_color_isolated_seal": ["recognition.seal.preprocess.regions", "recognition.seal.preprocess.common"],
+    "save_isolated_seal": ["recognition.seal.preprocess.regions"],
+    "save_receipt_date_crop": ["recognition.date._internal.date_crops"],
+    "save_region_crop": ["recognition.seal.preprocess.regions", "recognition.seal.preprocess.common"],
+    "save_round_seal_type_band": ["recognition.seal.preprocess.regions", "recognition.seal.preprocess.secondary_images"],
+    "save_unwrapped_seal": ["recognition.seal.preprocess.regions", "recognition.seal.preprocess.secondary_images"],
+    "seal_region_is_rectangular": ["recognition.seal.preprocess.shapes"],
+}
+
+ATTRIBUTE_ALIASES = {
+    ("recognize_text", "recognition.seal.preprocess.regions"): "read_text",
+    ("recognize_text", "recognition.seal.ocr.interface"): "read_text",
+    ("recognize_text", "recognition.seal.ocr.region"): "read_text",
 }
 
 
 def patch_dependency(monkeypatch, name, value):
     for module in DEPENDENCIES[name]:
-        monkeypatch.setattr(import_module("receipt_ocr." + module), name, value)
+        target = import_module("receipt_ocr." + module)
+        attribute = ATTRIBUTE_ALIASES.get((name, module), name)
+        monkeypatch.setattr(target, attribute, value)

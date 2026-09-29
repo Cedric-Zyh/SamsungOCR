@@ -2,13 +2,13 @@
 
 from copy import deepcopy
 
-from .decision import OPTIONAL_STAGE_REASONS, finalize_result
-from .field_schema import PRINTED_FIELDS
-from .parser import compare_dates, parse_date
-from .parsing_seals import compare_seal_text_strict
+from .domain.decision import OPTIONAL_STAGE_REASONS, finalize_result
+from .domain.fields.schema import PRINTED_FIELDS
+from .domain.parsing import compare_dates, parse_date
+from .domain.parsing.parsing_seals import compare_seal_text_strict
 from .provider_field_policy import DZT_LAYOUT_REASONS, accept_real_dzt_fields
-from .qingtong_seal import compare_qingtong_seal
-from .seal_provider_policy import combine_seal_provider_checks
+from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
+from receipt_ocr.recognition.seal.policy import combine_seal_provider_checks
 
 
 REFRESH_ACTION = "识别规则更新"

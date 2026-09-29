@@ -1,7 +1,7 @@
 import json
 
-from tests.test_analyzer import _cross_year_nondestructive_artifacts
-from tools.analyze_date_cross_year_nondestructive import select_saved_candidate
+from tests.test_application_analyzer import _cross_year_nondestructive_artifacts
+from tools.analysis.date.analyze_date_cross_year_nondestructive import select_saved_candidate
 
 
 def _result(*, reliable: bool = False, confirmed: bool = False) -> dict:

@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createReviewQueue} = require('../static/modules/review_queue.mjs');
-const {normalizeReviewScope, reviewScopeRequest} = require('../static/modules/review_scope.mjs');
-const workbench = require('../static/workbench.js');
+const {createReviewQueue} = require('../static/modules/review/review_queue.mjs');
+const {normalizeReviewScope, reviewScopeRequest} = require('../static/modules/review/review_scope.mjs');
+const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
 const row = id => ({id, filename:`${id}.jpg`, fields:{客户名称:'甲客户'}, review_status:'待复核'});
 const page = (items, total=items.length, number=1) => ({items,total,page:number,page_size:100});
@@ -56,7 +56,7 @@ test('selected scope uses server IDs on every page and an empty selection is exp
   assert.deepEqual(h.state.reviewScope.ids,Array.from({length:105},(_,i)=>i+1));
   assert(h.requests.every(url=>new URL(url,'http://local').searchParams.get('ids').split(',').length===105));
   const empty=normalizeReviewScope({kind:'selected',ids:[]});
-  const params=new URL(reviewScopeRequest(empty,1,URLSearchParams),'http://local').searchParams;
+  const {params}=reviewScopeRequest(empty,1,URLSearchParams);
   assert.equal(params.has('ids'),true);assert.equal(params.get('ids'),'');
   assert.throws(()=>normalizeReviewScope({kind:'selected',ids:[1,'bad']}),/编号/);
 });

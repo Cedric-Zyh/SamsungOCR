@@ -1,6 +1,6 @@
-from receipt_ocr.seal_orientation import decide_orientation, choose_round_stamp_angle
+from receipt_ocr.recognition.seal.orientation import decide_orientation, choose_round_stamp_angle
 import pytest
-from receipt_ocr import seal_orientation
+from receipt_ocr.recognition.seal import orientation as seal_orientation
 
 
 @pytest.mark.parametrize('angle', [0, 90, 180, 270, None])
@@ -47,7 +47,7 @@ def test_doc_orientation_does_not_mask_ring_without_detected_type_row(
     Image.new('RGB', (200, 200), 'white').save(source)
     monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
                         lambda source: {'angle': angle, 'confidence': .99})
-    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', lambda *a, **k: [])
     _, decision = seal_orientation.prepare_round_stamp_doc_ori(source, tmp_path / 'corrected.png')
     assert 'type_row_box' not in decision
     assert 'oriented_type_row_box' not in decision
@@ -57,8 +57,8 @@ def test_combined_keeps_original_when_no_angle_reads_a_stamp_type_row(monkeypatc
     from PIL import Image
     source = tmp_path / 'ring.png'
     Image.new('RGB', (200, 200), 'white').save(source)
-    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
-    monkeypatch.setattr('receipt_ocr.paddle_ocr.recognize_line', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.read_line', lambda *a, **k: [])
     oriented, decision = seal_orientation.prepare_round_stamp_combined(
         source, tmp_path / 'corrected.png')
     assert oriented is None
@@ -73,7 +73,7 @@ def test_combined_keeps_original_when_no_angle_reads_a_stamp_type_row(monkeypatc
 def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
     from pathlib import Path
     from PIL import Image
-    from receipt_ocr.ocr_types import TextObservation
+    from receipt_ocr.domain.ocr import TextObservation
 
     source = tmp_path / "input.png"
     Image.new("RGB", (200, 200), "white").save(source)
@@ -88,7 +88,7 @@ def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
     # Only the 90-degree candidate exposes a stamp-type polygon and a readable
     # centre row, so it must win over the unrotated crop.
     monkeypatch.setattr(
-        "receipt_ocr.paddle_ocr.detect_text_boxes",
+        "receipt_ocr.recognition.seal.ocr.interface.detect_boxes",
         lambda path, **_kwargs: (
             [{
                 "text": "专用章",
@@ -100,7 +100,7 @@ def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(
-        "receipt_ocr.paddle_ocr.recognize_line",
+        "receipt_ocr.recognition.seal.ocr.interface.read_line",
         lambda path, **_kwargs: (
             [TextObservation("售后服务专用章", 0.93, 0, 0, 1, 1)]
             if Path(path).name.startswith("coarse-90") else []
@@ -134,13 +134,13 @@ def test_combined_never_uses_document_orientation_classifier(monkeypatch, tmp_pa
         seal_orientation, 'classify_doc_orientation',
         lambda *_args: pytest.fail('combined must not call doc_ori'),
     )
-    monkeypatch.setattr('receipt_ocr.paddle_ocr.detect_text_boxes', lambda *a, **k: [])
-    monkeypatch.setattr('receipt_ocr.paddle_ocr.recognize_line', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', lambda *a, **k: [])
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.read_line', lambda *a, **k: [])
     seal_orientation.prepare_round_stamp_combined(source, tmp_path / 'corrected.png')
 
 
 def test_orientation_none_bypasses_rectangle_direction_model(monkeypatch, tmp_path):
-    from receipt_ocr import seal_crops
+    from receipt_ocr.recognition.seal import workflow as seal_crops
     monkeypatch.setattr(seal_orientation, 'prepare_rectangles',
                         lambda *args: pytest.fail('orientation model must not run'))
     calls = []
@@ -202,7 +202,7 @@ def test_round_stamp_uses_short_receiving_stamp_type_as_angle_anchor():
 
 def test_ellipse_orientation_does_not_flip_on_ring_company_text(monkeypatch, tmp_path):
     from PIL import Image
-    from receipt_ocr.ocr_types import TextObservation
+    from receipt_ocr.domain.ocr import TextObservation
 
     source = tmp_path / "ellipse.png"
     Image.new("RGB", (200, 200), "white").save(source)
@@ -215,7 +215,7 @@ def test_ellipse_orientation_does_not_flip_on_ring_company_text(monkeypatch, tmp
         ),
     )
     monkeypatch.setattr(
-        "receipt_ocr.paddle_ocr.recognize_line",
+        "receipt_ocr.recognition.seal.ocr.interface.read_line",
         lambda *args, **kwargs: [TextObservation("供应链科技有限公司", .99, 0, 0, 1, 1)],
     )
 
@@ -235,3 +235,36 @@ def test_round_stamp_does_not_infer_direction_from_unrelated_text():
     ])
     assert result["angle"] is None
     assert result["applied_rotation"] == 0.0
+
+
+def test_round_stamp_uses_high_confidence_partial_type_row_as_fallback_anchor():
+    result = choose_round_stamp_angle([
+        {
+            "text": "手机售后专",
+            "confidence": 0.99,
+            "angle": 7.0,
+            "points": [[10, 20], [60, 20], [60, 45], [10, 45]],
+        }
+    ])
+    assert result["status"] == "找到横向文字候选（文本不完整）"
+    assert result["anchor_text"] == "手机售后专"
+    assert result["partial_anchor"] is True
+    assert result["applied_rotation"] == 7.0
+
+
+def test_ring_input_uses_oriented_image_and_its_detected_type_box():
+    from pathlib import Path
+    from receipt_ocr.recognition.seal.contracts import RegionEvidence
+    from receipt_ocr.recognition.seal.preprocess.regions import _ring_input
+
+    raw = Path("raw.png")
+    oriented = Path("oriented.png")
+    evidence = RegionEvidence(
+        color_isolated=raw,
+        color_isolated_oriented=oriented,
+        orientation={
+            "type_row_box": [10, 20, 90, 40],
+            "oriented_type_row_box": [20, 30, 100, 50],
+        },
+    )
+    assert _ring_input(evidence) == (oriented, [20, 30, 100, 50])

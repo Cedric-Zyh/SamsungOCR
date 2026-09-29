@@ -3,7 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tools.analyze_low_seal_visuals import (
+from tools.analysis.seal.analyze_low_seal_visuals import (
     analyze_report,
     color_band,
     resolve_artifact_url,
@@ -47,14 +47,14 @@ def test_low_seal_visual_report_prioritizes_colored_structured_stamp(tmp_path: P
             "score": 0.4,
             "company_score": 0.2,
             "shapes": ["矩形"],
-            "server_audited": False,
+            "secondary_read_performed": False,
             "artifact_urls": [url],
         }],
     }
     result = analyze_report(report, artifact_root)
     assert result["low_similarity_samples"] == 1
     assert result["missing_original_images"] == 0
-    assert result["server_priority_samples"] == 1
+    assert result["secondary_priority_samples"] == 1
     assert result["samples"][0]["color_band"] == "章色充足"
     assert result["samples"][0]["evidence_subcategory"] == "章型已识别但主体缺失"
     assert resolve_artifact_url(url, artifact_root) == path

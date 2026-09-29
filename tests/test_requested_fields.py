@@ -1,10 +1,10 @@
 from types import SimpleNamespace
 
-from receipt_ocr.field_schema import OUTPUT_FIELDS, project_fields, recognition_fields
-from receipt_ocr.requested_fields import printed_extras, handwritten_candidates
-from receipt_ocr.field_schema import derive_signature_check
-from receipt_ocr.ocr_types import TextObservation as Row
-from receipt_ocr import stage_handwriting
+from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS, project_fields, recognition_fields
+from receipt_ocr.domain.fields.requested import printed_extras, handwritten_candidates
+from receipt_ocr.domain.fields.schema import derive_signature_check
+from receipt_ocr.domain.ocr import TextObservation as Row
+from receipt_ocr.stages import handwriting as stage_handwriting
 
 
 def row(text, x=.1, y=.5, width=.15):
@@ -68,7 +68,7 @@ def test_date_or_empty_label_never_becomes_signature():
 
 
 def test_human_date_edit_updates_export_field():
-    from app import _apply_human_edits
+    from receipt_ocr.web.application import _apply_human_edits
     result = _apply_human_edits({"fields": {"要求到货": "2025-01-02", "签章要求": "测试有限公司", "制单日期": "2025-01-01"}},
                                 {"actual_date": "2025-01-02", "seal_text": "测试有限公司"})
     assert result["fields"]["签收日期"] == result["date_check"]["actual"] == "2025-01-02"
@@ -87,7 +87,7 @@ def test_new_truth_does_not_require_removed_fields_or_optional_products():
 
 
 def test_review_groups_and_plan_keep_handwriting_separate():
-    import app as web
+    from receipt_ocr.web import application as web
     from bs4 import BeautifulSoup
     html = BeautifulSoup(web.app.test_client().get("/").data, "html.parser")
     assert html.select_one('[data-target="handwriting"]')

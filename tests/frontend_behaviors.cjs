@@ -3,13 +3,13 @@ const path = require('node:path');
 const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
-const workbench = require(path.join(root, 'static/workbench.js'));
-const moduleNames = ['records', 'imports', 'recognition_plan', 'review', 'review_evidence', 'review_queue', 'progress', 'report', 'navigation'];
-const modules = Object.fromEntries(moduleNames.map(name => [name, require(path.join(root, `static/modules/${name}.mjs`))]));
-const helpers = require(path.join(root, 'static/modules/ui.mjs'));
-const {createState} = require(path.join(root, 'static/modules/state.mjs'));
-const {createApplication, browserEnvironment} = require(path.join(root, 'static/modules/application.mjs'));
-const {createApi} = require(path.join(root, 'static/modules/api.mjs'));
+const workbench = require(path.join(root, 'static/modules/core/workbench.mjs')).ReceiptWorkbench;
+const modulePaths = {records:'records/records', imports:'imports/imports', recognition_plan:'imports/recognition_plan', review:'review/review', review_evidence:'review/review_evidence', review_queue:'review/review_queue', progress:'workbench/workbench', report:'report/report', navigation:'shell/navigation'};
+const modules = Object.fromEntries(Object.entries(modulePaths).map(([name, modulePath]) => [name, require(path.join(root, `static/modules/${modulePath}.mjs`))]));
+const helpers = require(path.join(root, 'static/modules/core/ui.mjs'));
+const {createState} = require(path.join(root, 'static/modules/core/state.mjs'));
+const {createApplication, browserEnvironment} = require(path.join(root, 'static/modules/shell/application.mjs'));
+const {createApi} = require(path.join(root, 'static/modules/core/api.mjs'));
 
 // Load production modules directly; replace only external dependencies and DOM.
 function element() {
@@ -50,7 +50,7 @@ function harness(names = []) {
   });
   const context = {
     state,$,$$:()=>[],URLSearchParams,AbortController,Date,Set,Map,console,
-    ReceiptWorkbench:workbench,ReceiptQueue:require('../static/queue_state.js'),ReceiptImport:require('../static/import_files.js'),fieldSchema:{printed:[],handwritten:[],output:[]},planLabels:{},
+    ReceiptWorkbench:workbench,ReceiptQueue:require('../static/modules/core/queue.mjs').ReceiptQueue,ReceiptImport:require('../static/modules/core/import_files.mjs').ReceiptImport,fieldSchema:{printed:[],handwritten:[],output:[]},planLabels:{},
     document:{...element(),body:{dataset:{activePage:'review'}},hidden:false},
     window:{...element(),confirm:()=>false,scrollY:0},location,localStorage:{getItem:()=>null,setItem:()=>{}},
     history:{replaceState:(_a,_b,hash)=>{context.location.hash=hash;}},
@@ -72,7 +72,7 @@ function harness(names = []) {
   const controllers = {};
   const parameters = {environment:context, ui:{$,$$:selector=>context.$$(selector),toast:message=>context.toast(message)},
     ...Object.fromEntries(Object.entries(bags).map(([key,value])=>[`${key}State`,value])),
-    ReceiptWorkbench:workbench,ReceiptQueue:require('../static/queue_state.js'),ReceiptImport:require('../static/import_files.js'),fieldSchema:context.fieldSchema};
+    ReceiptWorkbench:workbench,ReceiptQueue:require('../static/modules/core/queue.mjs').ReceiptQueue,ReceiptImport:require('../static/modules/core/import_files.mjs').ReceiptImport,fieldSchema:context.fieldSchema};
   const dependencies = new Proxy(parameters, {get:(target,key)=>key in target ? target[key] : callbacks[key]});
   for (const [name, exported] of Object.entries(modules)) controllers[name] = Object.values(exported)[0](dependencies);
   Object.assign(context, helpers);

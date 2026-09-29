@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from receipt_ocr.seal_reference import (
+from receipt_ocr.recognition.seal.reference.matcher import (
     BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_GOOD_MATCHES,
     BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_HOMOGRAPHY_INLIERS,
     BARE_COMPANY_ONE_GLYPH_MIN_CHROMATIC_INLIER_RATIO,
@@ -1807,7 +1807,7 @@ def test_sift_homography_covers_a_complete_repeated_stamp(tmp_path):
 
 
 def test_app_chromatic_consensus_promotion_preserves_raw_ocr(monkeypatch):
-    import app as app_module
+    from receipt_ocr.web import application as app_module
 
     evidence = {
         "accepted": True,
@@ -1864,7 +1864,7 @@ def test_app_chromatic_consensus_promotion_preserves_raw_ocr(monkeypatch):
 
 
 def test_app_color_mask_consensus_uses_consensus_candidate(monkeypatch):
-    import app as app_module
+    from receipt_ocr.web import application as app_module
 
     evidence = {
         "accepted": True,

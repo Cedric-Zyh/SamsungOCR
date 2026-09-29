@@ -2,10 +2,10 @@
 
 from copy import deepcopy
 
-from .decision import decide_overall
-from .field_schema import derive_signature_check, project_fields
-from .parser import LOW_CONFIDENCE_THRESHOLD, compare_dates, compare_seal_text, parse_date, product_table_text
-from .parsing_seals import compare_seal_text_strict
+from .domain.decision import decide_overall
+from .domain.fields.schema import derive_signature_check, project_fields
+from .domain.parsing import LOW_CONFIDENCE_THRESHOLD, compare_dates, compare_seal_text, parse_date, product_table_text
+from .domain.parsing.parsing_seals import compare_seal_text_strict
 
 
 def confirmation_error(result, review_status, final_result):

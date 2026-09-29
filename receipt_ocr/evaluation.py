@@ -5,9 +5,9 @@ import threading
 from collections import Counter
 from pathlib import Path
 
-from .ocr_backends import backend_label
-from .parser import PRODUCT_COLUMNS, normalize_text
-from .field_schema import OUTPUT_FIELDS
+from .providers.catalog import backend_label
+from .domain.parsing import PRODUCT_COLUMNS, normalize_text
+from .domain.fields.schema import OUTPUT_FIELDS
 
 
 GROUND_TRUTH_FIELDS = (

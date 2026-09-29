@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-import app as web
-from receipt_ocr.database import Database
-from receipt_ocr.job_store import JobStore
+from receipt_ocr.web import application as web
+from receipt_ocr.persistence.database import Database
+from receipt_ocr.jobs.store import JobStore
 from receipt_ocr.review import apply_human_edits
 
 

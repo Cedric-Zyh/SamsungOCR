@@ -1,6 +1,6 @@
 import json
 
-from tools.analyze_date_missing_year_separator import select_saved_candidate
+from tools.analysis.date.analyze_date_missing_year_separator import select_saved_candidate
 
 
 def _result(*, confirmed: bool = True) -> dict:

@@ -12,10 +12,11 @@ import cv2
 import numpy as np
 import pytest
 
-from receipt_ocr import stage_seal
-from receipt_ocr.document_context import DocumentContext, StageRequest
-from receipt_ocr.ocr_types import TextObservation
-from receipt_ocr.seal_local_channel import (
+from receipt_ocr.stages import seal as stage_seal
+from receipt_ocr.application.context import DocumentContext
+from receipt_ocr.domain.requests import StageRequest
+from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.recognition.seal.policy import (
     LOCAL_CHANNEL_SOURCE,
     local_seal_full_match,
     record_local_channel,
@@ -196,6 +197,30 @@ def test_local_run_reuses_the_prefetched_box_instead_of_detecting(tmp_path, monk
     assert api.calls == 0
 
 
+def test_local_run_does_not_hide_company_typo_with_stamp_type_fragment(tmp_path):
+    source = _write_image(tmp_path / "page.jpg")
+    api = _SealApi(_external([_customer_seal()]))
+    future = SimpleNamespace(result=lambda: _external([_customer_seal()]))
+
+    def fake_recognize(source_arg, rows, regions, *args, **kwargs):
+        return (
+            ["广州花冬仓收货专用章", "收货专用章", "广州花冬仓"],
+            [{
+                "shape": "圆形",
+                "unwrapped_text": "广州花冬仓",
+                "round_type_band_text": "收货专用章",
+                "color_isolated_text": "",
+            }],
+        )
+
+    result = stage_seal.execute(
+        _context(source), _request(tmp_path, "local", future), fake_recognize, api
+    )
+
+    assert result["seal_check"]["status"] == "不匹配"
+    assert result["seal_check"]["recognized"] == "广州花冬仓收货专用章"
+
+
 def test_local_run_falls_back_to_its_own_detection_when_the_api_failed(tmp_path, monkeypatch):
     source = _write_image(tmp_path / "page.jpg")
     api = _SealApi(_external([], ok=False))
@@ -281,7 +306,7 @@ def test_dual_mode_all_keeps_the_provider_verdict(tmp_path, monkeypatch):
 
 
 def _detected_region():
-    from receipt_ocr.image_processing import SealRegion
+    from receipt_ocr.imaging.processing import SealRegion
 
     return SealRegion(
         x=0.2, y=0.3, width=0.3, height=0.2, color="red",

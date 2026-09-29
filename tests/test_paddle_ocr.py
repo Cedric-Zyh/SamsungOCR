@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from receipt_ocr import paddle_ocr
+from receipt_ocr.providers import paddle_runtime as paddle_ocr
 import pytest
 
 
@@ -11,7 +11,7 @@ class FakeResult(dict):
 
 
 def test_prediction_failure_releases_lock_and_records_inference(tmp_path, monkeypatch):
-    from receipt_ocr.execution import recognition_run
+    from receipt_ocr.runtime.execution import recognition_run
     source = tmp_path / 'input.png'
     Image.new('RGB', (40, 20), 'white').save(source)
     class Failing:

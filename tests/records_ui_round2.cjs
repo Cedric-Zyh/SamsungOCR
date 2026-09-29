@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {createRecords} = require('../static/modules/records.mjs');
-const {createState} = require('../static/modules/state.mjs');
-const ReceiptWorkbench = require('../static/workbench.js');
+const {createRecords} = require('../static/modules/records/records.mjs');
+const {createState} = require('../static/modules/core/state.mjs');
+const ReceiptWorkbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
 function node() {
   const events = new Map(), classes = new Set();
