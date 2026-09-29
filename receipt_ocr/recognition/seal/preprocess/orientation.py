@@ -71,6 +71,8 @@ _lock = threading.Lock()
 
 ROUND_STAMP_ANCHOR_MIN_CONFIDENCE = 0.70
 DOC_ORIENTATION_MIN_CONFIDENCE = 0.90
+RECTANGULAR_TEXT_MIN_CONFIDENCE = 0.45
+RECTANGULAR_MAX_SKEW = 15.0
 
 # ``combined`` does not trust the four-way document classifier on a round
 # stamp crop.  Measured on 28 real round stamps the classifier answered 0° for
@@ -247,6 +249,110 @@ def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN
         "confidence": round(chosen["confidence"], 4),
         "anchor_points": chosen.get("points", []),
     }
+
+
+def choose_rectangular_stamp_angle(
+    boxes,
+    *,
+    minimum_confidence=RECTANGULAR_TEXT_MIN_CONFIDENCE,
+):
+    """Choose a small deskew angle from a rectangular stamp text row.
+
+    A rectangular service stamp often has only a company row and a numeric
+    row, so the round-stamp ``专用章`` anchor is unavailable.  The widest
+    horizontal OCR polygon is usually the large identifier row and provides a
+    stable skew estimate without relying on the requested seal text.
+    """
+    candidates = []
+    for box in boxes or []:
+        text = str(box.get("text", "")).strip()
+        confidence = float(box.get("confidence", 0.0) or 0.0)
+        if not text or confidence < minimum_confidence:
+            continue
+        try:
+            angle = float(box.get("angle"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(angle) or abs(angle) > RECTANGULAR_MAX_SKEW:
+            continue
+        points = box.get("points") or []
+        if len(points) < 4:
+            continue
+        array = np.asarray(points, dtype=np.float32)
+        if array.ndim != 2 or array.shape[1] != 2:
+            continue
+        span_x = float(array[:, 0].max() - array[:, 0].min())
+        span_y = float(array[:, 1].max() - array[:, 1].min())
+        if span_x < max(12.0, span_y * 1.25):
+            continue
+        candidates.append((
+            (span_x, span_x / max(1.0, span_y), confidence),
+            {"text": text, "confidence": confidence, "angle": angle, "points": points},
+        ))
+    if not candidates:
+        return {
+            "status": "未找到矩形章横向文字方向线",
+            "angle": None,
+            "applied_rotation": 0.0,
+            "anchor_text": "",
+            "confidence": 0.0,
+        }
+    _, chosen = max(candidates, key=lambda item: item[0])
+    angle = chosen["angle"]
+    applied = 0.0 if abs(angle) < 2.0 else angle
+    return {
+        "status": "找到矩形章横向文字方向线",
+        "angle": round(angle, 3),
+        "applied_rotation": round(applied, 3),
+        "anchor_text": chosen["text"],
+        "confidence": round(chosen["confidence"], 4),
+        "anchor_points": chosen["points"],
+    }
+
+
+def prepare_rectangular_stamp(source, destination, *, model_variant="mobile"):
+    """Pad and deskew a rectangular stamp before its body OCR pass."""
+    from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
+
+    source, destination = Path(source), Path(destination)
+    boxes = detect_boxes(source, model_variant=model_variant)
+    decision = choose_rectangular_stamp_angle(boxes)
+    decision.update(mode="rectangle_text_angle", model_variant=model_variant,
+                    detected_boxes=boxes)
+    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+    if image is None or image.size == 0:
+        raise ValueError(f"无法读取矩形章方向校正图：{source}")
+    height, width = image.shape[:2]
+    padding = max(12, min(48, int(round(min(height, width) * 0.03))))
+    padded = cv2.copyMakeBorder(
+        image, padding, padding, padding, padding,
+        cv2.BORDER_CONSTANT, value=(255, 255, 255),
+    )
+    angle = float(decision.get("applied_rotation") or 0.0)
+    if abs(angle) >= 0.01:
+        padded_height, padded_width = padded.shape[:2]
+        matrix, new_width, new_height = _rotation_geometry(
+            padded_width, padded_height, angle
+        )
+        output = cv2.warpAffine(
+            padded,
+            matrix,
+            (new_width, new_height),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
+        decision["status"] = "矩形章已按横向文字行旋正并加白边"
+    else:
+        output = padded
+        decision["status"] = "矩形章保持原方向并加白边"
+    decision["padding"] = padding
+    decision["oriented_path"] = str(destination)
+    decision["applied_rotation"] = round(angle, 3)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(destination), output):
+        raise ValueError(f"矩形章方向校正图写入失败：{destination}")
+    return destination, decision
 
 
 def _round_stamp_type_texts(boxes, decision):

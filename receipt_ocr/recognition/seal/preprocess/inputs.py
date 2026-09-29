@@ -12,7 +12,12 @@ from receipt_ocr.imaging.processing import (
 )
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
-from .round import prepare_round_stamp, prepare_round_stamp_doc_ori, prepare_round_stamp_combined
+from .round import (
+    prepare_round_stamp,
+    prepare_round_stamp_doc_ori,
+    prepare_round_stamp_combined,
+    prepare_rectangular_stamp,
+)
 from .ellipse import prepare_ellipse_stamp
 
 SHAPE_LABELS = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
@@ -123,7 +128,15 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
     if orientation_mode != "none":
         try:
             target = path("oriented")
-            if orientation_mode == "doc_ori":
+            if shape == "rectangle":
+                # Rectangular stamps usually have only a company row and a
+                # number row. They cannot rely on the round-stamp ``专用章``
+                # direction anchor, so deskew from the longest horizontal
+                # OCR row and add a small white margin first.
+                corrected, orientation = prepare_rectangular_stamp(
+                    color, target, model_variant=variant_of(provider) or "v6"
+                )
+            elif orientation_mode == "doc_ori":
                 corrected, orientation = prepare_round_stamp_doc_ori(color, target)
             elif orientation_mode == "combined":
                 corrected, orientation = prepare_round_stamp_combined(color, target, model_variant=variant_of(provider) or "v6")
