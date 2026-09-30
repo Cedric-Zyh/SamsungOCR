@@ -49,7 +49,7 @@ jobs:
 
       - name: Check architecture import direction
         shell: pwsh
-        run: python -m tools.analysis.operations.check_architecture
+        run: python tools/analysis/operations/check_architecture.py
 
       - name: Run Python test suite
         shell: pwsh
