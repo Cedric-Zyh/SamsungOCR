@@ -3,10 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from receipt_ocr.imaging.processing import (
-    map_ellipse_box_to_normalized,
-    save_ellipse_normalized_seal,
-)
+from receipt_ocr.imaging.ellipse import map_ellipse_box_to_normalized, save_ellipse_normalized_seal
 from receipt_ocr.recognition.seal.preprocess.inputs import (
     _symmetric_type_geometry,
     _white_detected_type_region,

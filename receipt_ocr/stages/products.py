@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
+from ..application.requests import StageRequest
 from ..domain.parsing import parse_product_table
-from ..domain.products.rules import _fuse_product_descriptions, _recover_missing_product_grades
+from ..domain.products.rules import _fuse_product_descriptions
+from ..recognition.products.fallbacks import _recover_missing_product_grades
 
 
 from ..domain.results import ProductStageResult
-from ..api.serializers import stage_result_payload
 
 
 def recognize(context: DocumentContext, request: StageRequest) -> ProductStageResult:
@@ -23,11 +23,10 @@ def recognize(context: DocumentContext, request: StageRequest) -> ProductStageRe
     product_table = parse_product_table(rows)
     if context.document_type["type"] == "receipt":
         product_table = _recover_missing_product_grades(
-            source, rows, product_table, detail_backend
+            source, rows, product_table, detail_backend, context.text_recognizer
         )
         if detail_page_rows and product_table.get("rows"):
             _fuse_product_descriptions(
                 product_table, parse_product_table(detail_page_rows)
             )
     return ProductStageResult(table=product_table)
-

@@ -9,11 +9,32 @@ if str(_PROJECT_ROOT) not in _sys.path:
 
 import argparse
 import json
+import sqlite3
 from pathlib import Path
 
 from receipt_ocr.evaluation import GROUND_TRUTH_FIELDS
 from receipt_ocr.domain.parsing import normalize_text
-from tools.analysis.date.analyze_date_gaps import _latest_original_results
+
+
+def _latest_original_results(database: Path, backend: str) -> dict[str, dict]:
+    """Load the latest saved result for each filename in the current provider scope."""
+    connection = sqlite3.connect(database)
+    rows = connection.execute(
+        "SELECT id,filename,original_result_json FROM results ORDER BY id"
+    ).fetchall()
+    connection.close()
+    latest: dict[str, dict] = {}
+    for result_id, filename, payload in rows:
+        try:
+            result = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if result.get("ocr_backend") != backend:
+            continue
+        result["id"] = result_id
+        result["filename"] = filename
+        latest[filename] = result
+    return latest
 
 
 def field_mismatches(
@@ -121,7 +142,7 @@ def main() -> None:
     parser.add_argument(
         "--truth", type=Path, default=Path("数据/ground_truth.json")
     )
-    parser.add_argument("--backend", default="hybrid")
+    parser.add_argument("--backend", default="paddle_v6")
     parser.add_argument("--threshold", type=float, default=0.95)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

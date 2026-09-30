@@ -1,5 +1,5 @@
 """Combine regional readings and build traceable result artifacts."""
-from receipt_ocr.imaging.processing import SealRegion
+from receipt_ocr.imaging.contracts import SealRegion
 from receipt_ocr.providers.catalog import backend_label
 from receipt_ocr.runtime.utils import _dedupe
 from ..contracts import OcrRead, SealRequest, SealReadCollection, RegionEvidence

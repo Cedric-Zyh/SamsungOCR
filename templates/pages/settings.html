@@ -39,7 +39,7 @@
             <div id="plan-selection-list" class="plan-selection-list"></div>
             <p id="plan-summary" class="sr-only" aria-live="polite"></p>
             <p id="plan-error" class="settings-note settings-note-error hidden" role="alert"></p>
-            <div class="settings-scope-note"><strong>自动用于接下来的导入与重新识别</strong><span>仅保存在当前浏览器；已进入队列的任务继续使用原配置。</span></div>
+            <div class="settings-scope-note"><strong>自动用于接下来的导入与重新识别</strong><span>保存在本地服务，重启 PyCharm 后仍会保留；已进入队列的任务继续使用原配置。</span></div>
             <div class="settings-plan-notes">
               <p id="plan-multi-note" class="settings-note hidden">同一项选择多种方式会分别执行，耗时也会增加。</p>
               <p id="plan-requirement-note" class="settings-note hidden">未读取印刷字段时，使用已有回单的要求信息；新回单可能缺少比对依据。</p>
@@ -90,23 +90,23 @@
             </div>
             <div class="acceptance-rule" role="group" aria-labelledby="signature-match-title">
               <strong id="signature-match-title">签名核对</strong>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any"><span>任一结果匹配</span></label>
               <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none"><span>不核对</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none" checked><span>不核对</span></label>
               <small>多种识别方式识别收货人和仓库联系人时，按这里选择判定方式。</small>
             </div>
             <h3 class="acceptance-subheading">默认不通过标准</h3>
             <div class="acceptance-rule acceptance-reject-rule" role="group" aria-labelledby="reject-match-title">
               <strong id="reject-match-title">不匹配结果</strong>
-              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="any_mismatch"><span>任一结果不匹配</span></label>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="any_mismatch" checked><span>任一结果不匹配</span></label>
               <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="all_mismatch"><span>全部结果不匹配</span></label>
-              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="none" checked><span>不自动不通过</span></label>
-              <small>默认不自动不通过；日期或印章不一致仍会进入人工复核，由你确认。</small>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="none"><span>不自动不通过</span></label>
+              <small>任一结果不匹配时自动不通过；日期或印章不一致按上面的规则进入复核。</small>
             </div>
             <div class="acceptance-rule" role="group" aria-labelledby="low-confidence-title">
               <strong id="low-confidence-title">低置信度字段</strong>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check" checked><span>核对</span></label>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore"><span>不核对</span></label>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check"><span>核对</span></label>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore" checked><span>不核对</span></label>
               <small>“核对”会因低置信度字段进入人工复核；“不核对”仍保留提示，但不阻止整单自动通过。</small>
             </div>
             </div>

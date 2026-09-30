@@ -134,7 +134,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="审计彩色印章整体墨迹相似度")
     parser.add_argument("--database", type=Path, default=Path("storage/results.db"))
     parser.add_argument("--truth", type=Path, default=Path("数据/ground_truth.json"))
-    parser.add_argument("--backend", default="hybrid")
+    parser.add_argument("--backend", default="paddle_v6")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = build_report(Database(args.database), args.truth, args.backend)

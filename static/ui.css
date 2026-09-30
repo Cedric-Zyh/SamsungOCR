@@ -1,5 +1,7 @@
 /* Stable UI stylesheet entry point. Keep feature order explicit while the
  * individual files are being migrated into component-owned stylesheets. */
+/* Form controls retain focus indication; non-form controls stay visually quiet. */
+/* Records pagination is fixed to 25 rows per page and remains visible at the viewport edge. */
 @import url('./styles/style.css');
 @import url('./styles/workspace.css');
 @import url('./styles/ui_refinements.css');

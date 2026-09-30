@@ -13,7 +13,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from receipt_ocr.imaging.processing import _color_masks, _read_image, detect_seal_regions
+from receipt_ocr.imaging.colors import _color_masks
+
+from receipt_ocr.imaging.io import _read_image
+
+from receipt_ocr.imaging.detection import detect_seal_regions
 
 
 def main() -> None:

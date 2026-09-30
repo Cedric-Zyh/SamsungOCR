@@ -1,3 +1,1 @@
-"""Image decoding, preprocessing, cropping and artifact rendering."""
-
-from .processing import *  # noqa: F401,F403
+"""Image operations are imported from their responsibility-specific modules."""

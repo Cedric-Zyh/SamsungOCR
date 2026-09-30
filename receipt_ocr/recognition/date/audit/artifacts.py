@@ -1,4 +1,4 @@
-"""Publish compact-date evidence without running recognition audits."""
+"""Publish one date-region's evidence without running recognition audits."""
 
 from __future__ import annotations
 
@@ -36,7 +36,13 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
     image = region.images
     line_box = image.line_box or (0.0, 0.0, 1.0, 1.0)
     region_box = (image.x, image.y, image.width, image.height)
-    line_rows = [_scaled(row, line_box) for row in region.evidence.line_rows]
+    # OCR boxes are first expressed in the date-line crop, then in the single
+    # date-region crop.  Publish the same boxes in page-normalized coordinates
+    # so the decision result and the full-page preview use one coordinate space.
+    line_rows_in_region = [
+        _scaled(row, line_box) for row in region.evidence.line_rows
+    ]
+    line_rows = [_scaled(row, region_box) for row in line_rows_in_region]
     region_rows = [_scaled(row, region_box) for row in region.evidence.variant_rows]
     run.primary_rows = line_rows
     run.output.extend(region_rows)
@@ -59,7 +65,7 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
     prefix = run.artifact_url_prefix.rstrip("/")
     run.artifacts.append(
         {
-            "variant": "紧凑区域",
+            "variant": "日期区域",
             "ocr_backend": run.services.backend_label(run.ocr_backend),
             "secondary_ocr_backend": "",
             "original_url": _url(prefix, image.raw),

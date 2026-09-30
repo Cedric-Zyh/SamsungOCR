@@ -36,7 +36,7 @@ def has_provider_failure(result: dict) -> bool:
 
 def apply_signature_match_mode(result: dict) -> None:
     """Aggregate signature comparisons from every selected recognition result."""
-    acceptance = result.get("recognition_config", {}).get("acceptance") or {}
+    acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
     mode = acceptance.get("signature_match_mode")
     if mode not in {"any", "all", "none"}:
         return

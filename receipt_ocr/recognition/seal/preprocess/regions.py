@@ -7,21 +7,19 @@ from pathlib import Path
 
 from PIL import Image
 
-from receipt_ocr.imaging.processing import (
-    SealRegion,
-    extract_region_text,
-    save_color_isolated_seal,
-    save_ellipse_normalized_seal,
-    save_isolated_seal,
-    save_rectangular_seal_code_line,
-    save_region_crop,
-    save_round_seal_type_band,
-    round_seal_type_band_box,
-    save_unwrapped_seal,
-    save_unwrapped_seal_bands,
-    seal_region_is_rectangular,
-    seal_region_is_elliptical,
-)
+from receipt_ocr.imaging.contracts import SealRegion
+
+from receipt_ocr.imaging.page import extract_region_text
+
+from receipt_ocr.imaging.crops import save_color_isolated_seal, save_isolated_seal, save_rectangular_seal_code_line, save_region_crop
+
+from receipt_ocr.imaging.ellipse import save_ellipse_normalized_seal
+
+from receipt_ocr.imaging.bands import save_round_seal_type_band, round_seal_type_band_box, save_unwrapped_seal_bands
+
+from receipt_ocr.imaging.unwrap import save_unwrapped_seal
+
+from receipt_ocr.imaging.shapes import seal_region_is_rectangular, seal_region_is_elliptical
 from receipt_ocr.providers.paddle_runtime import is_paddle_backend, variant_of
 from receipt_ocr.recognition.seal.contracts import SealRequest, RegionEvidence
 from receipt_ocr.recognition.seal.preprocess.shapes import classify_shape, prepared_from_evidence
@@ -85,19 +83,19 @@ def _collect_primary_region_evidence(
                 oriented, evidence.orientation = prepare_ellipse_stamp(
                     evidence.color_isolated,
                     oriented_path,
-                    model_variant=variant_of(request.ocr_backend) or "mobile",
+                    model_variant=variant_of(request.ocr_backend) or "v6",
                 )
             elif request.orientation_mode == "combined":
                 oriented, evidence.orientation = prepare_round_stamp_combined(
                     evidence.color_isolated,
                     oriented_path,
-                    model_variant=variant_of(request.ocr_backend) or "mobile",
+                    model_variant=variant_of(request.ocr_backend) or "v6",
                 )
             else:
                 oriented, evidence.orientation = prepare_round_stamp(
                     evidence.color_isolated,
                     oriented_path,
-                    model_variant=variant_of(request.ocr_backend) or "mobile",
+                    model_variant=variant_of(request.ocr_backend) or "v6",
                 )
             if oriented is not None and oriented.is_file():
                 evidence.color_isolated_oriented = oriented
@@ -367,4 +365,3 @@ def _collect_secondary_region_evidence(
     evidence.original_safe_for_matching = bool(
         request.footer_anchor_y is not None and region.y >= request.footer_anchor_y + 0.075
     )
-

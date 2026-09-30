@@ -222,7 +222,7 @@ class SealReferenceMatcher(SealReferenceGeometry):
         if self.enabled and truth_filenames:
             current = database.list_results(
                 limit=5000,
-                filters={"ocr_backend": "hybrid"},
+                filters={"ocr_backend": "paddle_v6"},
                 latest_by_filename=True,
             )
             for item in current:

@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from receipt_ocr.imaging.processing import save_isolated_seal, save_region_crop
+from receipt_ocr.imaging.crops import save_isolated_seal, save_region_crop
 
 MODEL_NAME = "PP-LCNet_x0_25_textline_ori"
 DOC_ORIENTATION_MODEL_NAME = "PP-LCNet_x1_0_doc_ori"
@@ -310,7 +310,7 @@ def choose_rectangular_stamp_angle(
     }
 
 
-def prepare_rectangular_stamp(source, destination, *, model_variant="mobile"):
+def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
     """Pad and deskew a rectangular stamp before its body OCR pass."""
     from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
 
@@ -594,7 +594,7 @@ def _refine_ellipse_axis(source, destination):
     return rotate_stamp_image(source, destination, angle), angle
 
 
-def prepare_round_stamp(source, destination, *, model_variant="mobile"):
+def prepare_round_stamp(source, destination, *, model_variant="v6"):
     """Detect a stamp-type line and make an oriented OCR derivative."""
     from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
 
@@ -658,7 +658,7 @@ def prepare_round_stamp(source, destination, *, model_variant="mobile"):
     return oriented, decision
 
 
-def prepare_ellipse_stamp(source, destination, *, model_variant="mobile"):
+def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
     """Orient an oval stamp with its centre line, including quarter-turns.
 
     Ellipse geometry can estimate tilt but cannot tell which end is upright.
@@ -908,7 +908,7 @@ def prepare_round_stamp_doc_ori(source, destination):
     try:
         from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
 
-        boxes = detect_boxes(oriented, model_variant="mobile")
+        boxes = detect_boxes(oriented, model_variant="v6")
         row_decision = choose_round_stamp_angle(boxes, minimum_confidence=0.45)
         detected_box = _oriented_type_row_box(
             boxes, row_decision, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
@@ -1124,7 +1124,7 @@ def _map_box_to_source(box, candidate, coarse_angle, source_size):
     return mapped
 
 
-def prepare_round_stamp_combined(source, destination, *, model_variant="mobile"):
+def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
     """Coarse-rotate a round stamp to all four right angles, then fine-tune.
 
     A text polygon cannot resolve the quarter-turn: the detector normalises

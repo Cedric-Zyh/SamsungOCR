@@ -4,7 +4,6 @@ from ..runtime.progress import model_operation
 
 import os
 import math
-import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,11 +28,6 @@ MODEL_VARIANTS = {
     item.model_variant: item.models for item in PROVIDERS.of_kind("local_text")
 }
 
-# The v5 Mobile and Server models were retired from the product.  Keep these
-# aliases only for old saved evidence and helper callers; they always resolve
-# to v6 and can never load a v5 weight set.
-LEGACY_VARIANT_ALIASES = {"mobile": "v6", "server": "v6"}
-
 # A model variant is reached through exactly one request-scoped provider id.
 # ``recognition_scope.provider_scope`` gates every OCR call by the backend id
 # the recognition plan selected, so these ids must stay in step with
@@ -43,11 +37,6 @@ VARIANT_PROVIDERS = {
     item.model_variant: item.id for item in PROVIDERS.of_kind("local_text")
 }
 _PROVIDER_VARIANTS = {provider: variant for variant, provider in VARIANT_PROVIDERS.items()}
-_LEGACY_PROVIDER_ALIASES = {
-    "paddle": "paddle_v6",
-    "paddle_server": "paddle_v6",
-}
-
 PADDLE_BACKENDS = frozenset(VARIANT_PROVIDERS.values())
 SEAL_BACKENDS = frozenset(item.id for item in PROVIDERS.of_kind("local_seal"))
 
@@ -59,7 +48,7 @@ LIGHTWEIGHT_VARIANTS = frozenset(
 
 def is_paddle_backend(name: str | None) -> bool:
     """True when a backend id is served by one of the local PaddleOCR models."""
-    return str(name or "").strip().lower() in PADDLE_BACKENDS or str(name or "").strip().lower() in _LEGACY_PROVIDER_ALIASES
+    return str(name or "").strip().lower() in PADDLE_BACKENDS
 
 
 def is_seal_backend(name: str | None) -> bool:
@@ -69,29 +58,27 @@ def is_seal_backend(name: str | None) -> bool:
 
 def provider_of(model_variant: str) -> str:
     """Provider id used by the request scope for a model variant."""
-    variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
-    return VARIANT_PROVIDERS.get(variant, VARIANT_PROVIDERS["v6"])
+    if model_variant not in VARIANT_PROVIDERS:
+        raise ValueError(f"未知 PaddleOCR 模型规格: {model_variant}")
+    return VARIANT_PROVIDERS[model_variant]
 
 
 def variant_of(backend: str | None) -> str | None:
     """Model variant behind a backend id, or ``None`` for a non-Paddle backend."""
-    provider = _LEGACY_PROVIDER_ALIASES.get(str(backend or "").strip().lower(), str(backend or "").strip().lower())
-    return _PROVIDER_VARIANTS.get(provider)
+    return _PROVIDER_VARIANTS.get(str(backend or "").strip().lower())
 
 
 def is_lightweight_backend(value: str | None) -> bool:
     """True for the remaining small local Paddle tier (PP-OCRv6 Small).
 
-    Accepts either a backend id (``paddle``, ``paddle_v6``) or a backend label
-    (``PaddleOCR PP-OCRv6 Small``) because older date artifacts persist the
-    label text rather than the id.
+    Accepts the current backend id or its display label.
     """
     text = str(value or "").strip().lower()
     if variant_of(text) in LIGHTWEIGHT_VARIANTS:
         return True
-    if not text or "server" in text:
+    if not text:
         return False
-    return any(token in text for token in ("mobile", "small", "tiny"))
+    return "small" in text or text == "v6"
 
 
 # PP-OCR runs several times faster through the ONNX Runtime provider than
@@ -156,14 +143,6 @@ def _prediction_slot():
         _PREDICT_LOCK.release()
 
 
-def server_max_side() -> int:
-    """Bound Server-model page memory while keeping normalized coordinates."""
-    try:
-        return max(640, int(os.getenv("PADDLE_SERVER_MAX_SIDE", "1400")))
-    except ValueError:
-        return 1400
-
-
 def paddle_model_home() -> Path:
     configured = os.getenv("PADDLE_PDX_CACHE_HOME") or os.getenv("PADDLE_MODEL_HOME")
     if configured:
@@ -175,7 +154,6 @@ def paddle_model_home() -> Path:
 
 
 def _pipeline(model_variant: str):
-    model_variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
     if model_variant not in MODEL_VARIANTS:
         raise ValueError(f"未知 PaddleOCR 模型规格: {model_variant}")
     engine_kwargs = _engine_kwargs()
@@ -207,7 +185,6 @@ def _pipeline(model_variant: str):
 
 def _line_recognizer(model_variant: str):
     """Load Paddle's recognition-only model for a pre-cropped text line."""
-    model_variant = LEGACY_VARIANT_ALIASES.get(model_variant, model_variant)
     if model_variant not in MODEL_VARIANTS:
         raise ValueError(f"未知 PaddleOCR 模型规格: {model_variant}")
     engine_kwargs = _engine_kwargs()
@@ -324,7 +301,7 @@ def recognize_seal_text(image_path: str | Path) -> list[TextObservation]:
 def recognize_line(
     image_path: str | Path,
     *,
-    model_variant: str = "mobile",
+    model_variant: str = "v6",
 ) -> list[TextObservation]:
     """Recognize one already-cropped line without running text detection.
 
@@ -368,7 +345,7 @@ def recognize_text(
     fast: bool = False,
     custom_words: Iterable[str] = (),
     language_correction: bool = True,
-    model_variant: str = "mobile",
+    model_variant: str = "v6",
 ) -> list[TextObservation]:
     """Run a local PP-OCR pipeline and return top-left normalized text boxes."""
     del languages, fast, custom_words, language_correction  # Common backend interface.
@@ -389,32 +366,13 @@ def recognize_text(
     output: list[TextObservation] = []
     inference_path = path
     inference_width, inference_height = image_width, image_height
-    temporary: tempfile.TemporaryDirectory | None = None
-    if model_variant == "server" and max(image_width, image_height) > server_max_side():
-        # PP-OCR Server can otherwise exceed local memory on 3k–6k scanner
-        # pages.  Normalized box coordinates are scale invariant, so a bounded
-        # inference copy preserves every downstream fixed-region calculation.
-        temporary = tempfile.TemporaryDirectory(prefix="receipt-paddle-server-")
-        inference_path = Path(temporary.name) / "input.jpg"
-        with Image.open(path) as source:
-            scaled = source.convert("RGB")
-            scaled.thumbnail(
-                (server_max_side(), server_max_side()),
-                Image.Resampling.LANCZOS,
-            )
-            inference_width, inference_height = scaled.size
-            scaled.save(inference_path, format="JPEG", quality=94)
     # The Paddle pipeline object is reused to avoid repeated model loading, while
     # inference is serialized because the native predictor is not thread-safe.
-    try:
-        with model_operation(provider_of(model_variant), '文字检测与识别'), _prediction_slot():
-            with measure('paddle_model_setup'):
-                pipeline = _pipeline(model_variant)
-            with measure('paddle_text_inference'):
-                results = list(pipeline.predict(input=str(inference_path)))
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
+    with model_operation(provider_of(model_variant), '文字检测与识别'), _prediction_slot():
+        with measure('paddle_model_setup'):
+            pipeline = _pipeline(model_variant)
+        with measure('paddle_text_inference'):
+            results = list(pipeline.predict(input=str(inference_path)))
     for result in results:
         texts = result.get("rec_texts", [])
         scores = result.get("rec_scores", [])
@@ -445,7 +403,7 @@ def recognize_text(
 def detect_text_boxes(
     image_path: str | Path,
     *,
-    model_variant: str = "mobile",
+    model_variant: str = "v6",
 ) -> list[dict]:
     """Return Paddle text polygons, recognition text and their line angles.
 

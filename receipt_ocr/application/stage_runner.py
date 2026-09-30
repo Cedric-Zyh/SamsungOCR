@@ -1,7 +1,7 @@
 """Dispatch local recognition stages and return stage-owned domain results."""
 
 from ..domain.results import StageResult
-from ..domain.requests import StageRequest
+from ..application.requests import StageRequest
 from ..application.context import DocumentContext
 from ..stages import fields, products, handwriting, date, seal
 

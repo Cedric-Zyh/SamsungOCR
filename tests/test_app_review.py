@@ -27,7 +27,7 @@ def test_create_task_defaults_to_local_seal_mode(tmp_path, monkeypatch):
 
     response = app_module.app.test_client().post(
         "/api/tasks",
-        json={"name": "本地批次", "total": 2, "ocr_backend": "hybrid"},
+        json={"name": "本地批次", "total": 2, "ocr_backend": "paddle_v6"},
     )
 
     assert response.status_code == 200
@@ -47,7 +47,7 @@ def test_create_task_persists_qingtong_mode_and_rejects_unknown(
         json={
             "name": "清瞳批次",
             "total": 1,
-            "ocr_backend": "hybrid",
+            "ocr_backend": "paddle_v6",
             "seal_recognition_mode": "qingtong",
         },
     )
@@ -56,7 +56,7 @@ def test_create_task_persists_qingtong_mode_and_rejects_unknown(
         json={
             "name": "错误模式",
             "total": 1,
-            "ocr_backend": "hybrid",
+            "ocr_backend": "paddle_v6",
             "seal_recognition_mode": "unknown",
         },
     )
@@ -318,14 +318,14 @@ def test_accuracy_report_follows_requested_backend(tmp_path, monkeypatch):
     truth_path = tmp_path / "ground_truth.json"
     truth_path.write_text(json.dumps({
         "sample.jpg": {
-            "fields": {"客户名称": "Vision 正确客户"}, "product_rows": [],
+                "fields": {"客户名称": "Paddle 正确客户"}, "product_rows": [],
             "actual_date": "", "seal_should_match": False,
         }
     }, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(app_module, "database", test_database)
     monkeypatch.setattr(app_module, "GROUND_TRUTH_PATH", truth_path)
 
-    for backend, customer in (("vision", "Vision 正确客户"), ("hybrid", "混合错误客户")):
+    for backend, customer in (("paddle_v6", "Paddle 正确客户"), ("danzhengtong", "远程错误客户")):
         task_id = f"task-{backend}"
         test_database.create_task(task_id, backend, 1, backend)
         result = sample_result("sample.jpg")
@@ -338,9 +338,9 @@ def test_accuracy_report_follows_requested_backend(tmp_path, monkeypatch):
         test_database.update_task(task_id, success=True, pending_review=True)
 
     payload = app_module.app.test_client().get(
-        "/api/report?ocr_backend=vision"
+        "/api/report?ocr_backend=paddle_v6"
     ).get_json()
-    assert payload["accuracy"]["scope_backend"] == "vision"
+    assert payload["accuracy"]["scope_backend"] == "paddle_v6"
     assert payload["accuracy"]["field_accuracy"] == 1
 
 
@@ -349,7 +349,7 @@ def test_paginated_receipt_is_reviewed_as_one_logical_record(tmp_path, monkeypat
     test_database.initialize()
     monkeypatch.setattr(app_module, "database", test_database)
     task_id = "paginated-task"
-    test_database.create_task(task_id, "two page receipt", 2, "hybrid")
+    test_database.create_task(task_id, "two page receipt", 2, "paddle_v6")
 
     def page(filename, kind, row_number):
         return {

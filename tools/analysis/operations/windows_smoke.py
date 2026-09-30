@@ -39,14 +39,12 @@ def _collect(*, write_check: bool) -> tuple[dict, list[str]]:
         default = ""
         failures.append(f"无法选择默认后端：{exc}")
     try:
-        route = ocr_backends.backend_route("hybrid")
+        route = ocr_backends.backend_route("paddle_v6")
     except Exception as exc:
         route = {}
-        failures.append(f"Hybrid 路由失败：{exc}")
+        failures.append(f"Paddle v6 路由失败：{exc}")
 
     if platform.system() == "Windows":
-        if indexed.get("vision", {}).get("available"):
-            failures.append("Windows 不应暴露 macOS Vision")
         if default != "paddle_v6":
             failures.append(f"Windows 默认后端应为 paddle_v6，实际为 {default or '空'}")
         if set(route.values()) != {"paddle_v6"}:
@@ -74,7 +72,7 @@ def _collect(*, write_check: bool) -> tuple[dict, list[str]]:
         "model_home_writable": writable,
         "model_home_write_error": write_error,
         "default_backend": default,
-        "hybrid_route": route,
+        "default_route": route,
         "packages": {
             "paddlepaddle": _package_version("paddlepaddle"),
             "paddleocr": _package_version("paddleocr"),
@@ -135,8 +133,7 @@ def main() -> int:
                 "未配置时为 %USERPROFILE%\\.paddlex"
             )
             for backend in report["backends"]:
-                if backend.get("id") != "vision":
-                    backend["model_home"] = report["model_home"]
+                backend["model_home"] = report["model_home"]
     else:
         if platform.system() != "Windows":
             print("本命令应在 Windows 运行；非 Windows 请加 --simulate-windows", file=sys.stderr)

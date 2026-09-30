@@ -41,16 +41,13 @@ class ProviderDefinition:
 
 
 class ProviderRegistry:
-    """Immutable catalog with explicit aliases for persisted legacy plans."""
+    """Immutable catalog of the recognition providers supported by the app."""
 
-    def __init__(self, definitions: Iterable[ProviderDefinition], *, aliases=None):
+    def __init__(self, definitions: Iterable[ProviderDefinition]):
         definitions = tuple(definitions)
         by_id = {item.id: item for item in definitions}
         if len(by_id) != len(definitions):
             raise ValueError("重复的识别方式标识")
-        aliases = dict(aliases or {})
-        if set(aliases) & set(by_id) or any(value not in by_id for value in aliases.values()):
-            raise ValueError("无效的识别方式别名")
         for item in definitions:
             if item.page_fallback and (
                 item.page_fallback not in by_id
@@ -58,14 +55,12 @@ class ProviderRegistry:
             ):
                 raise ValueError(f"无效的整页 OCR 路由：{item.id}")
         self._definitions = MappingProxyType(by_id)
-        self.aliases = MappingProxyType(aliases)
 
     def __iter__(self):
         return iter(self._definitions.values())
 
     def normalize(self, name: str | None) -> str:
-        requested = (name or "").strip().lower()
-        return self.aliases.get(requested, requested)
+        return (name or "").strip().lower()
 
     def get(self, name: str | None) -> ProviderDefinition | None:
         return self._definitions.get(self.normalize(name))
@@ -111,7 +106,4 @@ PROVIDERS = ProviderRegistry(
             kind="remote_document",
         ),
     ),
-    aliases={name: "paddle_v6" for name in (
-        "paddle", "paddle_server", "hybrid_server", "vision", "hybrid",
-    )},
 )

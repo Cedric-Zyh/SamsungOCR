@@ -4,12 +4,13 @@ import shutil
 import cv2
 import numpy as np
 
-from receipt_ocr.imaging.processing import (
-    save_region_crop, save_color_isolated_seal, save_ellipse_normalized_seal,
-    save_round_seal_type_band, save_unwrapped_seal,
-    map_ellipse_box_to_normalized,
-    round_seal_type_band_box,
-)
+from receipt_ocr.imaging.crops import save_region_crop, save_color_isolated_seal
+
+from receipt_ocr.imaging.ellipse import save_ellipse_normalized_seal, map_ellipse_box_to_normalized
+
+from receipt_ocr.imaging.bands import save_round_seal_type_band, round_seal_type_band_box
+
+from receipt_ocr.imaging.unwrap import save_ring_text_band_preview, save_unwrapped_seal
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
 from .round import (
@@ -277,8 +278,19 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 if shape == "ellipse"
                 else artifact.get("color_isolated_oriented_url") or artifact.get("color_isolated_url")
             )
+            # The ring input is already a corrected, white-covered stamp
+            # image.  Use the ellipse-aware sampler for both round and oval
+            # stamps: the outer border remains visible after the cover, while
+            # the inner border may be missing and must be estimated.
+            ring_band = path("ring-text-band")
+            save_ring_text_band_preview(ring_input, ring_band, color=region.color)
+            artifact["ring_text_band_url"] = add(
+                "ring-text-band",
+                ring_band,
+                "环形文字带（展开前）",
+            )
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
-                                elliptical=shape == "ellipse", normalized=shape == "ellipse", single_line=True)
+                                elliptical=True, normalized=True, single_line=True)
             ring_url = add("ring", ring, "圆环公司文字", "ring")
             jobs.append((inputs[-1], ring))
             artifact.update(unwrapped_url=ring_url, unwrapped_text="", unwrap_texts=[])

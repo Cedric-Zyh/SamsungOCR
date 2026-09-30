@@ -7,12 +7,13 @@ const localMethods = ['paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';
 const acceptanceStorageKey = 'receipt-acceptance-policy';
 
-export function createRecognitionPlan({environment, ui, importsState}) {
+export function createRecognitionPlan({environment, ui, importsState, services = null}) {
   const {localStorage} = environment;
   const {$, $$} = ui;
   const stages = Object.keys(planLabels);
   let initialSaveStatus = '';
   let initialSaveState = 'ready';
+  let serverSave = Promise.resolve();
 
   const stageMethods = stage => $$(`[data-stage="${stage}"]`);
   const available = (stage, method) => stageMethods(stage).some(el => el.dataset.method === method && el.dataset.available === 'true');
@@ -57,6 +58,13 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       date_source: 'danzhengtong',
     };
   }
+  function defaultAcceptancePolicy() {
+    return {
+      seal_match_mode: 'any', date_match_mode: 'any', signature_match_mode: 'none',
+      reject_mode: 'any_mismatch', low_confidence_mode: 'ignore',
+      seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
+    };
+  }
   function usesRemotePlan() { return stages.some(stage => enabled(stage) && selected(stage).some(method => ['qingtong', 'danzhengtong'].includes(method))); }
 
   function applyPlan(plan, {persist = true} = {}) {
@@ -73,19 +81,45 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     updateRecognitionPlan({persist});
   }
   function defaultPlan() {
-    const choose = (stage, preference) => {
-      // Do not silently create a remote-only default when no local OCR is
-      // available at all; the user must explicitly choose that route.
-      if (stage === 'date' && !localMethods.some(method => available(stage, method))) return [];
-      const method = preference.find(method => available(stage, method));
-      return method ? [method] : [];
+    const choose = stage => {
+      const defaults = {
+        fields: ['paddle_v6'], products: [], handwriting: ['paddle_v6'],
+        date: ['paddle_v6'], seal: ['paddle_v6', 'qingtong'],
+      }[stage] || [];
+      return defaults.filter(method => available(stage, method));
     };
     const plan = {
-      fields:choose('fields', localMethods), products:choose('products', localMethods), handwriting:[],
-      date:choose('date', ['danzhengtong', 'paddle_v6']), seal:choose('seal', ['paddle_v6']),
+      fields:choose('fields'), products:choose('products'), handwriting:choose('handwriting'),
+      date:choose('date'), seal:choose('seal'),
     };
     if ($('#seal-orientation-mode')) plan.seal_orientation = 'polygon';
     return plan;
+  }
+
+  function applyAcceptancePolicy(policy) {
+    if (!policy || typeof policy !== 'object') return;
+    for (const stage of ['seal', 'date', 'signature']) {
+      const savedMode = policy[`${stage}_match_mode`];
+      const mode = ['any', 'all', 'none'].includes(savedMode) ? savedMode : 'any';
+      $$(`[data-acceptance-input="${stage}"]`).forEach(input => { input.checked = input.value === mode; });
+    }
+    const rejectMode = ['any_mismatch', 'all_mismatch', 'none'].includes(policy.reject_mode) ? policy.reject_mode : 'none';
+    $$('[data-acceptance-reject]').forEach(input => { input.checked = input.value === rejectMode; });
+    const lowConfidenceMode = policy.low_confidence_mode === 'ignore' ? 'ignore' : 'check';
+    $$('[data-acceptance-low-confidence]').forEach(input => { input.checked = input.value === lowConfidenceMode; });
+  }
+
+  function queueServerSave() {
+    if (!services?.settings?.updateRecognition) return;
+    let plan;
+    try { plan = readRecognitionPlan(); } catch (_) { return; }
+    const payload = {recognition_config: {...plan}};
+    delete payload.recognition_config.acceptance;
+    payload.acceptance_policy = plan.acceptance;
+    serverSave = serverSave.then(() => services.settings.updateRecognition(payload)).catch(() => {
+      // Browser storage remains available as a fallback when the local server
+      // is restarting; the next change retries the durable save.
+    });
   }
   function presetPlan(name) {
     if (name === 'danzhengtong') return {fields:['danzhengtong'], products:[], handwriting:['danzhengtong'], date:['danzhengtong'], seal:['danzhengtong']};
@@ -161,7 +195,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       button.setAttribute('aria-pressed', String(active));
     }
     const match = plan && Object.keys(presetLabels).find(name => !presetUnavailable(name) && samePlan(plan, presetPlan(name)));
-    setText('#plan-name', errorMessage ? '待完善' : match ? presetLabels[match] : samePlan(plan, defaultPlan()) ? '默认方案' : '自定义');
+    setText('#plan-name', errorMessage ? '待完善' : samePlan(plan, defaultPlan()) ? '默认方案' : match ? presetLabels[match] : '自定义');
     if (!plan) {
       setText('#plan-summary', errorMessage);
       setText('#import-config', `配置未完成：${errorMessage}`);
@@ -181,6 +215,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
       } catch (_) {
         saveStatus = '当前选择可用，但未能保存到浏览器'; saveState = 'error';
       }
+      queueServerSave();
     }
     setText('#plan-save-status', saveStatus);
     $('#plan-save-status')?.setAttribute('data-state', saveState);
@@ -193,6 +228,7 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     $$('[data-acceptance-input], [data-acceptance-reject], [data-acceptance-low-confidence]').forEach(input => input.addEventListener('change', () => {
       try { localStorage.setItem(acceptanceStorageKey, JSON.stringify(readAcceptancePolicy())); } catch (_) { /* browser storage unavailable */ }
       updateRecognitionPlan({persist: false});
+      queueServerSave();
     }));
     $$('[data-preset]').forEach(button => button.addEventListener('click', () => {
       if (importsState.batchRunning || presetUnavailable(button.dataset.preset)) return;
@@ -214,17 +250,38 @@ export function createRecognitionPlan({environment, ui, importsState}) {
     }
     applyPlan(savedPlan || defaultPlan(), {persist:false});
     try {
-      const policy = JSON.parse(localStorage.getItem(acceptanceStorageKey) || 'null');
-      for (const stage of ['seal', 'date', 'signature']) {
-        const savedMode = policy?.[`${stage}_match_mode`];
-        const mode = ['any', 'all', 'none'].includes(savedMode) ? savedMode : 'any';
-        $$(`[data-acceptance-input="${stage}"]`).forEach(input => { input.checked = input.value === mode; });
-      }
-      const rejectMode = ['any_mismatch', 'all_mismatch', 'none'].includes(policy?.reject_mode) ? policy.reject_mode : 'none';
-      $$('[data-acceptance-reject]').forEach(input => { input.checked = input.value === rejectMode; });
-      const lowConfidenceMode = policy?.low_confidence_mode === 'ignore' ? 'ignore' : 'check';
-      $$('[data-acceptance-low-confidence]').forEach(input => { input.checked = input.value === lowConfidenceMode; });
-    } catch (_) { /* use defaults */ }
+      const storedPolicy = JSON.parse(localStorage.getItem(acceptanceStorageKey) || 'null');
+      const policy = storedPolicy?.acceptance && typeof storedPolicy.acceptance === 'object'
+        ? storedPolicy.acceptance : storedPolicy;
+      const hasPolicy = policy && typeof policy === 'object' && !Array.isArray(policy)
+        && ['seal_match_mode', 'date_match_mode', 'signature_match_mode', 'reject_mode', 'low_confidence_mode']
+          .some(key => Object.prototype.hasOwnProperty.call(policy, key));
+      applyAcceptancePolicy(hasPolicy ? policy : defaultAcceptancePolicy());
+    } catch (_) { applyAcceptancePolicy(defaultAcceptancePolicy()); }
+
+    // The local service is the durable source of truth.  Load it after the
+    // synchronous browser-cache paint so the settings page remains responsive
+    // even while PyCharm is starting the Flask process.
+    if (services?.settings?.recognition) {
+      // Defer the call itself as well as its response handling.  API clients
+      // begin their fetch synchronously, and initialization must remain a
+      // side-effect-free paint step for embedded callers and tests.
+      Promise.resolve().then(() => services.settings.recognition()).then(settings => {
+        if (!settings?.recognition_config) return;
+        applyAcceptancePolicy(settings.acceptance_policy);
+        applyPlan(settings.recognition_config, {persist:false});
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(settings.recognition_config));
+          localStorage.setItem(acceptanceStorageKey, JSON.stringify(settings.acceptance_policy || {}));
+        } catch (_) { /* browser storage unavailable */ }
+        initialSaveStatus = '已载入本地服务保存的默认配置';
+        initialSaveState = 'saved';
+        updateRecognitionPlan({persist:false});
+      }).catch(() => {
+        // A server started from an older version has no settings endpoint;
+        // keep using the browser cache/defaults until it is upgraded.
+      });
+    }
   }
 
   return {initialize, readRecognitionPlan, readAcceptancePolicy, usesRemotePlan, applyPlan, defaultPlan, updateRecognitionPlan};

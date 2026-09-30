@@ -139,20 +139,6 @@ def test_combined_never_uses_document_orientation_classifier(monkeypatch, tmp_pa
     seal_orientation.prepare_round_stamp_combined(source, tmp_path / 'corrected.png')
 
 
-def test_orientation_none_bypasses_rectangle_direction_model(monkeypatch, tmp_path):
-    from receipt_ocr.recognition.seal import workflow as seal_crops
-    monkeypatch.setattr(seal_orientation, 'prepare_rectangles',
-                        lambda *args: pytest.fail('orientation model must not run'))
-    calls = []
-    def recognize(*args):
-        calls.append(args)
-        return [], []
-    monkeypatch.setattr(seal_crops, '_recognize_oriented_seals', recognize)
-    seal_crops._recognize_local_seals(tmp_path / 'input.png', [], [], None, '', 'paddle',
-                                    orientation_mode='none')
-    assert calls[0][9] == 'none'
-
-
 def test_rectangle_orientation_requires_unanimous_high_confidence_180():
     result = decide_orientation([
         {"label_names": ["180_degree"], "scores": [0.99]},
@@ -220,7 +206,7 @@ def test_ellipse_orientation_does_not_flip_on_ring_company_text(monkeypatch, tmp
     )
 
     oriented, decision = seal_orientation.prepare_ellipse_stamp(
-        source, tmp_path / "oriented.png", model_variant="mobile"
+        source, tmp_path / "oriented.png", model_variant="v6"
     )
 
     assert oriented is None

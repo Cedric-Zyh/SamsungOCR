@@ -18,12 +18,13 @@ from __future__ import annotations
 from math import isfinite
 from pathlib import Path
 
-from receipt_ocr.imaging.processing import (
-    SealRegion,
-    classify_seal_role,
-    read_image_size,
-    save_pixel_region_crop,
-)
+from receipt_ocr.imaging.contracts import SealRegion
+
+from receipt_ocr.imaging.detection import classify_seal_role
+
+from receipt_ocr.imaging.io import read_image_size
+
+from receipt_ocr.imaging.crops import save_pixel_region_crop
 
 # The API does not report which ink its box was drawn from, and the colour only
 # steers which derivative crops the local pass prepares.  "red" is the tolerant

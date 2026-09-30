@@ -229,7 +229,7 @@ def build_report(database: Database, truth_path: Path) -> dict:
     comparator = ChromaticCropComparator()
     results = database.list_results(
         limit=5000,
-        filters={"ocr_backend": "hybrid"},
+        filters={"ocr_backend": "paddle_v6"},
         latest_by_filename=True,
     )
     samples = []

@@ -158,7 +158,7 @@ def build_safe_rerun_plan(samples: list[dict]) -> dict:
 def build_report(
     database: Database,
     truth_path: str | Path,
-    backend: str = "hybrid",
+    backend: str = "paddle_v6",
 ) -> dict:
     truth = load_ground_truth(truth_path)
     matcher = SealReferenceMatcher(database.path.parent / "artifacts")
@@ -520,7 +520,7 @@ def main() -> None:
     )
     parser.add_argument("--database", type=Path, default=Path("storage/results.db"))
     parser.add_argument("--truth", type=Path, default=Path("数据/ground_truth.json"))
-    parser.add_argument("--backend", default="hybrid")
+    parser.add_argument("--backend", default="paddle_v6")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = build_report(Database(args.database), args.truth, args.backend)

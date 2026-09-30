@@ -7,7 +7,7 @@ from contextvars import copy_context
 from pathlib import Path
 import time
 
-from ..providers.catalog import backend_catalog, backend_route, backend_label, normalize_backend_id
+from ..providers.catalog import backend_catalog, backend_route, backend_label
 from ..providers.registry import PROVIDERS
 from ..providers.selection import validate_stage_provider
 from ..domain.stages import STAGES, STAGE_LABELS as LABELS
@@ -16,12 +16,14 @@ SEAL_PROVIDERS = frozenset(item.id for item in PROVIDERS.of_kind("local_seal"))
 from ..runtime.scope import provider_scope
 from receipt_ocr.recognition.seal.policy import secondary_read_providers_for_plan
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
-from .pipeline import attach_product_fields, complete_result
+from ..application.requests import StageRequest
+from .pipeline import attach_product_fields, complete_result, normalize_result_contract
 from ..domain.fields.schema import PRINTED_FIELDS
 from ..runtime.safety import _ocr_model_config
 from ..runtime.execution import measure, recognition_run
-from ..imaging.processing import SealRegion, annotate_image
+from ..imaging.contracts import SealRegion
+
+from ..imaging.page import annotate_image
 from receipt_ocr.recognition.seal.policy import combine_seal_provider_checks
 from receipt_ocr.recognition.seal.policy import local_seal_full_match, record_local_channel
 from ..runtime.progress import model_stage, progress_context, report_plan, report_model_progress
@@ -46,7 +48,6 @@ def validate_config(config, *, api_enabled=True):
             not isinstance(x, str) for x in methods
         ):
             raise ValueError("识别方式必须为列表")
-        methods = [normalize_backend_id(method) for method in methods]
         methods = list(dict.fromkeys(methods))
         for method in methods:
             validate_stage_provider(
@@ -494,6 +495,11 @@ def run_configured(
     output["seal_regions"] = preview_regions
     output["preview_date_box"] = preview_date_box
     output["stage_review_reasons"] = list(dict.fromkeys(stage_reasons))
+    normalize_result_contract(
+        output,
+        executed_stages={stage for stage in STAGES if config[stage]},
+        recognition_config=config,
+    )
     complete_result(output, reference_matcher=kwargs.get("reference_matcher"))
     if preview_path:
         annotate_image(

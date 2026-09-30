@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
+from ..application.requests import StageRequest
 from ..providers.catalog import backend_label
 from ..domain.fields.schema import PRINTED_FIELDS
 from ..domain.fields.requested import printed_extras
@@ -19,12 +19,11 @@ from ..domain.fields.rules import (
     _prefer_detail_field,
     _prefer_detail_requirement,
     _recover_confirmed_template_note,
-    _recover_signature_requirement,
 )
+from ..recognition.fields.fallbacks import _recover_signature_requirement
 
 
 from ..domain.results import FieldStageResult
-from ..api.serializers import stage_result_payload
 
 
 def recognize(context: DocumentContext, request: StageRequest) -> FieldStageResult:
@@ -120,6 +119,7 @@ def recognize(context: DocumentContext, request: StageRequest) -> FieldStageResu
             artifact_dir=request.artifact_dir,
             artifact_url_prefix=request.artifact_url_prefix,
             artifacts=requirement_artifacts,
+            text_recognizer=context.text_recognizer,
         )
         if requirement_line:
             original_requirement = fields.get("签章要求", "")

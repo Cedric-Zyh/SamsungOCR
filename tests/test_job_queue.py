@@ -17,7 +17,7 @@ from receipt_ocr.jobs.worker import JobWorker, ProcessLock
 from receipt_ocr.jobs.service import ReceiptJobService
 
 
-OPTIONS = dict(ocr_backend='vision', seal_recognition_mode='local', recognition_config=None)
+OPTIONS = dict(ocr_backend='paddle_v6', seal_recognition_mode='local', recognition_config=None)
 
 
 def result():
@@ -426,7 +426,7 @@ def test_http_upload_waits_for_start_and_finishes_without_browser(web_queue, mon
         worker.start()
         with web.app.test_client() as client:
             task = client.post('/api/tasks', json={'background': True, 'total': 1,
-                'items': [{'filename': 'receipt.jpg'}], 'ocr_backend': 'vision'}).get_json()
+                'items': [{'filename': 'receipt.jpg'}], 'ocr_backend': 'paddle_v6'}).get_json()
             job_id = task['items'][0]['id']
             response = client.post(f'/api/jobs/{job_id}/upload', data={'file': (io.BytesIO(b'image'), 'receipt.jpg')})
             assert response.status_code == 202
@@ -465,7 +465,7 @@ def test_upload_retry_does_not_create_another_file_or_job(web_queue):
 def test_cancel_endpoint_deletes_unfinished_job_and_upload(web_queue):
     client = web_queue.app.test_client()
     task = client.post('/api/tasks', json={'background': True, 'total': 1,
-        'items': [{'filename': 'receipt.jpg'}], 'ocr_backend': 'vision'}).get_json()
+        'items': [{'filename': 'receipt.jpg'}], 'ocr_backend': 'paddle_v6'}).get_json()
     job_id = task['items'][0]['id']
     response = client.post(f'/api/jobs/{job_id}/upload', data={'file': (io.BytesIO(b'image'), 'receipt.jpg')})
     assert response.status_code == 202
@@ -484,7 +484,7 @@ def test_cancel_endpoint_deletes_unfinished_job_and_upload(web_queue):
 def test_cancel_all_endpoint_deletes_selected_unfinished_jobs(web_queue):
     client = web_queue.app.test_client()
     task = client.post('/api/tasks', json={'background': True, 'total': 2,
-        'items': [{'filename': 'one.jpg'}, {'filename': 'two.jpg'}], 'ocr_backend': 'vision'}).get_json()
+        'items': [{'filename': 'one.jpg'}, {'filename': 'two.jpg'}], 'ocr_backend': 'paddle_v6'}).get_json()
     ids = [item['id'] for item in task['items']]
     response = client.post('/api/jobs/cancel', json={'ids': ids})
     assert response.status_code == 200

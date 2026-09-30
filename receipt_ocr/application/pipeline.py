@@ -6,12 +6,15 @@ from time import perf_counter
 from ..domain.decision import finalize_result
 from ..domain.fields.schema import project_fields
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
-from ..imaging.processing import SealRegion, annotate_image
+from ..application.requests import StageRequest
+from ..imaging.contracts import SealRegion
+
+from ..imaging.page import annotate_image
 from ..providers.catalog import backend_label, backend_route, resolve_backend
 from ..domain.parsing import product_table_text, LOW_CONFIDENCE_THRESHOLD
 from ..runtime.safety import _ocr_model_config
 from receipt_ocr.recognition.seal.api import resolve_seal_recognition_mode
+from receipt_ocr.recognition.seal.orientation import DEFAULT_SEAL_ORIENTATION_MODE
 
 from ..runtime.progress import model_stage, report_plan
 
@@ -51,6 +54,48 @@ def empty_result(context, fields=None):
         "stage_review_reasons": [],
         "safety_policy": "",
     }
+
+
+def normalize_result_contract(
+    result: dict,
+    *,
+    executed_stages=None,
+    recognition_config=None,
+) -> dict:
+    """Fill the stable result envelope shared by both recognition entry points.
+
+    Stage implementations own the values they recognize. This helper only
+    supplies absent containers and status slots so callers can consume legacy
+    and configured results through the same shape.
+    """
+    executed = set(executed_stages or ())
+    result.setdefault("fields", {})
+    result.setdefault("field_metadata", {})
+    result.setdefault("field_fallbacks", {})
+    result.setdefault("product_table", {"rows": [], "status": "未执行"})
+    result.setdefault(
+        "date_check",
+        {"status": "未执行", "actual": "", "reliable": False, "confidence": 0},
+    )
+    result.setdefault(
+        "seal_check",
+        {"status": "未执行", "recognized": "", "reliable": False, "score": 0},
+    )
+    result.setdefault("processing_artifacts", {"date": [], "seals": []})
+    result.setdefault("date_ocr_texts", [])
+    result.setdefault("seal_regions", [])
+    result.setdefault("preview_date_box", None)
+    result.setdefault("stage_review_reasons", [])
+    result.setdefault("review_reasons", [])
+    result.setdefault("safety_policy", "")
+    result.setdefault("recognition_variants", {})
+    result.setdefault("recognition_config", deepcopy(recognition_config))
+    result.setdefault(
+        "recognition_status",
+        {stage: ("已执行" if stage in executed else "未执行") for stage in STAGES},
+    )
+    result.setdefault("seal_orientation_mode", DEFAULT_SEAL_ORIENTATION_MODE)
+    return result
 
 
 def merge_stage(output, result):
@@ -123,20 +168,21 @@ def run_legacy(
     report_plan(plan)
     context = DocumentContext(source, filename=filename)
     output = empty_result(context, _previous_fields)
-    for stage in STAGES:
-        if stage not in targets:
-            continue
-        request = StageRequest(
-            route,
-            deepcopy(output["fields"]),
-            artifact_dir,
-            artifact_url_prefix,
-            mode,
-            _seal_api_future,
-        )
-        with model_stage(stage, plan[stage][0]):
-            merge_stage(output, analyzer.run_stage(context, stage, request))
-    attach_product_fields(output)
+    with context.image_scope():
+        for stage in STAGES:
+            if stage not in targets:
+                continue
+            request = StageRequest(
+                route,
+                deepcopy(output["fields"]),
+                artifact_dir,
+                artifact_url_prefix,
+                mode,
+                _seal_api_future,
+            )
+            with model_stage(stage, plan[stage][0]):
+                merge_stage(output, analyzer.run_stage(context, stage, request))
+        attach_product_fields(output)
     output.update(context.evidence())
     output.update(
         ocr_backend=backend,
@@ -148,6 +194,7 @@ def run_legacy(
             for stage, value in route.items()
         },
     )
+    normalize_result_contract(output, executed_stages=targets)
     if (
         context.document_type["type"] not in {"receipt", "unclassified"}
         and not context.has_footer
@@ -159,7 +206,8 @@ def run_legacy(
             }
     output["review_reasons"] = context.routing_reasons + output["stage_review_reasons"]
     complete_result(output, reference_matcher=reference_matcher)
-    render_preview(context.source, preview_path, output)
+    with context.image_scope():
+        render_preview(context.source, preview_path, output)
     output["processing_seconds"] = round(perf_counter() - started, 2)
     return output
 

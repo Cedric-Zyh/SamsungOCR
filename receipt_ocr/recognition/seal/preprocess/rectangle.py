@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from receipt_ocr.imaging.processing import SealRegion
+from receipt_ocr.imaging.contracts import SealRegion
 
 def prepare(source: Path, regions: list[SealRegion], destination: str | Path):
     """Correct page/rectangle orientation while preserving page coordinates."""

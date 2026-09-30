@@ -99,22 +99,7 @@ def _plan_secondary_route(
             default=0.0,
         ),
     )
-    route.robust_round_shop = bool(
-        request.ocr_backend == "vision"
-        and request.secondary_ocr_backend == "paddle"
-        and not route.preliminary_company_conflict
-        and normalize_text(request.requirement).endswith("商店")
-        and len(normalize_text(request.requirement)) >= 10
-        and float(route.preliminary.get("score", 0)) <= 0.50
-        and max(
-            (
-                float(candidate.get("pixel_ratio", 0))
-                for candidate in collection.candidates
-            ),
-            default=0.0,
-        )
-        >= 0.08
-    )
+    route.robust_round_shop = False
     route.fragmented_local_service_center = bool(
         re.fullmatch(
             r"三星电子[\u4e00-\u9fff]{2,6}服务中心",

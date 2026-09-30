@@ -10,16 +10,8 @@ from .registry import PROVIDERS
 from .paddle import PaddleTextProvider
 
 
-# Public mappings retained for existing integrations; definitions live in the registry.
+# Public mappings for the current provider catalog; definitions live in the registry.
 BACKEND_LABELS = {item.id: item.label for item in PROVIDERS if item.id != "qingtong"}
-LEGACY_BACKEND_ALIASES = dict(PROVIDERS.aliases)
-LEGACY_BACKEND_LABELS = {
-    "paddle": "Paddle Mobile（已下线，已转 PP-OCRv6 Small）",
-    "paddle_server": "Paddle Server（已下线，已转 PP-OCRv6 Small）",
-    "hybrid_server": "混合 OCR（已下线，已转 PP-OCRv6 Small）",
-    "vision": "macOS Vision（已下线，已转 PP-OCRv6 Small）",
-    "hybrid": "混合 OCR（已下线，已转 PP-OCRv6 Small）",
-}
 
 OCR_STAGES = ("page", "date", "seal")
 
@@ -87,7 +79,6 @@ def resolve_backend(name: str | None) -> str:
     requested = (name or "auto").strip().lower()
     if requested == "auto":
         return default_backend()
-    requested = LEGACY_BACKEND_ALIASES.get(requested, requested)
     item = next((entry for entry in backend_catalog() if entry["id"] == requested), None)
     if item is None:
         raise ValueError(f"未知 OCR 引擎: {requested}")
@@ -96,14 +87,16 @@ def resolve_backend(name: str | None) -> str:
     return requested
 
 
-def normalize_backend_id(name: str | None) -> str:
-    """Map ids from old saved plans without bringing retired models back."""
-    requested = (name or "").strip().lower()
-    return LEGACY_BACKEND_ALIASES.get(requested, requested)
-
-
 def backend_label(name: str) -> str:
-    return BACKEND_LABELS.get(name) or LEGACY_BACKEND_LABELS.get(name, name)
+    return BACKEND_LABELS.get(name, name)
+
+
+def ocr_engine() -> str:
+    """Return the active local OCR engine through the provider catalog."""
+
+    from .paddle_runtime import paddle_engine
+
+    return paddle_engine()
 
 
 def backend_route(name: str | None) -> dict[str, str]:
@@ -139,5 +132,5 @@ def recognize_text(
 __all__ = [
     "TextObservation", "observations_text", "backend_catalog", "backend_label",
     "backend_route", "backend_route_labels", "default_backend", "resolve_backend",
-    "recognize_text", "paddle_v6_supported", "normalize_backend_id",
+    "recognize_text", "paddle_v6_supported",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import re
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
+from ..application.requests import StageRequest
 from ..domain.parsing import (
     compare_dates,
     compare_partial_date_components,
@@ -32,18 +32,42 @@ from receipt_ocr.recognition.date.confidence import (
 
 
 from ..domain.results import DateStageResult
-from ..api.serializers import stage_result_payload
 
 
-def _tight_decision_rows(rows, artifacts):
-    """Return observations published by the tight date crop only."""
-    tight = next(
-        (item for item in artifacts if item.get("variant") == "紧凑区域"), None
+def _repair_truncated_year(row: TextObservation, required_text: str) -> TextObservation:
+    """Repair one missing year digit only when the required year proves it."""
+    required = parse_date(required_text)
+    match = re.search(
+        r"(?<!\d)(\d{3})年(\d{1,2})月(\d{1,2})日?(?!\d)",
+        str(row.text or ""),
     )
-    if not tight or "decision_rows" not in tight:
+    if required is None or match is None:
+        return row
+    observed_year, month, day = match.groups()
+    year = str(required.year)
+    if observed_year not in {year[:i] + year[i + 1:] for i in range(len(year))}:
+        return row
+    repaired = f"{year}年{int(month)}月{int(day)}日"
+    return type(row)(
+        text=repaired,
+        confidence=row.confidence,
+        x=row.x,
+        y=row.y,
+        width=row.width,
+        height=row.height,
+    )
+
+
+def _date_decision_rows(rows, artifacts, required_text=""):
+    """Return observations from the single published date region."""
+    date_region = next(
+        (item for item in artifacts if item.get("decision_rows") is not None),
+        None,
+    )
+    if not date_region:
         selected = list(rows)
     else:
-        encoded = tight.get("decision_rows") or []
+        encoded = date_region.get("decision_rows") or []
         selected = []
         for item in encoded:
             try:
@@ -53,22 +77,22 @@ def _tight_decision_rows(rows, artifacts):
     # A fragment such as ``202年2月5日`` exposes a malformed/incomplete year.
     # It must not inherit the required year and turn the uncertain day into a
     # complete date. Keep the original OCR in the artifact, but exclude this
-    # row from the live compact-date decision; missing components remain blank.
+    # row from the live date-region decision; missing components remain blank.
+    repaired = [_repair_truncated_year(row, required_text) for row in selected]
     return [
-        row
-        for row in selected
+        row for row in repaired
         if not re.search(r"(?<!\d)\d{1,3}年", str(row.text or ""))
     ]
 
 
-def _tight_decision_artifacts(artifacts):
-    tight = [item for item in artifacts if item.get("variant") == "紧凑区域"]
-    return tight or list(artifacts)
+def _date_decision_artifacts(artifacts):
+    """Return the one date-region artifact used by the live pipeline."""
+    return list(artifacts)
 
 
 def _has_trusted_date_region(artifacts) -> bool:
-    """Whether live date rows came from the compact receipt-date crop."""
-    return any(item.get("variant") == "紧凑区域" for item in artifacts)
+    """Whether live date rows came from the single receipt-date crop."""
+    return bool(artifacts)
 
 
 def _partial_date_check(required_text, rows):
@@ -114,8 +138,8 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
             stage_backends["date"],
             allow_strict_date_without_requirement=True,
         )
-        date_rows = _tight_decision_rows(all_date_rows, all_date_artifacts)
-        date_artifacts = _tight_decision_artifacts(all_date_artifacts)
+        date_rows = _date_decision_rows(all_date_rows, all_date_artifacts)
+        date_artifacts = _date_decision_artifacts(all_date_artifacts)
         actual_date, date_row = find_receipt_date(
             date_rows,
             "",
@@ -134,7 +158,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
             ),
             "confidence": date_confidence,
             "reliable": bool(actual_date and date_confidence >= 0.72),
-            "source": "紧凑区域日期识别",
+            "source": "日期区域识别",
         }
     elif kind != "receipt":
         date_check = {
@@ -156,12 +180,14 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
                 stage_backends["date"],
                 creation_text=fields.get("制单日期", ""),
             )
-            date_rows = _tight_decision_rows(all_date_rows, all_date_artifacts)
-            date_artifacts = _tight_decision_artifacts(all_date_artifacts)
+            date_rows = _date_decision_rows(
+                all_date_rows, all_date_artifacts, fields.get("要求到货", "")
+            )
+            date_artifacts = _date_decision_artifacts(all_date_artifacts)
         else:
             all_date_rows, all_date_artifacts = [], []
             date_rows, date_artifacts = [], []
-        # The compact crop is the only date evidence generated and used for
+        # The single date region is the only evidence generated and used for
         # the live comparison.
         combined_rows = list(date_rows)
         evidence = DateStageEvidence(
@@ -194,7 +220,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
         if decision.actual_date is not None:
             date_check.setdefault("actual_display", decision.actual_date.isoformat())
         if has_receipt_footer:
-            date_check.setdefault("source", "紧凑区域日期识别")
+            date_check.setdefault("source", "日期区域识别")
     safety = _apply_single_paddle_safety(date_check, {}, stage_backends)
     reasons = [] if date_check.get("reliable") else ["收货日期无法可靠判断"]
     return DateStageResult(

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from receipt_ocr.imaging.processing import (
-    save_round_seal_type_band,
-    save_unwrapped_seal,
-    save_unwrapped_seal_bands,
-)
+from receipt_ocr.imaging.bands import save_round_seal_type_band, save_unwrapped_seal_bands
+
+from receipt_ocr.imaging.unwrap import save_unwrapped_seal
 from receipt_ocr.recognition.seal.contracts import SealRequest, SecondaryReadPlan, SecondaryReadEvidence
 
 

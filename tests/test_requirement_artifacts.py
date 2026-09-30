@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
 
-from receipt_ocr.domain.fields.rules import _recover_signature_requirement
+from receipt_ocr.recognition.fields.fallbacks import _recover_signature_requirement
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.application.pipeline import merge_stage
 

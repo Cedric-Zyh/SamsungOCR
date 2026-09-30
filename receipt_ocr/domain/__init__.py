@@ -2,7 +2,6 @@
 
 from .ocr import TextObservation
 from .recognition import RecognitionOptions
-from .requests import StageRequest
 from .results import (
     DateStageResult,
     FieldStageResult,
@@ -21,6 +20,5 @@ __all__ = [
     "STAGES",
     "SealStageResult",
     "Stage",
-    "StageRequest",
     "TextObservation",
 ]

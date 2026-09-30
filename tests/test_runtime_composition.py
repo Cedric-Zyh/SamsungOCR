@@ -60,7 +60,7 @@ def test_recognition_service_uses_the_same_reference_matcher_for_both_paths():
 
 def test_recognition_options_decode_saved_json_and_normalize_defaults():
     options = resolve_recognition_options(
-        recognition_config='{"fields": ["paddle"]}',
+        recognition_config='{"fields": ["paddle_v6"]}',
         ocr_backend=None,
         seal_recognition_mode=None,
     )

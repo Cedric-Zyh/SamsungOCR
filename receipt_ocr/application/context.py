@@ -6,15 +6,17 @@ from pathlib import Path
 from ..domain.documents.types import classify_document
 from ..domain.documents.layout import _find_signature_requirement_row
 from ..runtime.execution import recognize_page, record_page_reuse
-from ..imaging.processing import decode_qr
-from ..providers.catalog import recognize_text, observations_text
+from ..imaging.page import decode_qr
+from ..imaging.io import ImageCache, image_cache_scope
+from ..providers.catalog import observations_text
+from ..providers.text import TextRecognizer, default_text_recognizer
 from ..runtime.scope import provider_allowed
 
 
 
 
 class DocumentContext:
-    def __init__(self, source, *, filename=None):
+    def __init__(self, source, *, filename=None, text_recognizer: TextRecognizer | None = None):
         self.source = Path(source).resolve()
         self.filename = filename or self.source.name
         self._pages = {}
@@ -29,6 +31,13 @@ class DocumentContext:
         self.has_footer = False
         self.primary_rows = []
         self.primary_backend = None
+        self.text_recognizer = text_recognizer or default_text_recognizer()
+        self.image_cache = ImageCache()
+
+    def image_scope(self):
+        """Return the per-run image cache scope used by the stage coordinator."""
+
+        return image_cache_scope(self.image_cache)
 
     def page(self, backend):
         if not provider_allowed(backend):
@@ -36,7 +45,7 @@ class DocumentContext:
         if backend in self._pages:
             record_page_reuse()
             return deepcopy(self._pages[backend])
-        rows = recognize_page(self.source, backend, recognize_text)
+        rows = recognize_page(self.source, backend, self.text_recognizer.recognize)
         self._pages[backend] = deepcopy(rows)
         if not self.document_type["reliable"]:
             classification = classify_document(rows)

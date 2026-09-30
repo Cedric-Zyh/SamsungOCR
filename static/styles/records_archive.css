@@ -77,7 +77,7 @@
 [data-page="records"] .records-table td.empty-state { position:static; padding:48px 20px!important; background:var(--archive-paper); border-left:0; box-shadow:none; text-align:center; }
 [data-page="records"] .records-empty strong { color:var(--archive-text); font-size:15px; font-weight:500; }
 [data-page="records"] .records-empty p { color:var(--archive-muted); font-size:13px; }
-[data-page="records"] .result-pagination { padding:14px 0 0; }
+[data-page="records"] .result-pagination { position:sticky; bottom:0; z-index:6; margin:0; padding:12px 0; border-top:1px solid var(--archive-line); background:var(--archive-stage); box-shadow:0 -6px 16px #272b1f12; }
 [data-page="records"] :is(#records-page-info,.page-size-label) { color:var(--archive-muted); font-size:12px; }
 [data-page="records"] .page-size-label select { border-color:var(--archive-line); border-radius:2px; background:var(--archive-paper); color:var(--archive-text); }
 [data-page="records"] :is(.column-filter-toggle,.header-filter-button) { color:var(--archive-text); border-radius:2px; }

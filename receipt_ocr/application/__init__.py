@@ -1,15 +1,23 @@
 """Application services and recognition orchestration."""
 
-from .pipeline import STAGES, complete_result, execute_stage, run_legacy
+from .pipeline import (
+    STAGES,
+    complete_result,
+    execute_stage,
+    normalize_result_contract,
+    run_legacy,
+)
 from .plans import validate_config, run_configured
+from .stage_coordinator import ReceiptAnalyzer
 
 __all__ = [
     "STAGES",
     "RecognitionService",
+    "ReceiptAnalyzer",
     "resolve_recognition_options",
     "complete_result",
     "execute_stage",
-    "run_legacy", "validate_config", "run_configured",
+    "run_legacy", "validate_config", "run_configured", "normalize_result_contract",
 ]
 
 

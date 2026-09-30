@@ -73,6 +73,8 @@ export function createApiClients(api) {
     },
     settings: {
       update: payload => api('/api/settings', {method: 'PATCH', json: payload}),
+      recognition: options => api('/api/settings/recognition', options),
+      updateRecognition: payload => api('/api/settings/recognition', {method: 'PATCH', json: payload}),
     },
   };
 }

@@ -128,14 +128,21 @@ def main() -> None:
                 artifact_contract_failures.append(
                     f"{record['filename']}: 日期行缺少原图或去表格线图"
                 )
-            if not item.get("date_line_otsu_upscaled_url"):
-                artifact_contract_failures.append(
-                    f"{record['filename']}: 日期行缺少 Otsu 二值三倍放大图"
-                )
         for item in seal_artifacts:
-            if not item.get("original_url") or not (
+            inputs = item.get("inputs") or []
+            has_original = bool(item.get("original_url")) or any(
+                entry.get("name") == "original" and entry.get("image_url")
+                for entry in inputs if isinstance(entry, dict)
+            )
+            has_processed = bool(
                 item.get("isolated_url") or item.get("unwrapped_url")
-            ):
+                or item.get("color_isolated_url")
+                or item.get("color_isolated_oriented_url")
+            ) or any(
+                entry.get("name") not in {"original", ""} and entry.get("image_url")
+                for entry in inputs if isinstance(entry, dict)
+            )
+            if not has_original or not has_processed:
                 artifact_contract_failures.append(
                     f"{record['filename']}: 印章区域缺少原图或处理后图"
                 )

@@ -15,3 +15,19 @@
 [data-focus-image][aria-pressed="true"] { border-color:#b3c9e8; background:#eaf2ff; color:#245590; }
 @keyframes review-preview-loading { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { [data-image-state="loading"] .review-image-feedback-mark { animation:none; } }
+
+/* Issue links keep the selected blocking check visible after a jump. */
+.review-page .review-issue-list button[aria-pressed="true"],
+.review-page .review-issue-list button.is-active { border-color:#b19670; background:var(--archive-accent-wash); color:var(--archive-ink); font-weight:600; }
+.review-page .review-focus-target { border-color:#b19670!important; box-shadow:0 0 0 2px #d2be9f, 0 0 0 5px #d2be9f44; background:#fbf7ee; }
+.review-page details.check-block.review-focus-target { position:relative; z-index:1; }
+
+/* The review close control and scrollable record region already have clear
+ * placement; avoid adding a large outer focus frame around those containers. */
+.review-dialog .review-dialog-close:focus-visible,
+[data-page="records"] .record-filter-table:focus-visible,
+[data-page="progress"] .workbench-table-wrap:focus-visible { outline:none; }
+
+/* Keep focus styling on form controls only; buttons, links and scroll regions
+ * should not grow an outer frame when they receive keyboard focus. */
+body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) :is(a,button,summary,[tabindex]):not(input):not(textarea):not(select):focus-visible { outline:none; }

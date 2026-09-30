@@ -56,3 +56,22 @@ def test_empty_result_still_has_every_external_stage_slot():
 
     assert set(("fields", "product_table", "date_check", "seal_check")) <= set(result)
     assert set(result["processing_artifacts"]) == {"date", "seals"}
+
+
+def test_result_contract_adds_common_slots_for_legacy_results():
+    result = pipeline.normalize_result_contract(
+        {"fields": {"客户名称": "测试客户"}},
+        executed_stages={"fields", "date"},
+    )
+
+    assert result["fields"]["客户名称"] == "测试客户"
+    assert result["recognition_config"] is None
+    assert result["recognition_variants"] == {}
+    assert result["recognition_status"] == {
+        "fields": "已执行",
+        "handwriting": "未执行",
+        "products": "未执行",
+        "date": "已执行",
+        "seal": "未执行",
+    }
+    assert set(result["processing_artifacts"]) == {"date", "seals"}

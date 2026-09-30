@@ -43,6 +43,29 @@ def test_review_keeps_immutable_machine_result(tmp_path: Path):
     assert database.history(result_id)[0]["action"] == "确认通过"
 
 
+def test_query_receipts_review_order_puts_completed_and_recent_first(tmp_path: Path):
+    database = Database(tmp_path / "results.db")
+    database.initialize()
+    entries = [
+        ("pending.jpg", "待复核", "需人工复核", "2026-09-03T00:00:00+08:00"),
+        ("confirmed.jpg", "确认通过", "通过", "2026-09-01T00:00:00+08:00"),
+        ("automatic.jpg", "无需复核", "通过", "2026-09-02T00:00:00+08:00"),
+        ("failed.jpg", "待复核", "识别失败", "2026-09-04T00:00:00+08:00"),
+    ]
+    for index, (filename, review_status, overall, created_at) in enumerate(entries):
+        database.insert_result(
+            filename=filename, stored_name=f"sample:{index}.jpg", preview_name="",
+            task_id=f"order-{index}", result={
+                "filename": filename, "created_at": created_at, "overall": overall,
+                "final_result": overall, "review_status": review_status,
+                "fields": {}, "date_check": {}, "seal_check": {},
+            },
+        )
+
+    rows = database.query_receipts(latest_by_filename=True, ordering="review")["items"]
+    assert [row["filename"] for row in rows] == ["automatic.jpg", "confirmed.jpg", "pending.jpg", "failed.jpg"]
+
+
 def test_task_persists_seal_recognition_mode(tmp_path: Path):
     database = Database(tmp_path / "results.db")
     database.initialize()

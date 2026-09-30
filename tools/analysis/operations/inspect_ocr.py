@@ -10,11 +10,11 @@ if str(_PROJECT_ROOT) not in _sys.path:
 import argparse
 import json
 
-from receipt_ocr.vision_ocr import recognize_text
+from receipt_ocr.providers.catalog import recognize_text
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="检查 Vision OCR 原始结果")
+    parser = argparse.ArgumentParser(description="检查 PaddleOCR v6 原始结果")
     parser.add_argument("image")
     parser.add_argument("--fast", action="store_true")
     parser.add_argument("--contains", default="")
@@ -23,7 +23,12 @@ def main() -> None:
     parser.add_argument("--languages", default="zh-Hans,en-US")
     args = parser.parse_args()
 
-    rows = recognize_text(args.image, fast=args.fast, languages=args.languages.split(","))
+    rows = recognize_text(
+        args.image,
+        backend="paddle_v6",
+        fast=args.fast,
+        languages=args.languages.split(","),
+    )
     rows = [
         row for row in rows
         if args.min_y <= row.y <= args.max_y

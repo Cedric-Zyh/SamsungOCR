@@ -45,7 +45,15 @@ jobs:
 
       - name: Run Windows environment check
         shell: pwsh
-        run: python -m tools.windows_smoke --output windows-smoke.json
+        run: python -m tools.analysis.operations.windows_smoke --output windows-smoke.json
+
+      - name: Check architecture import direction
+        shell: pwsh
+        run: python -m tools.analysis.operations.check_architecture
+
+      - name: Run Python test suite
+        shell: pwsh
+        run: python -m pytest -q
 
       - name: Build bundled Flask/OCR service
         shell: pwsh
@@ -65,7 +73,7 @@ jobs:
               if ($process.HasExited) { throw "打包后的识别服务提前退出（退出码 $($process.ExitCode)）。" }
               Start-Sleep -Seconds 2
               try {
-                $response = Invoke-WebRequest -Uri http://127.0.0.1:5001/ -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 5
+                $response = Invoke-WebRequest -Uri http://127.0.0.1:5002/ -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 5
                 if ($response.StatusCode -eq 200) { $ready = $true }
               } catch { }
             }

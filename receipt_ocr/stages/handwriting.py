@@ -4,7 +4,6 @@ from ..domain.fields.requested import handwritten_candidates
 
 
 from ..domain.results import HandwritingStageResult
-from ..api.serializers import stage_result_payload
 
 
 def recognize(context, request) -> HandwritingStageResult:
@@ -19,9 +18,3 @@ def recognize(context, request) -> HandwritingStageResult:
         fields=fields, metadata=metadata,
         review_reasons=["签收填写内容需人工确认"] if metadata else [],
     )
-
-
-
-def execute(context, request):
-    """Run the handwriting stage in isolation and serialize its payload."""
-    return stage_result_payload(recognize(context, request))

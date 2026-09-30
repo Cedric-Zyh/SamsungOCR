@@ -1,4 +1,4 @@
-"""Read only the declared clean inputs for the compact date region."""
+"""Read only the declared clean inputs for the single date region."""
 from ..contracts import DateCropRun, DateCropRegion
 from ..preprocess.manifest import ensure_manifest
 from ..postprocess.reads import structure_result, date_rows

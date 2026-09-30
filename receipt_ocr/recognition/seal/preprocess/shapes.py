@@ -5,11 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from receipt_ocr.imaging.processing import (
-    SealRegion,
-    seal_region_is_elliptical,
-    seal_region_is_rectangular,
-)
+from receipt_ocr.imaging.contracts import SealRegion
+
+from receipt_ocr.imaging.shapes import seal_region_is_elliptical, seal_region_is_rectangular
 
 from ..contracts import PreparedSeal, PreparedVariant, RegionEvidence
 

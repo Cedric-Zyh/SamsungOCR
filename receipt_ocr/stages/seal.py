@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 from ..application.context import DocumentContext
-from ..domain.requests import StageRequest
-from ..imaging.processing import detect_seal_regions
+from ..application.requests import StageRequest
+from ..imaging.detection import detect_seal_regions
 from ..providers.catalog import backend_label
 from ..domain.parsing import compare_seal_text
 from ..domain.parsing.parsing_seals import compare_seal_text_strict
@@ -20,7 +20,6 @@ from receipt_ocr.recognition.seal.policy import LOCAL_REGION_SOURCE, record_loca
 
 
 from ..domain.results import SealStageResult
-from ..api.serializers import stage_result_payload
 
 
 def _ellipse_channels(seal_texts, seal_artifacts):
@@ -313,9 +312,3 @@ def complete_evidence(result: dict, reference_matcher=None) -> dict:
 
         apply_reference_evidence(result, reference_matcher)
     return result
-
-
-
-def execute(context, request, recognize_seals, seal_api):
-    """Run the seal stage and return the stable JSON-shaped stage payload."""
-    return stage_result_payload(recognize(context, request, recognize_seals, seal_api))

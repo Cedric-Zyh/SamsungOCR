@@ -20,19 +20,17 @@ class OcrProfile:
 
 
 PROFILES = {
-    "paddle": OcrProfile("paddle", "Paddle OCR", supports_lines=True),
     "paddle_v6": OcrProfile("paddle_v6", "Paddle OCR v6", supports_lines=True),
     "paddle_seal": OcrProfile(
         "paddle_seal", "Paddle SealOCR", supports_lines=True, supports_shape_inputs=True
     ),
-    "vision": OcrProfile("vision", "Vision OCR"),
     "qingtong": OcrProfile("qingtong", "清瞳 OCR"),
     "danzhengtong": OcrProfile("danzhengtong", "单证通 OCR"),
 }
 
 
 def profile_for(provider: str | None) -> OcrProfile:
-    key = str(provider or "paddle").strip().lower()
+    key = str(provider or "paddle_v6").strip().lower()
     return PROFILES.get(key, OcrProfile(key, key or "OCR"))
 
 

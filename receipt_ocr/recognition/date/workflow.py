@@ -1,4 +1,4 @@
-"""Date workflow boundary for the compact, clean-input OCR flow."""
+"""Date workflow boundary for the single clean-input OCR flow."""
 from .preprocess import inputs as date_crop_preparation
 from .audit import artifacts as date_crop_region_output
 from .ocr import regions as date_crop_regions

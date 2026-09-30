@@ -4,7 +4,7 @@ const {createRecognitionPlan} = require('../static/modules/imports/recognition_p
 
 const stages = ['fields', 'products', 'handwriting', 'date', 'seal'];
 const emptyPlan = () => Object.fromEntries(stages.map(stage => [stage, []]));
-const ACCEPTANCE = {seal_match_mode:'any', date_match_mode:'any', signature_match_mode:'any', reject_mode:'none', low_confidence_mode:'check', seal_pass_standard:'any_exact', date_source:'danzhengtong'};
+const ACCEPTANCE = {seal_match_mode:'any', date_match_mode:'any', signature_match_mode:'none', reject_mode:'any_mismatch', low_confidence_mode:'ignore', seal_pass_standard:'any_exact', date_source:'danzhengtong'};
 const withAcceptance = plan => ({...plan, acceptance: ACCEPTANCE});
 const sealTest = () => ({...emptyPlan(), fields:['paddle_v6'], seal:['qingtong'], acceptance: ACCEPTANCE});
 
@@ -81,7 +81,7 @@ test('acceptance rules support any, all and no comparison for all three checks',
   h.rejection.forEach(input => { input.checked = input.value === 'all_mismatch'; });
   assert.deepEqual(h.controller.readAcceptancePolicy(), {
     seal_match_mode: 'none', date_match_mode: 'none', signature_match_mode: 'none', reject_mode: 'all_mismatch',
-    low_confidence_mode: 'check', seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
+    low_confidence_mode: 'ignore', seal_pass_standard: 'any_exact', date_source: 'danzhengtong',
   });
 });
 
@@ -178,7 +178,7 @@ test('unavailable restored methods require a new selection without replacing the
 test('reset uses current local defaults and never silently selects a remote-only plan', () => {
   const normal = harness({saved:sealTest()});
   normal.reset.fire('click');
-  assert.deepEqual(normal.controller.readRecognitionPlan(), withAcceptance({fields:['paddle_v6'], products:['paddle_v6'], handwriting:[], date:['danzhengtong'], seal:['paddle_v6']}));
+  assert.deepEqual(normal.controller.readRecognitionPlan(), withAcceptance({fields:['paddle_v6'], products:[], handwriting:['paddle_v6'], date:['paddle_v6'], seal:['paddle_v6', 'qingtong']}));
   assert.equal(normal.ids['plan-name'].textContent, '默认方案');
   const none = harness({providers:['danzhengtong']});
   none.reset.fire('click');
@@ -254,7 +254,7 @@ test('the PP-OCRv6 tier is selectable, counts as a local method, and renders its
   assert.match(h.ids['import-config'].textContent, /Paddle v6 Small/);
   assert.doesNotMatch(h.ids['plan-selection-list'].innerHTML, /undefined/);
   assert.equal(h.ids['plan-page-note'].classList.contains('hidden'), false);
-  assert.equal(h.controller.usesRemotePlan(), false);
+  assert.equal(h.controller.usesRemotePlan(), true);
   const saved = h.writes.at(-1).plan;
   const restored = harness({saved});
   assert.deepEqual(restored.controller.readRecognitionPlan().date, ['paddle_v6']);

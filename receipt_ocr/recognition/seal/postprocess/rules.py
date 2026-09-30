@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import re
-from receipt_ocr.imaging.processing import SealRegion
+from receipt_ocr.imaging.contracts import SealRegion
 from receipt_ocr.domain.parsing import compare_seal_text, normalize_text
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.runtime.utils import _dedupe

@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from receipt_ocr.imaging.processing import _color_masks
+from receipt_ocr.imaging.colors import _color_masks
 
 
 ARTIFACT_MARKER = "/files/artifacts/"
@@ -182,7 +182,7 @@ def main() -> int:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("storage/seal-gap-analysis-301-hybrid.json"),
+        default=Path("storage/seal-gap-analysis-301-paddle-v6.json"),
     )
     parser.add_argument(
         "--artifact-root", type=Path, default=Path("storage/artifacts")

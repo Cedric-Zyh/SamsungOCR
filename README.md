@@ -34,7 +34,7 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-开发调试时可以在浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001)。如果使用推荐解释器，也可以直接运行：
+开发调试时可以在浏览器打开 [http://127.0.0.1:5002](http://127.0.0.1:5002)。如果使用推荐解释器，也可以直接运行：
 
 ```bash
 /Users/zhuyihao/anaconda3/bin/python app.py
@@ -44,7 +44,7 @@ python app.py
 
 ```bash
 export APP_HOST=127.0.0.1
-export APP_PORT=5001
+export APP_PORT=5002
 export FLASK_DEBUG=0
 ```
 
@@ -66,7 +66,7 @@ python app.py
 | `qingtong` | 可选的远程印章服务 |
 | `danzhengtong` | 生产环境远程单证识别，逐张提交并轮询结果 |
 
-旧配置中的 `paddle`、`paddle_server`、`hybrid`、`hybrid_server` 和 `vision` 会兼容映射到 `paddle_v6`。macOS Vision 和旧版 Paddle 后端不再作为当前识别方式提供。
+识别配置只接受当前 provider 标识；旧的 `paddle`、`paddle_server`、`hybrid`、`hybrid_server` 和 `vision` 不再解析。历史配置需要在保存前改成 `paddle_v6`、`paddle_seal`、`qingtong` 或 `danzhengtong`。
 
 本地 PP-OCR 默认使用 ONNX Runtime；没有安装或无法使用时会回落到 Paddle 默认 CPU 推理：
 

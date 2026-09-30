@@ -1,11 +1,11 @@
-"""Run the compact date OCR pipeline with one explicit recognition path."""
+"""Run the single-location date OCR pipeline with one explicit path."""
 
 from __future__ import annotations
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from receipt_ocr.runtime.execution import timed
-from receipt_ocr.imaging.processing import save_receipt_date_crop
+from receipt_ocr.imaging.date import save_receipt_date_crop
 from receipt_ocr.providers.catalog import backend_label, recognize_text
 from receipt_ocr.recognition.date.preprocess.crops import _save_date_line_crop
 from receipt_ocr.recognition.date.contracts import (

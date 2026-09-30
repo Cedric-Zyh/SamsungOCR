@@ -8,10 +8,10 @@ from receipt_ocr.domain.ocr import TextObservation
 
 def test_date_line_ocr_uses_clean_views_and_keeps_raw_as_audit_only(tmp_path, monkeypatch):
     from receipt_ocr.providers import paddle_runtime
-    from receipt_ocr.recognition.date._internal.date_crop_regions import (
+    from receipt_ocr.recognition.date.ocr.regions import (
         _recognize_region_lines,
     )
-    from receipt_ocr.recognition.date._internal.date_crop_state import (
+    from receipt_ocr.recognition.date.contracts import (
         DateCropRegion,
         DateCropRun,
         DateCropServices,
@@ -39,8 +39,8 @@ def test_date_line_ocr_uses_clean_views_and_keeps_raw_as_audit_only(tmp_path, mo
         required_text="2025-08-11",
         artifact_dir=None,
         artifact_url_prefix="",
-        ocr_backend="paddle",
-        secondary_ocr_backend="paddle",
+        ocr_backend="paddle_v6",
+        secondary_ocr_backend="paddle_v6",
         allow_strict_date_without_requirement=False,
         creation_text="",
         temp_dir=tmp_path,

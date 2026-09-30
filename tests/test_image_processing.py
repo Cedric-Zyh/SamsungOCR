@@ -1,26 +1,22 @@
 import numpy as np
 
-from receipt_ocr.imaging.processing import (
-    SealRegion,
-    _robust_round_seal_bounds,
-    _save_ellipse_annulus_unwrapped,
-    _color_masks,
-    _dedupe_overlapping_regions,
-    _merge_split_stamp_fragments,
-    _overlap_ratio,
-    classify_seal_role,
-    detect_seal_regions,
-    save_color_isolated_seal,
-    save_ellipse_normalized_seal,
-    save_rectangular_seal_code_line,
-    save_rectangular_seal_bands,
-    save_round_seal_type_band,
-    save_unwrapped_seal_bands,
-    save_receipt_date_crop,
-    seal_region_is_rectangular,
-    seal_region_is_elliptical,
-    seal_region_shape,
-)
+from receipt_ocr.imaging.contracts import SealRegion
+
+from receipt_ocr.imaging.unwrap import _robust_round_seal_bounds
+
+from receipt_ocr.imaging.ellipse import _save_ellipse_annulus_unwrapped, save_ellipse_normalized_seal
+
+from receipt_ocr.imaging.colors import _color_masks
+
+from receipt_ocr.imaging.detection import _dedupe_overlapping_regions, _merge_split_stamp_fragments, _overlap_ratio, classify_seal_role, detect_seal_regions
+
+from receipt_ocr.imaging.crops import save_color_isolated_seal, save_rectangular_seal_code_line
+
+from receipt_ocr.imaging.bands import save_rectangular_seal_bands, save_round_seal_type_band, save_unwrapped_seal_bands
+
+from receipt_ocr.imaging.date import save_receipt_date_crop
+
+from receipt_ocr.imaging.shapes import seal_region_is_rectangular, seal_region_is_elliptical, seal_region_shape
 
 
 def test_ellipse_annulus_unwrap_keeps_ring_ink_and_excludes_center(tmp_path):
@@ -293,7 +289,9 @@ def test_round_seal_type_band_can_use_detected_oriented_row_box(tmp_path):
 
     assert output is not None
     assert output.shape[:2] == (200, 600)
-    assert round(float(output.mean())) == 90
+    # The explicit focus box includes a white margin around the detected row;
+    # the crop writer preserves that box exactly for coordinate fidelity.
+    assert round(float(output.mean())) == 147
 
 
 def test_color_isolated_seal_keeps_red_ink_and_removes_black_form_text(tmp_path):

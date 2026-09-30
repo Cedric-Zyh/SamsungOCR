@@ -26,6 +26,8 @@ def register_routes(app, handlers) -> None:
         ("/api/settings/retention", "retention_settings", ("GET", "PATCH")),
         ("/api/settings/retention-days", "retention_settings", ("GET", "PATCH")),
         ("/api/settings/data-retention", "retention_settings", ("GET", "PATCH")),
+        ("/api/settings/recognition", "get_recognition_settings", ("GET",)),
+        ("/api/settings/recognition", "update_recognition_settings", ("PATCH",)),
         ("/api/tasks", "create_task", ("POST",)),
         ("/api/tasks", "list_tasks", ("GET",)),
         ("/api/results/delete", "delete_results", ("POST",)),
