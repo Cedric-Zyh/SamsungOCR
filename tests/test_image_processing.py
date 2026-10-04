@@ -221,8 +221,11 @@ def test_text_heavy_rectangular_border_remains_rectangular_stamp(tmp_path):
 
 def test_7314696142_customer_rectangle_with_concave_ink():
     from pathlib import Path
+    import pytest
 
     source = Path(__file__).resolve().parents[1] / "数据" / "7314696142.jpg"
+    if not source.is_file():
+        pytest.skip("Local receipt sample 7314696142.jpg is unavailable")
     region = SealRegion(
         0.5743734842360549, 0.7591564927857936,
         0.2445432497978982, 0.0793562708102109,

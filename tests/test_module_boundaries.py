@@ -105,7 +105,7 @@ def test_domain_does_not_import_image_or_ocr_infrastructure():
     forbidden = {"PIL", "cv2", "numpy", "paddle", "providers", "imaging", "pathlib", "tempfile"}
     violations = []
     for path in (root / "receipt_ocr" / "domain").rglob("*.py"):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = [item.name.split(".")[0] for item in node.names]
