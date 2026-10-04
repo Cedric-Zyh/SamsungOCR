@@ -89,15 +89,12 @@ class DateOcrResult:
 
 @dataclass(frozen=True)
 class DateRecognitionResult:
-    """Structured recognition output; the legacy API projects rows/artifacts."""
+    """Recognized rows with their source inputs and intermediate observations."""
 
     rows: tuple[TextObservation, ...] = ()
     artifacts: tuple[dict, ...] = ()
     inputs: tuple[PreparedDateInput, ...] = ()
     reads: tuple[DateRead, ...] = ()
-
-    def as_legacy(self) -> tuple[list, list[dict]]:
-        return list(self.rows), list(self.artifacts)
 
 
 @dataclass(frozen=True)
@@ -116,9 +113,6 @@ class DateCropRun:
     artifact_dir: str | Path | None
     artifact_url_prefix: str
     ocr_backend: str
-    # Retained only as an input-shape marker for callers constructing state;
-    # the compact date pipeline deliberately never reads or routes it.
-    secondary_ocr_backend: str | None
     allow_strict_date_without_requirement: bool
     creation_text: str
     temp_dir: str | Path

@@ -124,6 +124,9 @@ def _record_region_evidence(
                     evidence.same_region_reconstructed_text
                 ),
                 "combined_text": evidence.combined_text,
+                "matching_texts": _dedupe(
+                    evidence.region_texts + ([evidence.combined_text] if evidence.combined_text else [])
+                ),
             }
         )
     collection.candidates.append(

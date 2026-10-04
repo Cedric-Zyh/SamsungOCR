@@ -2,7 +2,7 @@ from copy import deepcopy
 
 from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
 from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
-from receipt_ocr.recognition.seal.policy import combine_seal_provider_checks
+from receipt_ocr.recognition.seal.postprocess.providers import combine_seal_provider_checks
 
 
 def dzt(required, text, simulated=False):

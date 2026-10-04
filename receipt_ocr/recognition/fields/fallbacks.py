@@ -9,7 +9,7 @@ from PIL import Image
 
 from ...domain.ocr import TextObservation
 from ...domain.parsing import normalize_text
-from ...providers.text import TextRecognizer, default_text_recognizer
+from ...providers.text import TextRecognizer, current_text_recognizer
 
 
 def _recover_signature_requirement(
@@ -25,7 +25,7 @@ def _recover_signature_requirement(
     text_recognizer: TextRecognizer | None = None,
 ) -> dict | None:
     """OCR the signature-requirement crop and return its text verbatim."""
-    recognizer = text_recognizer or default_text_recognizer()
+    recognizer = text_recognizer if text_recognizer is not None else current_text_recognizer()
     if not recognizer.supports_line(page_backend):
         return None
     anchor = next(

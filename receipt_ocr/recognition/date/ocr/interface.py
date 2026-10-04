@@ -3,7 +3,8 @@
 Display inputs are rejected before a provider is called. Recognition failures
 and genuinely empty reads remain distinguishable in the result contract.
 """
-from receipt_ocr.providers import catalog, paddle_runtime
+from receipt_ocr.providers import paddle_runtime
+from receipt_ocr.providers.text import current_text_recognizer
 from ..contracts import DateRead, DateOcrResult, PreparedDateInput
 from ..contracts import DateInputKind
 
@@ -18,9 +19,9 @@ class DateOcrReader:
         model = paddle_runtime.variant_of(provider) or provider
         try:
             if line and paddle_runtime.is_lightweight_backend(provider):
-                rows = paddle_runtime.recognize_line(image.path, model_variant=model)
+                rows = current_text_recognizer().recognize_line(image.path, backend=provider)
             else:
-                recognize = recognize_text or catalog.recognize_text
+                recognize = recognize_text or current_text_recognizer().recognize
                 rows = recognize(image.path, backend=provider, **options)
         except Exception as exc:
             return DateOcrResult(image, provider, model, status="failed", error=str(exc))
@@ -28,8 +29,3 @@ class DateOcrReader:
                       for row in rows if row.text)
         return DateOcrResult(image, provider, model, reads,
                              "completed" if reads else "empty")
-
-
-def read_audit_line(*_args, **_kwargs):
-    """Fail explicitly if a retired cross-model audit is invoked."""
-    raise RuntimeError("日期 Mobile/Server 审计分支已停用")

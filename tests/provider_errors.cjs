@@ -25,8 +25,8 @@ function ui() {
 
 test('a cached upload failure shared by four stages is displayed once', () => {
   assert.deepEqual(providerErrors(record()), [failure]);
-  assert.deepEqual(providerErrors({review_reasons: [`单证通 dAnZhEnGtOnG: ${failure}`]}), [failure]);
-  assert.deepEqual(providerErrors({error_message: failure}), [failure]);
+  assert.deepEqual(providerErrors({review_issues: [{code: 'provider_failure', provider: 'danzhengtong', message: failure}]}), [failure]);
+  assert.deepEqual(providerErrors({review_reasons: [failure]}), []);
   assert.deepEqual(providerErrors({}), []);
 });
 
@@ -52,7 +52,8 @@ test('provider timeouts and connection errors are failures with a retry action',
     "单证通查询结果失败：ReadTimeout: HTTPSConnectionPool(host='api.sinotrans.com'): Read timed out.",
     "单证通文件上传失败：ConnectionError: Max retries exceeded; nodename nor servname provided",
   ]) {
-    const timedOut = {...record(), recognition_variants: {}, review_reasons: [], error_message};
+    const timedOut = {...record(), recognition_variants: {}, review_reasons: [], error_message,
+      review_issues: [{code: 'provider_failure', provider: 'danzhengtong', message: error_message}]};
     assert.equal(workbench.category({status: 'succeeded', record: timedOut}), 'failed');
     const controller = createRecords({environment: {}, ui: ui(), recordsState: {selected: new Set()}, ReceiptWorkbench: workbench});
     const markup = controller.recordRow(timedOut);

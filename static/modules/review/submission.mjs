@@ -31,3 +31,50 @@ export function reviewSubmissionError({saveGroundTruth, truthValue, reviewStatus
   if (reviewStatus === '确认通过' && !ready) return readinessMessage || '当前信息未达到通过条件';
   return '';
 }
+
+/** Save lifecycle owns duplicate prevention, conflicts and post-save navigation. */
+export function createReviewSubmission({ui, reviewState, services, currentReadiness,
+  syncReviewReadiness, markReviewSaved, continueReview, refreshVisibleResults}) {
+  const {$, $$, toast} = ui;
+  async function submitReview(reviewStatus, finalResult) {
+    if (reviewState.reviewSaving) return;
+    const form = $('#review-form');
+    const {payload, saveGroundTruth, truthValue} = collectReviewPayload(
+      form, reviewStatus, finalResult, reviewState.current.review_revision,
+      selector => $$(selector, form)
+    );
+    const readiness = currentReadiness();
+    const validationError = reviewSubmissionError({
+      saveGroundTruth, truthValue, reviewStatus, ready: readiness.ready,
+      readinessMessage: readiness.message
+    });
+    if (validationError) return toast(validationError, 'warning');
+    const id = reviewState.current.id;
+    reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
+    const controls = $$('button,input,textarea,select', form).map(el => [el, el.disabled]);
+    reviewState.reviewSaving = true; controls.forEach(([el]) => el.disabled = true);
+    syncReviewReadiness();
+    $('[data-save-state]').textContent = '正在保存…';
+    let saved = false;
+    try {
+      reviewState.current = await (services.records.review(id, payload));
+      reviewState.reviewDirty = false; saved = true;
+      markReviewSaved(id, reviewStatus);
+      toast(reviewState.current.ground_truth_saved ? '复核与样单标注已保存' : '复核结果已保存');
+    } catch (error) {
+      const conflict = error.code === 'review_revision_conflict';
+      $('[data-save-state]').textContent = conflict ? '记录已更新，当前编辑已保留' : '保存失败，修改已保留';
+      toast(conflict ? `${error.message}。当前编辑已保留，请重新打开回单后核对。` : error.message, 'danger');
+    } finally {
+      reviewState.reviewSaving = false; controls.forEach(([el, disabled]) => el.disabled = disabled);
+      syncReviewReadiness();
+    }
+    if (saved) {
+      $('[data-save-state]').textContent = '已保存'; $('[data-save-state]').classList.remove('unsaved');
+      await continueReview().catch(error => toast(`已保存，下一张加载失败：${error.message}`, 'danger'));
+      refreshVisibleResults().catch(() => toast('已保存，列表暂未刷新，可稍后刷新查看'));
+    }
+  }
+
+  return {submitReview};
+}

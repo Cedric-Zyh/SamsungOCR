@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from .dependencies import ReviewDependencies
+
 from flask import abort, jsonify, request
 
 from receipt_ocr.evaluation import build_ground_truth_entry, load_ground_truth, save_ground_truth_entry
 from receipt_ocr.review import prepare_review_payload
 
 
-def review_result(ctx, result_id: int):
+def review_result(ctx: ReviewDependencies, result_id: int):
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
         return jsonify(error="请提供有效的复核内容"), 400
@@ -25,15 +27,15 @@ def review_result(ctx, result_id: int):
     try:
         with ctx.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            stored_current = ctx.database.get_result(result_id)
-            current = ctx._project_paginated_result(stored_current)
-            if "review_revision" in payload and payload["review_revision"] != ctx._review_revision(current):
+            stored_current = ctx.database.get_result(result_id, _connection=connection)
+            current = ctx.project_result(stored_current, _connection=connection)
+            if "review_revision" in payload and payload["review_revision"] != ctx.review_revision(current):
                 return jsonify(error="这张回单已在其他窗口或重新识别中更新，请重新打开后核对；当前编辑尚未保存。",
                                code="review_revision_conflict"), 409
-            updated = ctx._apply_human_edits(current, payload)
+            updated = ctx.apply_edits(current, payload)
             review_status = str(payload.get("review_status", "待复核"))
             final_result = str(payload.get("final_result") or updated.get("overall", "需人工复核"))
-            confirmation_error = ctx._confirmation_error(updated, review_status, final_result)
+            confirmation_error = ctx.confirmation_error(updated, review_status, final_result)
             if confirmation_error:
                 return jsonify(error=confirmation_error), 409
             truth_entry = None
@@ -62,9 +64,9 @@ def review_result(ctx, result_id: int):
         abort(404)
     except (ValueError, TypeError, AttributeError) as exc:
         return jsonify(error=str(exc) if isinstance(exc, ValueError) else "复核字段格式无效，请检查输入内容"), 400
-    reviewed = ctx._project_paginated_result(ctx.database.get_result(result_id))
+    reviewed = ctx.project_result(ctx.database.get_result(result_id))
     if truth_entry is not None:
-        change = save_ground_truth_entry(ctx.GROUND_TRUTH_PATH, reviewed["filename"], truth_entry)
+        change = save_ground_truth_entry(ctx.ground_truth_path, reviewed["filename"], truth_entry)
         history = ctx.database.record_ground_truth_change(
             filename=reviewed["filename"], result_id=result_id,
             before=change["before"], after=change["after"],
@@ -74,11 +76,11 @@ def review_result(ctx, result_id: int):
             "total": change["total"], "action": history["action"],
             "changed_at": history["changed_at"],
         }
-        ctx.seal_reference_matcher.refresh(ctx.database, load_ground_truth(ctx.GROUND_TRUTH_PATH))
-    return jsonify(ctx._with_review_revision(reviewed))
+        ctx.seal_reference_matcher.refresh(ctx.database, load_ground_truth(ctx.ground_truth_path))
+    return jsonify(ctx.with_review_revision(reviewed))
 
 
-def bulk_review(ctx):
+def bulk_review(ctx: ReviewDependencies):
     payload = request.get_json(silent=True) or {}
     ids = payload.get("ids") if isinstance(payload, dict) else None
     if (not isinstance(ids, list) or not ids or len(ids) > 2000
@@ -93,10 +95,10 @@ def bulk_review(ctx):
             current_items = []
             invalid = []
             for result_id in ids:
-                stored = ctx.database.get_result(result_id)
-                current = ctx._project_paginated_result(stored)
+                stored = ctx.database.get_result(result_id, _connection=connection)
+                current = ctx.project_result(stored, _connection=connection)
                 final_result = requested_final or str(current.get("overall", ""))
-                error = ctx._confirmation_error(current, review_status, final_result)
+                error = ctx.confirmation_error(current, review_status, final_result)
                 if error:
                     invalid.append({"id": result_id, "filename": current.get("filename", ""), "reason": error})
                 current_items.append((result_id, stored, current, final_result))
@@ -117,4 +119,4 @@ def bulk_review(ctx):
         return jsonify(error="选中的回单不存在"), 404
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    return jsonify([ctx._project_paginated_result(ctx.database.get_result(result_id)) for result_id in ids])
+    return jsonify([ctx.project_result(ctx.database.get_result(result_id)) for result_id in ids])

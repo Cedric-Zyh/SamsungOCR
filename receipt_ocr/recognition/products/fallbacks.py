@@ -9,7 +9,7 @@ from PIL import Image
 
 from ...domain.ocr import TextObservation
 from ...domain.parsing import LOW_CONFIDENCE_THRESHOLD, normalize_text, parse_product_table
-from ...providers.text import TextRecognizer, default_text_recognizer
+from ...providers.text import TextRecognizer, current_text_recognizer
 
 
 def _recover_missing_product_grades(
@@ -65,7 +65,7 @@ def _recover_missing_product_grades(
     if bottom <= top + 0.025:
         return product_table
 
-    recognizer = text_recognizer or default_text_recognizer()
+    recognizer = text_recognizer if text_recognizer is not None else current_text_recognizer()
     with Image.open(source) as image, tempfile.TemporaryDirectory(
         prefix="receipt-grade-"
     ) as temp_dir:

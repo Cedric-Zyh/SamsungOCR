@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from ..domain.documents.types import classify_document
+from ..domain.issues import issue
 from ..domain.documents.layout import _find_signature_requirement_row
 from ..runtime.execution import recognize_page, record_page_reuse
 from ..imaging.page import decode_qr
@@ -31,7 +32,7 @@ class DocumentContext:
         self.has_footer = False
         self.primary_rows = []
         self.primary_backend = None
-        self.text_recognizer = text_recognizer or default_text_recognizer()
+        self.text_recognizer = text_recognizer if text_recognizer is not None else default_text_recognizer()
         self.image_cache = ImageCache()
 
     def image_scope(self):
@@ -89,6 +90,13 @@ class DocumentContext:
         if kind == "unclassified":
             return list(self.document_type["reasons"])
         return ["未知文档版式，禁止套用回单日期/印章模板"]
+
+    @property
+    def routing_issues(self):
+        kind = self.document_type["type"]
+        code = ("awaiting_continuation" if kind == "product_continuation"
+                or (kind == "receipt" and not self.has_footer) else "document_routing")
+        return [issue(code, "document", message) for message in self.routing_reasons]
 
     @property
     def allows_remote_seal(self):

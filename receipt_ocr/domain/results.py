@@ -7,10 +7,11 @@ they are not discarded or reduced to a boolean verdict.
 
 from dataclasses import dataclass, field
 from typing import Any
+from .issues import CheckResult
 
 Metadata = dict[str, dict[str, Any]]
 Artifact = dict[str, Any]
-Check = dict[str, Any]
+Check = CheckResult
 
 
 @dataclass(kw_only=True)

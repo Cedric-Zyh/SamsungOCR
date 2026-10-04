@@ -1850,7 +1850,8 @@ def test_app_chromatic_consensus_promotion_preserves_raw_ocr(monkeypatch):
         "review_status": "待复核",
     }
 
-    promoted = app_module._apply_visual_seal_reference(result)
+    from receipt_ocr.application.pipeline import complete_result
+    promoted = complete_result(result, reference_matcher=app_module.seal_reference_matcher)
     assert promoted["seal_check"]["recognized"] == "测试科技有限公司"
     assert promoted["seal_check"]["ocr_only_status"] == "无法判断"
     assert promoted["seal_check"]["status"] == "匹配"
@@ -1887,7 +1888,8 @@ def test_app_color_mask_consensus_uses_consensus_candidate(monkeypatch):
         "review_reasons": ["印章内容无法可靠判断"],
         "processing_artifacts": {"seals": [{"index": 0}, {"index": 1}]},
     }
-    promoted = app_module._apply_visual_seal_reference(result)
+    from receipt_ocr.application.pipeline import complete_result
+    promoted = complete_result(result, reference_matcher=app_module.seal_reference_matcher)
     assert promoted["seal_check"]["reliable"] is True
     assert "整体彩色墨迹多参考一致" in promoted["seal_check"]["match_basis"]
     assert promoted["processing_artifacts"]["seals"][0][

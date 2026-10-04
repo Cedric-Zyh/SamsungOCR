@@ -6,7 +6,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from receipt_ocr.runtime.execution import timed
 from receipt_ocr.imaging.date import save_receipt_date_crop
-from receipt_ocr.providers.catalog import backend_label, recognize_text
+from receipt_ocr.providers.catalog import backend_label
+from receipt_ocr.providers.text import current_text_recognizer
 from receipt_ocr.recognition.date.preprocess.crops import _save_date_line_crop
 from receipt_ocr.recognition.date.contracts import (
     DateCropRun,
@@ -25,7 +26,6 @@ def _recognize_receipt_date(
     artifact_dir: str | Path | None,
     artifact_url_prefix: str,
     ocr_backend: str,
-    secondary_ocr_backend: str | None = None,
     allow_strict_date_without_requirement: bool = False,
     creation_text: str = "",
 ) -> tuple[list, list[dict]]:
@@ -43,17 +43,13 @@ def _recognize_receipt_date(
             artifact_dir=artifact_dir,
             artifact_url_prefix=artifact_url_prefix,
             ocr_backend=ocr_backend,
-            # The former Mobile/Server audit branch is retired.  Keep the
-            # call parameter at the outer boundary for callers that still
-            # pass it, but never route it to an OCR provider.
-            secondary_ocr_backend=None,
             allow_strict_date_without_requirement=allow_strict_date_without_requirement,
             creation_text=creation_text,
             temp_dir=temp_dir,
             services=DateCropServices(
                 save_receipt_date_crop=save_receipt_date_crop,
                 save_date_line_crop=_save_date_line_crop,
-                recognize_text=recognize_text,
+                recognize_text=current_text_recognizer().recognize,
                 backend_label=backend_label,
             ),
         )
@@ -67,4 +63,4 @@ def _recognize_receipt_date(
             inputs=tuple(run.inputs),
             reads=tuple(run.reads),
         )
-        return result.as_legacy()
+        return list(result.rows), list(result.artifacts)

@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from receipt_ocr.application.analyzer import ReceiptAnalyzer
 from receipt_ocr.application import RecognitionService, resolve_recognition_options
-from receipt_ocr.application.pipeline import complete_result
+from receipt_ocr.application.document_service import DocumentRecognitionService
 from receipt_ocr.review import (
     apply_human_edits as _apply_human_edits,
     confirmation_error as _confirmation_error,
@@ -39,7 +39,7 @@ from receipt_ocr.evaluation import (
     save_ground_truth_entry,
 )
 from receipt_ocr.providers.catalog import backend_catalog, backend_label, default_backend, ocr_engine
-from receipt_ocr.recognition.seal.policy import describe_secondary_read
+from receipt_ocr.recognition.seal.reading_policy import describe_secondary_read
 from receipt_ocr.recognition.seal.reference.matcher import SealReferenceMatcher
 from receipt_ocr.recognition.seal.providers.qingtong import render_selected_seal
 from receipt_ocr.recognition.seal.api import (
@@ -49,6 +49,7 @@ from receipt_ocr.recognition.seal.orientation import SEAL_ORIENTATION_MODES
 from receipt_ocr.runtime import build_runtime_paths
 from receipt_ocr.storage import ReceiptFileStore
 from receipt_ocr.web.maintenance import StorageMaintenance
+from .dependencies import QueueDependencies, RecognitionDependencies, ResultDependencies, ReviewDependencies
 from receipt_ocr.web import queue as queue_handlers
 from receipt_ocr.web import recognition as recognition_handlers
 from receipt_ocr.web import results as result_handlers
@@ -102,25 +103,68 @@ _retention_cleanup_lock = threading.Lock()
 _last_retention_cleanup = 0.0
 job_store = JobStore(database)
 job_worker = None
-maintenance = StorageMaintenance(
-    database,
-    upload_dir=UPLOAD_DIR,
-    preview_dir=PREVIEW_DIR,
-    artifact_dir=ARTIFACT_DIR,
-    export_dir=EXPORT_DIR,
-    logger=app.logger,
-)
+
+
+
+
+def _queue_dependencies():
+    return QueueDependencies(
+        allowed_extensions=ALLOWED_EXTENSIONS,
+        data_dir=DATA_DIR,
+        upload_dir=UPLOAD_DIR,
+        seal_api_enabled=analyzer.seal_api.enabled,
+        database=database,
+        job_store=job_store,
+        job_worker=job_worker,
+    )
+
+
+def _recognition_dependencies():
+    return RecognitionDependencies(
+        allowed_extensions=ALLOWED_EXTENSIONS,
+        data_dir=DATA_DIR,
+        upload_dir=UPLOAD_DIR,
+        documents=_document_service(),
+        seal_api_enabled=analyzer.seal_api.enabled,
+        logger=app.logger,
+        database=database,
+        now_iso=now_iso,
+    )
+
+
+def _document_service():
+    return DocumentRecognitionService(_configured_analyze, PREVIEW_DIR, ARTIFACT_DIR, now_iso)
+
+
+def _results_dependencies():
+    return ResultDependencies(
+        ground_truth_path=GROUND_TRUTH_PATH,
+        result_filters=RESULT_FILTERS,
+        project_result=_project_paginated_result,
+        database=database,
+        job_store=job_store,
+        load_ground_truth=load_ground_truth,
+    )
+
+
+def _review_dependencies():
+    return ReviewDependencies(
+        ground_truth_path=GROUND_TRUTH_PATH,
+        apply_edits=_apply_human_edits,
+        confirmation_error=_confirmation_error,
+        project_result=_project_paginated_result,
+        review_revision=_review_revision,
+        with_review_revision=_with_review_revision,
+        database=database,
+        seal_reference_matcher=seal_reference_matcher,
+    )
 
 
 def _purge_expired_data() -> dict:
-    """Compatibility wrapper for the application lifecycle and tests."""
-    maintenance.database = database
-    maintenance.upload_dir = UPLOAD_DIR
-    maintenance.preview_dir = PREVIEW_DIR
-    maintenance.artifact_dir = ARTIFACT_DIR
-    maintenance.export_dir = EXPORT_DIR
-    maintenance.logger = app.logger
-    return maintenance.purge_expired()
+    return StorageMaintenance(
+        database, upload_dir=UPLOAD_DIR, preview_dir=PREVIEW_DIR,
+        artifact_dir=ARTIFACT_DIR, export_dir=EXPORT_DIR, logger=app.logger,
+    ).purge_expired()
 
 
 def _maybe_purge_expired_data() -> None:
@@ -181,10 +225,6 @@ def _configured_analyze(*args, recognition_config=None, previous_fields=None, **
     )
 
 
-def _apply_visual_seal_reference(result: dict) -> dict:
-    # Compatibility for saved-result audit tools. Live recognition finalizes
-    # inside the pipeline, with the original filename supplied before matching.
-    return complete_result(result, reference_matcher=seal_reference_matcher)
 
 
 def index():
@@ -278,12 +318,12 @@ def update_recognition_settings():
 
 
 def create_task():
-    return queue_handlers.create_task(sys.modules[__name__])
+    return queue_handlers.create_task(_queue_dependencies())
 
 
 
 def list_tasks():
-    return queue_handlers.list_tasks(sys.modules[__name__])
+    return queue_handlers.list_tasks(_queue_dependencies())
 
 
 
@@ -300,67 +340,67 @@ def delete_results():
 
 
 def get_task(task_id: str):
-    return queue_handlers.get_task(sys.modules[__name__], task_id)
+    return queue_handlers.get_task(_queue_dependencies(), task_id)
 
 
 
 def _wake_jobs():
-    return queue_handlers._wake_jobs(sys.modules[__name__])
+    return queue_handlers._wake_jobs(_queue_dependencies())
 
 
 
 def queue_progress():
-    return queue_handlers.queue_progress(sys.modules[__name__])
+    return queue_handlers.queue_progress(_queue_dependencies())
 
 
 
 def queue_control():
-    return queue_handlers.queue_control(sys.modules[__name__], wake=_wake_jobs)
+    return queue_handlers.queue_control(_queue_dependencies(), wake=_wake_jobs)
 
 
 
 def upload_job(job_id):
-    return queue_handlers.upload_job(sys.modules[__name__], job_id, wake=_wake_jobs)
+    return queue_handlers.upload_job(_queue_dependencies(), job_id, wake=_wake_jobs)
 
 
 
 def start_jobs():
-    return queue_handlers.start_jobs(sys.modules[__name__], wake=_wake_jobs)
+    return queue_handlers.start_jobs(_queue_dependencies(), wake=_wake_jobs)
 
 
 
 def retry_job(job_id):
-    return queue_handlers.retry_job(sys.modules[__name__], job_id, wake=_wake_jobs)
+    return queue_handlers.retry_job(_queue_dependencies(), job_id, wake=_wake_jobs)
 
 
 
 def cancel_job(job_id):
-    return queue_handlers.cancel_job(sys.modules[__name__], job_id)
+    return queue_handlers.cancel_job(_queue_dependencies(), job_id)
 
 
 
 def _cleanup_cancelled_upload(job):
-    return queue_handlers._cleanup_cancelled_upload(sys.modules[__name__], job)
+    return queue_handlers._cleanup_cancelled_upload(_queue_dependencies(), job)
 
 
 
 def cancel_jobs():
-    return queue_handlers.cancel_jobs(sys.modules[__name__])
+    return queue_handlers.cancel_jobs(_queue_dependencies())
 
 
 
 def process_history():
-    return queue_handlers.process_history(sys.modules[__name__])
+    return queue_handlers.process_history(_queue_dependencies())
 
 
 
 def analyze_upload():
-    return recognition_handlers.analyze_upload(sys.modules[__name__])
+    return recognition_handlers.analyze_upload(_recognition_dependencies())
 
 
 
 def daily_results():
-    return result_handlers.daily_results(sys.modules[__name__])
+    return result_handlers.daily_results(_results_dependencies())
 
 
 
@@ -370,12 +410,12 @@ def _page_options():
 
 
 def _reviewable_results(rows):
-    return result_handlers.reviewable_results(sys.modules[__name__], rows)
+    return result_handlers.reviewable_results(_results_dependencies(), rows)
 
 
 
 def _receipt_listing(*, latest_by_filename):
-    return result_handlers.receipt_listing(sys.modules[__name__], latest_by_filename=latest_by_filename)
+    return result_handlers.receipt_listing(_results_dependencies(), latest_by_filename=latest_by_filename)
 
 
 
@@ -390,22 +430,22 @@ def _selected_result_ids(parameter="ids"):
 
 
 def list_results():
-    return result_handlers.list_results(sys.modules[__name__])
+    return result_handlers.list_results(_results_dependencies())
 
 
 
 def import_dates():
-    return result_handlers.import_dates(sys.modules[__name__])
+    return result_handlers.import_dates(_results_dependencies())
 
 
 
 def list_result_history():
-    return result_handlers.list_result_history(sys.modules[__name__])
+    return result_handlers.list_result_history(_results_dependencies())
 
 
 
 def get_result(result_id: int):
-    return result_handlers.get_result(sys.modules[__name__], result_id)
+    return result_handlers.get_result(_results_dependencies(), result_id)
 
 
 
@@ -420,17 +460,17 @@ def _with_review_revision(result):
 
 
 def review_result(result_id: int):
-    return review_handlers.review_result(sys.modules[__name__], result_id)
+    return review_handlers.review_result(_review_dependencies(), result_id)
 
 
 
 def review_history(result_id: int):
-    return result_handlers.review_history(sys.modules[__name__], result_id)
+    return result_handlers.review_history(_results_dependencies(), result_id)
 
 
 
 def result_ground_truth(result_id: int):
-    return result_handlers.result_ground_truth(sys.modules[__name__], result_id)
+    return result_handlers.result_ground_truth(_results_dependencies(), result_id)
 
 
 
@@ -445,8 +485,6 @@ def retry_result(result_id: int):
     source = _source_for_record(current)
     if not source or not source.is_file():
         return jsonify({"error": "原始图片不存在，无法重新识别"}), 409
-    token = uuid.uuid4().hex
-    preview_name = f"{token}.jpg"
     payload = request.get_json(silent=True) or {}
     try:
         options = resolve_recognition_options(
@@ -461,26 +499,19 @@ def retry_result(result_id: int):
         )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    result = _configured_analyze(
+    result, preview_name = _document_service().recognize(
         source,
-        PREVIEW_DIR / preview_name,
-        artifact_dir=ARTIFACT_DIR / token,
-        artifact_url_prefix=f"/files/artifacts/{token}",
         recognition_config=options.recognition_config,
         previous_fields=recognition_fields(current),
-        filename=current["filename"],
+        filename=current["filename"], created_at=current["created_at"],
         ocr_backend=options.ocr_backend,
         seal_recognition_mode=options.seal_recognition_mode,
-    )
-    result.update(
-        filename=current["filename"], preview_url=f"/files/previews/{preview_name}",
-        created_at=current["created_at"], updated_at=now_iso(),
     )
     return jsonify(database.replace_after_retry(result_id, result, preview_name))
 
 
 def bulk_review():
-    return review_handlers.bulk_review(sys.modules[__name__])
+    return review_handlers.bulk_review(_review_dependencies())
 
 
 
@@ -496,8 +527,6 @@ def bulk_retry():
             source = _source_for_record(current)
             if not source or not source.is_file():
                 raise FileNotFoundError("原始图片不存在")
-            token = uuid.uuid4().hex
-            preview_name = f"{token}.jpg"
             options = resolve_recognition_options(
                 recognition_config=payload.get("recognition_config", current.get("recognition_config")),
                 ocr_backend=payload.get("ocr_backend") or current.get("ocr_backend"),
@@ -508,17 +537,14 @@ def bulk_retry():
                 ),
                 api_enabled=analyzer.seal_api.enabled,
             )
-            result = _configured_analyze(
-                source, PREVIEW_DIR / preview_name,
-                artifact_dir=ARTIFACT_DIR / token,
-                artifact_url_prefix=f"/files/artifacts/{token}",
+            result, preview_name = _document_service().recognize(
+                source,
                 recognition_config=options.recognition_config,
                 previous_fields=recognition_fields(current),
-                filename=current["filename"],
+                filename=current["filename"], created_at=current["created_at"],
                 ocr_backend=options.ocr_backend,
                 seal_recognition_mode=options.seal_recognition_mode,
             )
-            result.update(filename=current["filename"], preview_url=f"/files/previews/{preview_name}")
             output.append({"id": result_id, "ok": True, "result": database.replace_after_retry(result_id, result, preview_name)})
         except Exception as exc:
             output.append({"id": result_id, "ok": False, "error": str(exc)})
@@ -641,7 +667,7 @@ def files(kind: str, name: str):
     return send_from_directory(directory, name)
 
 
-def _project_paginated_result(item: dict) -> dict:
+def _project_paginated_result(item: dict, *, _connection=None) -> dict:
     """Return one logical receipt when ``item`` is a paginated cover."""
     # Backfill the display-only signature comparison for records created
     # before the explicit signature evidence field was introduced.
@@ -654,7 +680,7 @@ def _project_paginated_result(item: dict) -> dict:
     task_id = str(item.get("task_id") or "")
     if not task_id:
         return item
-    projected = database.query_receipts(filters={"task_id": task_id})["items"]
+    projected = database.query_receipts(filters={"task_id": task_id}, _connection=_connection)["items"]
     return next((row for row in projected if int(row.get("id") or 0) == int(item.get("id") or 0)), item)
 
 
@@ -665,7 +691,42 @@ def _source_for_record(item: dict) -> Path | None:
 
 from .routes import register_routes
 
-register_routes(app, sys.modules[__name__])
+register_routes(app, {
+    'index': index,
+    'ocr_backends': ocr_backends,
+    'get_settings': get_settings,
+    'update_settings': update_settings,
+    'retention_settings': retention_settings,
+    'get_recognition_settings': get_recognition_settings,
+    'update_recognition_settings': update_recognition_settings,
+    'create_task': create_task,
+    'list_tasks': list_tasks,
+    'delete_results': delete_results,
+    'get_task': get_task,
+    'queue_progress': queue_progress,
+    'queue_control': queue_control,
+    'upload_job': upload_job,
+    'start_jobs': start_jobs,
+    'retry_job': retry_job,
+    'cancel_job': cancel_job,
+    'cancel_jobs': cancel_jobs,
+    'process_history': process_history,
+    'analyze_upload': analyze_upload,
+    'daily_results': daily_results,
+    'list_results': list_results,
+    'import_dates': import_dates,
+    'list_result_history': list_result_history,
+    'get_result': get_result,
+    'review_result': review_result,
+    'review_history': review_history,
+    'result_ground_truth': result_ground_truth,
+    'retry_result': retry_result,
+    'bulk_review': bulk_review,
+    'bulk_retry': bulk_retry,
+    'report': report,
+    'selected_seal_preview': selected_seal_preview,
+    'files': files,
+}, before_request=ensure_initialized)
 
 def run() -> None:
     """Start the local Flask server."""

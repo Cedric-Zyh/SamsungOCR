@@ -15,14 +15,14 @@ from ..domain.parsing import (
 from ..domain.documents.layout import _find_signature_requirement_row
 from ..domain.ocr import TextObservation
 from ..runtime.safety import _apply_single_paddle_safety
-from receipt_ocr.recognition.date.decision import DateStageEvidence, DateDecision, DateConsensus
-from receipt_ocr.recognition.date.decision import (
+from receipt_ocr.recognition.date.postprocess.state import DateStageEvidence, DateDecision, DateConsensus
+from receipt_ocr.recognition.date.postprocess.decision import (
     _select_complete_dates,
     _select_component_dates,
     _select_business_dates,
     _apply_business_and_review_guards,
 )
-from receipt_ocr.recognition.date.confidence import (
+from receipt_ocr.recognition.date.postprocess.confidence import (
     _score_primary_evidence,
     _score_confirmed_audit_markers,
     _score_complete_consensus,

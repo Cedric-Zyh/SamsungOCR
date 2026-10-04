@@ -7,6 +7,8 @@ storage paths, or worker without rebuilding a second dependency container.
 
 from __future__ import annotations
 
+from .dependencies import QueueDependencies
+
 from datetime import date
 from pathlib import Path
 import uuid
@@ -17,7 +19,7 @@ from receipt_ocr.application import resolve_recognition_options
 from receipt_ocr.storage import ReceiptFileStore
 
 
-def create_task(ctx):
+def create_task(ctx: QueueDependencies):
     payload = request.get_json(silent=True) or {}
     total = payload.get("total", 0)
     if type(total) is not int:
@@ -29,7 +31,7 @@ def create_task(ctx):
             recognition_config=payload.get("recognition_config"),
             ocr_backend=payload.get("ocr_backend"),
             seal_recognition_mode=payload.get("seal_recognition_mode"),
-            api_enabled=ctx.analyzer.seal_api.enabled,
+            api_enabled=ctx.seal_api_enabled,
         )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -49,11 +51,11 @@ def create_task(ctx):
     ))
 
 
-def list_tasks(ctx):
+def list_tasks(ctx: QueueDependencies):
     return jsonify(ctx.database.list_tasks())
 
 
-def get_task(ctx, task_id: str):
+def get_task(ctx: QueueDependencies, task_id: str):
     try:
         task = ctx.database.get_task(task_id)
         return jsonify(ctx.job_store.task(task_id) if task["execution_mode"] == "queue" else task)
@@ -61,12 +63,12 @@ def get_task(ctx, task_id: str):
         abort(404)
 
 
-def _wake_jobs(ctx):
+def _wake_jobs(ctx: QueueDependencies):
     if ctx.job_worker is not None:
         ctx.job_worker.start()
 
 
-def queue_progress(ctx):
+def queue_progress(ctx: QueueDependencies):
     day = request.args.get("import_date", "")
     try:
         if date.fromisoformat(day).isoformat() != day:
@@ -76,7 +78,7 @@ def queue_progress(ctx):
     return jsonify(ctx.job_store.daily(day))
 
 
-def queue_control(ctx, wake=None):
+def queue_control(ctx: QueueDependencies, wake=None):
     if request.method == "GET":
         return jsonify(ctx.job_store.control())
     payload = request.get_json(silent=True) or {}
@@ -88,7 +90,7 @@ def queue_control(ctx, wake=None):
     return jsonify(control)
 
 
-def upload_job(ctx, job_id, wake=None):
+def upload_job(ctx: QueueDependencies, job_id, wake=None):
     try:
         job = ctx.job_store.get(job_id)
     except KeyError:
@@ -103,11 +105,11 @@ def upload_job(ctx, job_id, wake=None):
         if Path(upload.filename.replace("\\", "/")).name != expected:
             return jsonify(error=f"请选择原任务中的图片：{expected}"), 400
         suffix = Path(upload.filename).suffix.lower()
-        if suffix not in ctx.ALLOWED_EXTENSIONS:
+        if suffix not in ctx.allowed_extensions:
             return jsonify(error="仅支持 JPG、PNG、BMP、WEBP 图片"), 400
         stored_name = f"{uuid.uuid4().hex}{suffix}"
-        saved_path = ctx.UPLOAD_DIR / stored_name
-        temporary = ctx.UPLOAD_DIR / f"{stored_name}.part"
+        saved_path = ctx.upload_dir / stored_name
+        temporary = ctx.upload_dir / f"{stored_name}.part"
         try:
             upload.save(temporary)
             if temporary.stat().st_size == 0:
@@ -116,8 +118,8 @@ def upload_job(ctx, job_id, wake=None):
         finally:
             temporary.unlink(missing_ok=True)
     elif sample:
-        source = (ctx.DATA_DIR / Path(sample).name).resolve()
-        if source.parent != ctx.DATA_DIR.resolve() or not source.is_file() or source.suffix.lower() not in ctx.ALLOWED_EXTENSIONS:
+        source = (ctx.data_dir / Path(sample).name).resolve()
+        if source.parent != ctx.data_dir.resolve() or not source.is_file() or source.suffix.lower() not in ctx.allowed_extensions:
             abort(404)
         if source.name != Path(job["filename"].replace("\\", "/")).name:
             return jsonify(error="样单与任务清单不一致"), 400
@@ -137,7 +139,7 @@ def upload_job(ctx, job_id, wake=None):
     return jsonify(ctx.job_store.public(job)), 202
 
 
-def start_jobs(ctx, wake=None):
+def start_jobs(ctx: QueueDependencies, wake=None):
     payload = request.get_json(silent=True)
     ids = payload.get("ids") if isinstance(payload, dict) else None
     if (not isinstance(ids, list) or not ids or len(ids) > 5000
@@ -153,7 +155,7 @@ def start_jobs(ctx, wake=None):
     return jsonify(**started, control=ctx.job_store.control()), 202
 
 
-def retry_job(ctx, job_id, wake=None):
+def retry_job(ctx: QueueDependencies, job_id, wake=None):
     try:
         job = ctx.job_store.retry_failed(job_id)
     except KeyError:
@@ -164,11 +166,11 @@ def retry_job(ctx, job_id, wake=None):
     return jsonify(ctx.job_store.public(job)), 202
 
 
-def _cleanup_cancelled_upload(ctx, job):
-    ReceiptFileStore(ctx.DATA_DIR, ctx.UPLOAD_DIR).cleanup_cancelled_upload(job)
+def _cleanup_cancelled_upload(ctx: QueueDependencies, job):
+    ReceiptFileStore(ctx.data_dir, ctx.upload_dir).cleanup_cancelled_upload(job)
 
 
-def cancel_job(ctx, job_id):
+def cancel_job(ctx: QueueDependencies, job_id):
     try:
         job, deleted = ctx.job_store.delete_job(job_id)
     except KeyError:
@@ -181,7 +183,7 @@ def cancel_job(ctx, job_id):
     return jsonify(deleted=True, job_id=job_id), 200
 
 
-def cancel_jobs(ctx):
+def cancel_jobs(ctx: QueueDependencies):
     payload = request.get_json(silent=True) or {}
     ids = payload.get("ids") if isinstance(payload, dict) else None
     try:
@@ -196,7 +198,7 @@ def cancel_jobs(ctx):
                    kept_ids=[job["id"] for job in result["kept"]]), 200
 
 
-def process_history(ctx):
+def process_history(ctx: QueueDependencies):
     job_id = request.args.get("job_id", "").strip()
     result_id_raw = request.args.get("result_id", "").strip()
     result_id = 0

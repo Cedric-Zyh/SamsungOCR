@@ -299,3 +299,15 @@ test('submitting disables all controls and blocks duplicate requests until compl
   assert.equal(h.reviewState.reviewSaving, false);
   assert.equal(h.$('[data-confirm-pass]').disabled, false);
 });
+
+test('local seal evidence displays the selected comparison instead of other stamps', () => {
+  for (const status of ['匹配', '部分匹配', '不匹配']) {
+    const markup = sealEvidenceMarkup({recognition_variants: {seal: [{method: 'paddle_v6', details: {
+      seal_check: {recognized: '三星售后6183342站', display_text: '其他公司章 | 三星售后6183342站',
+        all_recognized: ['其他公司章', '三星售后6183342站'], status, reliable: true}
+    }}]}});
+    assert.match(markup, /<p>三星售后6183342站<\/p>/);
+    assert.doesNotMatch(markup, /其他公司章/);
+    assert.ok(markup.includes(`>${status}</span>`));
+  }
+});

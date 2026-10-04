@@ -5,7 +5,6 @@ from PIL import Image, ImageDraw
 
 from receipt_ocr.recognition.fields.fallbacks import _recover_signature_requirement
 from receipt_ocr.domain.ocr import TextObservation
-from receipt_ocr.application.pipeline import merge_stage
 
 
 def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monkeypatch):
@@ -44,14 +43,6 @@ def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monk
     assert artifact["original_url"].startswith("/files/artifacts/test/requirements/")
 
 
-def test_legacy_merge_keeps_requirement_images_separate_from_seals():
-    artifact = {"original_url": "/files/artifacts/test/requirements/original.png"}
-    output = {"processing_artifacts": {"date": [], "seals": []}}
-    merge_stage(output, {"processing_artifacts": {"signature_requirement": [artifact]}})
-    merge_stage(output, {"processing_artifacts": {"seals": [{"index": 0}]}})
-    assert output["processing_artifacts"]["signature_requirement"] == [artifact]
-
-
 def test_configured_fields_keep_requirement_images_without_any_seal_stage(monkeypatch):
     from receipt_ocr.application import plans as config
     from receipt_ocr.application.context import DocumentContext
@@ -63,7 +54,8 @@ def test_configured_fields_keep_requirement_images_without_any_seal_stage(monkey
     monkeypatch.setattr(config, "_recognize_stages", lambda *a: (
         {**{name: [] for name in config.STAGES},
          "fields": [{"method": "paddle_v6", "result": stage}]}, [], stage, {}))
-    monkeypatch.setattr(config, "complete_result", lambda *a, **kw: None)
+    from receipt_ocr.application import assembly
+    monkeypatch.setattr(assembly, "complete_result", lambda *a, **kw: None)
     monkeypatch.setattr(DocumentContext, "evidence", lambda self: {})
     result = config.run_configured(
         SimpleNamespace(seal_api=SimpleNamespace(enabled=False)), "unused.jpg", None,

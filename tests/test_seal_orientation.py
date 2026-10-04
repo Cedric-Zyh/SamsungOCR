@@ -1,3 +1,4 @@
+from receipt_ocr.recognition.seal.preprocess import doc_orientation, combined_orientation
 from receipt_ocr.recognition.seal.orientation import decide_orientation, choose_round_stamp_angle
 import pytest
 from receipt_ocr.recognition.seal import orientation as seal_orientation
@@ -6,12 +7,12 @@ from receipt_ocr.recognition.seal import orientation as seal_orientation
 @pytest.mark.parametrize('angle', [0, 90, 180, 270, None])
 def test_doc_orientation_applies_predicted_correction_only(monkeypatch, tmp_path, angle):
     calls = []
-    monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
+    monkeypatch.setattr(doc_orientation, 'classify_doc_orientation',
                         lambda source: {'angle': angle, 'confidence': .99})
     def rotate(source, destination, correction):
         calls.append(correction)
         return destination
-    monkeypatch.setattr(seal_orientation, 'rotate_stamp_image', rotate)
+    monkeypatch.setattr(doc_orientation, 'rotate_stamp_image', rotate)
     destination = tmp_path / 'corrected.png'
     oriented, decision = seal_orientation.prepare_round_stamp_doc_ori('input.png', destination)
     assert decision['mode'] == 'doc_ori'
@@ -25,9 +26,9 @@ def test_doc_orientation_applies_predicted_correction_only(monkeypatch, tmp_path
 def test_doc_orientation_keeps_uncertain_input_without_guessing_type_mask(
     monkeypatch, tmp_path, angle, confidence
 ):
-    monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
+    monkeypatch.setattr(doc_orientation, 'classify_doc_orientation',
                         lambda source: {'angle': angle, 'confidence': confidence})
-    monkeypatch.setattr(seal_orientation, 'rotate_stamp_image',
+    monkeypatch.setattr(doc_orientation, 'rotate_stamp_image',
                         lambda *args: pytest.fail('uncertain direction must not rotate'))
     oriented, decision = seal_orientation.prepare_round_stamp_doc_ori(
         'input.png', tmp_path / 'corrected.png')
@@ -45,7 +46,7 @@ def test_doc_orientation_does_not_mask_ring_without_detected_type_row(
     from PIL import Image
     source = tmp_path / 'ring.png'
     Image.new('RGB', (200, 200), 'white').save(source)
-    monkeypatch.setattr(seal_orientation, 'classify_doc_orientation',
+    monkeypatch.setattr(doc_orientation, 'classify_doc_orientation',
                         lambda source: {'angle': angle, 'confidence': .99})
     monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', lambda *a, **k: [])
     _, decision = seal_orientation.prepare_round_stamp_doc_ori(source, tmp_path / 'corrected.png')
@@ -84,7 +85,7 @@ def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
         Image.new("RGB", (200, 200), "white").save(destination)
         return destination
 
-    monkeypatch.setattr(seal_orientation, "rotate_stamp_image", rotate)
+    monkeypatch.setattr(combined_orientation, "rotate_stamp_image", rotate)
     # Only the 90-degree candidate exposes a stamp-type polygon and a readable
     # centre row, so it must win over the unrotated crop.
     monkeypatch.setattr(
@@ -131,7 +132,7 @@ def test_combined_never_uses_document_orientation_classifier(monkeypatch, tmp_pa
     source = tmp_path / 'ring.png'
     Image.new('RGB', (200, 200), 'white').save(source)
     monkeypatch.setattr(
-        seal_orientation, 'classify_doc_orientation',
+        doc_orientation, 'classify_doc_orientation',
         lambda *_args: pytest.fail('combined must not call doc_ori'),
     )
     monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', lambda *a, **k: [])

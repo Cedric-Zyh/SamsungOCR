@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from ..domain.decision import has_provider_failure
 from .constants import REVIEW_STATUSES
 from .database_clock import now_iso
+from .issue_migration import migrate_saved_issues
 
 
 class ReviewOperationsMixin:
@@ -162,6 +163,7 @@ class ReviewOperationsMixin:
         """
         changed = 0
         with self.connect() as connection:
+            migrate_saved_issues(connection)
             rows = connection.execute(
                 """SELECT * FROM results
                 WHERE review_status NOT IN ('确认通过','确认不通过')"""

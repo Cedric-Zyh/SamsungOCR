@@ -13,12 +13,10 @@ from receipt_ocr.imaging.bands import save_round_seal_type_band, round_seal_type
 from receipt_ocr.imaging.unwrap import save_ring_text_band_preview, save_unwrapped_seal
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
-from .round import (
-    prepare_round_stamp,
-    prepare_round_stamp_doc_ori,
-    prepare_round_stamp_combined,
-    prepare_rectangular_stamp,
-)
+from .round import prepare_round_stamp
+from .doc_orientation import prepare_round_stamp_doc_ori
+from .combined_orientation import prepare_round_stamp_combined
+from .rectangle_orientation import prepare_rectangular_stamp
 from .ellipse import prepare_ellipse_stamp
 
 SHAPE_LABELS = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}

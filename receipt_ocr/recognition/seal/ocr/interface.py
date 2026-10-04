@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from receipt_ocr.domain.ocr import TextObservation
-from receipt_ocr.providers import catalog, paddle_runtime
+from receipt_ocr.providers import paddle_runtime
+from receipt_ocr.providers.text import current_text_recognizer
 from ..contracts import OcrRead
 
 
@@ -26,8 +27,8 @@ class OcrReader:
     ) -> list[TextObservation]:
         selected = provider or backend or ""
         if paddle_runtime.is_seal_backend(selected):
-            return paddle_runtime.recognize_seal_text(image)
-        return catalog.recognize_text(
+            return current_text_recognizer().recognize_seal(image)
+        return current_text_recognizer().recognize(
             image,
             backend=selected,
             min_text_height=min_text_height,
@@ -41,8 +42,7 @@ class OcrReader:
         model_variant: str | None = None,
     ):
         """Detect text boxes for orientation decisions through this boundary."""
-        variant = model_variant or paddle_runtime.variant_of(provider) or "v6"
-        return paddle_runtime.detect_text_boxes(image, model_variant=variant)
+        return current_text_recognizer().detect_boxes(image, backend=provider, model_variant=model_variant)
 
     def read_line(
         self,
@@ -53,8 +53,7 @@ class OcrReader:
     ) -> list[TextObservation]:
         if provider and not (paddle_runtime.is_paddle_backend(provider) or paddle_runtime.is_seal_backend(provider)):
             return self.read(image, provider=provider)
-        variant = model_variant or paddle_runtime.variant_of(provider) or "v6"
-        return paddle_runtime.recognize_line(image, model_variant=variant)
+        return current_text_recognizer().recognize_line(image, backend=provider, model_variant=model_variant)
 
 
 _DEFAULT_READER = OcrReader()

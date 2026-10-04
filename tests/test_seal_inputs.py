@@ -8,7 +8,7 @@ from receipt_ocr.recognition.seal.preprocess.inputs import (
     _symmetric_type_geometry,
     _white_detected_type_region,
 )
-from receipt_ocr.recognition.seal.preprocess.orientation import _oriented_type_row_exact_box
+from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_exact_box
 
 
 def test_ring_input_is_saved_with_type_band_filled_white(tmp_path):

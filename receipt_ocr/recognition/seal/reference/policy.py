@@ -116,6 +116,11 @@ def apply_reference_evidence(result: dict, matcher) -> dict:
         }
     )
     result["seal_check"] = seal_check
+    if "review_issues" in result:
+        result["review_issues"] = [
+            item for item in result["review_issues"]
+            if not (item["scope"] == "seal" and item["code"] == "evidence_unreliable")
+        ]
     reasons = [
         reason
         for reason in result.get("review_reasons", [])

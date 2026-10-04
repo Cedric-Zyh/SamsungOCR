@@ -1,6 +1,7 @@
 """Keep the existing result keys stable while stages use domain objects."""
 
 from copy import deepcopy
+from ..domain.issues import issue
 
 from ..domain.results import (
     DateStageResult, FieldStageResult, HandwritingStageResult,
@@ -11,6 +12,15 @@ from ..domain.results import (
 def stage_result_payload(result: StageResult) -> dict:
     """Return an independent payload, preserving optional and empty fields."""
     output = {"stage_review_reasons": result.review_reasons}
+    scope = {
+        FieldStageResult: "fields", ProductStageResult: "products",
+        HandwritingStageResult: "handwriting", DateStageResult: "date", SealStageResult: "seal",
+    }.get(type(result), "document")
+    output["stage_review_issues"] = [
+        issue("low_confidence" if scope == "fields" else "evidence_unreliable", scope,
+              message, blocking=scope not in {"products", "handwriting"})
+        for message in result.review_reasons
+    ]
     if isinstance(result, FieldStageResult):
         output.update(fields=result.fields, field_metadata=result.metadata,
                       field_fallbacks=result.fallbacks, qr_text=result.qr_text)

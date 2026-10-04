@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from .domain.decision import decide_overall
+from .domain.issues import issue, active_issues
 from .domain.fields.schema import derive_signature_check, project_fields
 from .domain.parsing import LOW_CONFIDENCE_THRESHOLD, compare_dates, compare_seal_text, parse_date, product_table_text
 from .domain.parsing.parsing_seals import compare_seal_text_strict
@@ -167,19 +168,23 @@ def apply_human_edits(current, payload):
     if not (evidence_changed or confirm_fields):
         return project_fields(result)
     # Saving a draft is not acknowledgement of unrelated routing/field warnings.
-    reasons = [] if confirm_fields else list(current.get("review_reasons") or [])
+    issues = [] if confirm_fields else list(current.get("review_issues", [
+        issue("review_required", "document", message) for message in current.get("review_reasons", [])
+    ]))
     acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
     if acceptance.get("low_confidence_mode", "check") == "check" and any(meta.get("low_confidence") for name, meta in result["field_metadata"].items()
            if name != "仓库接收人"):
-        reasons.append("存在低置信度字段")
+        issues.append(issue("low_confidence", "fields", "存在低置信度字段"))
     if not date.get("reliable"):
-        reasons.append("收货日期尚未可靠识别或人工确认")
+        issues.append(issue("evidence_unreliable", "date", "收货日期尚未可靠识别或人工确认"))
     if not seal.get("reliable"):
-        reasons.append("印章内容尚未可靠识别或人工确认")
-    result["review_reasons"] = list(dict.fromkeys(reasons))
+        issues.append(issue("evidence_unreliable", "seal", "印章内容尚未可靠识别或人工确认"))
+    result["review_issues"] = active_issues(issues, acceptance)
+    result["review_reasons"] = list(dict.fromkeys(item["message"] for item in result["review_issues"]))
     result["overall"] = decide_overall(
         date, seal, result["review_reasons"],
         (result.get("recognition_config") or {}).get("acceptance"), signature,
+        review_issues=result["review_issues"],
     )
     # Date mismatches are intentionally kept pending until a human confirms
     # them.  Once the reviewer explicitly chooses "确认不通过", persist that
@@ -196,7 +201,7 @@ def prepare_review_payload(stored, reviewed, *, review_status, final_result, not
     if (reviewed.get("page_group") or {}).get("page_count", 0) <= 1 or reviewed.get("page_role") == "continuation":
         return deepcopy(reviewed)
     override = {key: deepcopy(reviewed[key]) for key in (
-        "fields", "field_metadata", "product_table", "date_check", "seal_check", "signature_check", "review_reasons", "overall"
+        "fields", "field_metadata", "product_table", "date_check", "seal_check", "signature_check", "review_reasons", "review_issues", "overall"
     ) if key in reviewed}
     override.update(review_status=review_status, final_result=final_result, human_note=note, error_type=error_type)
     result = deepcopy(stored)

@@ -2,11 +2,8 @@
 const ReceiptWorkbench = (() => {
   function hasProviderFailure(record) {
     if (!record) return false;
-    const providerPattern = /(单证通|danzhengtong)/i;
-    const failurePattern = /(失败|超时|timeout|connectionerror|readtimeout|max retries|nodename|无法连接|连接失败)/i;
-    const messages = [record.error_message, ...(record.review_reasons || [])]
-      .filter(Boolean).map(String);
-    if (messages.some(message => providerPattern.test(message) && failurePattern.test(message))) return true;
+    if ((record.review_issues || []).some(issue =>
+      issue.code === 'provider_failure' && issue.provider === 'danzhengtong')) return true;
     return Object.values(record.recognition_variants || {}).some(variants =>
       (variants || []).some(variant => variant?.method === 'danzhengtong' && variant.error));
   }
@@ -103,7 +100,37 @@ const ReceiptWorkbench = (() => {
       seen.add(url); sources.push({url, label, group});
     }
     add(record.preview_url, '整页回单', 'page');
+    const normalizeSeal = value => String(value || '').replace(/[\s（）()]/g, '');
+    const primarySeal = record.seal_check || {};
+    const localChecks = [primarySeal.local_channel,
+      ...(record.recognition_variants?.seal || [])
+        .filter(variant => !['qingtong', 'danzhengtong'].includes(variant.method) && !variant.error)
+        .map(variant => variant.details?.seal_check),
+      ...(!primarySeal.dual_check && primarySeal.recognition_mode !== 'danzhengtong'
+        ? [primarySeal] : [])].filter(Boolean);
+    const selectedText = normalizeSeal(primarySeal.recognized);
+    const localSelected = selectedText && localChecks.some(check =>
+      normalizeSeal(check.recognized) === selectedText);
+    const textKeys = ['color_isolated_text', 'color_isolated_oriented_text',
+      'isolated_text', 'unwrapped_text', 'round_type_band_text', 'code_line_text',
+      'rotated_text', 'same_region_reconstructed_text', 'combined_text',
+      'secondary_isolated_text', 'secondary_color_isolated_text',
+      'secondary_unwrapped_text', 'secondary_rotated_text', 'secondary_code_line_text'];
+    const selectedLocalArtifact = localSelected && (record.processing_artifacts?.seals || []).find(item =>
+      [...(item.matching_texts || []), ...textKeys.flatMap(key => String(item[key] || '').split('|'))]
+        .some(text => normalizeSeal(text) === selectedText));
     for (const [key, group, label] of [['date', 'date', '日期区域'], ['seals', 'seal', '印章区域']]) {
+      if (key === 'seals' && selectedLocalArtifact) {
+        const item = selectedLocalArtifact;
+        const oriented = usableOrientation(item) && item.color_isolated_oriented_url;
+        const corrected = item.orientation?.applied_rotation === 180 && item.orientation_corrected_url;
+        const url = oriented || corrected || item.original_url;
+        if (url) {
+          add(url, oriented ? `印章区域 · ${orientationLabel(item)}`
+            : corrected ? '印章区域 · 已自动旋转 180°' : '印章区域', 'seal');
+          continue;
+        }
+      }
       if (key === 'seals' && ['qingtong_template_and_ocr', 'qingtong_any_channel', 'qingtong_all_channel'].includes(record.seal_check?.dual_check?.policy)) {
         const sealArtifacts = record.processing_artifacts?.seals || [];
         const selectedIndex = record.seal_check.dual_check.selected?.index;

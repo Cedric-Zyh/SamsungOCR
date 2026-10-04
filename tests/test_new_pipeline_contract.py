@@ -28,6 +28,8 @@ def test_field_result_serialization_keeps_stage_owned_metadata_and_artifacts():
         "qr_text": "QR-1",
         "processing_artifacts": {"signature_requirement": [{"url": "/files/a.png"}]},
         "stage_review_reasons": ["字段低置信度"],
+        "stage_review_issues": [{"code": "low_confidence", "scope": "fields",
+                                  "message": "字段低置信度", "blocking": True, "provider": ""}],
     }
 
 

@@ -13,10 +13,10 @@ from ..domain.documents.layout import (
 )
 from ..runtime.safety import _apply_single_paddle_safety
 from ..runtime.utils import _dedupe
-from receipt_ocr.recognition.seal.decision import _apply_code_stamp_business_id
+from receipt_ocr.recognition.seal.postprocess.rules import _apply_code_stamp_business_id
 from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
 from receipt_ocr.recognition.seal.providers.qingtong import qingtong_region_artifacts, qingtong_seal_regions
-from receipt_ocr.recognition.seal.policy import LOCAL_REGION_SOURCE, record_local_channel
+from receipt_ocr.recognition.seal.postprocess.channels import LOCAL_REGION_SOURCE, record_local_channel
 
 
 from ..domain.results import SealStageResult
@@ -239,19 +239,13 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
             seal_check = compare_seal_text_strict(
                 requirement, seal_texts, mismatch_over_partial=True
             )
-            # The strict matcher keeps one best candidate for the decision,
-            # while an ellipse intentionally has separate centre-row and
-            # ring-row channels. Expose all of those channels for the same
-            # provider-neutral route, so a valid
-            # ``收货章`` result is not hidden by the company-name winner.
-            if has_round_or_ellipse_artifact:
-                seal_check["display_text"] = " | ".join(
-                    _ellipse_display_texts(seal_texts, seal_artifacts)
-                )
             if kind == "receipt":
                 seal_check = _apply_code_stamp_business_id(
                     seal_check, requirement, seal_texts, fields
                 )
+            # Keep the displayed text aligned with the chosen comparison.
+            # All other regional readings remain in the audit artifacts.
+            seal_check["display_text"] = seal_check.get("recognized", "")
             if boxed:
                 # This reading describes the same pixels the API judged, which
                 # is what lets it vote as a channel of its own.

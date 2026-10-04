@@ -1,5 +1,7 @@
+import {createWorkbenchSummary} from './summary.mjs';
+import {createDailyQuery} from './query.mjs';
 import {createApiClients} from '../core/api.mjs';
-import {localToday, escapeHtml} from '../core/ui.mjs';
+import {localToday} from '../core/ui.mjs';
 import {createImportCalendar} from '../imports/import_calendar.mjs';
 import {confirmInline} from '../core/inline_confirm.mjs';
 import {createWorkFilterState} from './filters.mjs';
@@ -7,7 +9,7 @@ import {renderWorkbenchRow} from './row_renderer.mjs';
 
 const WORK_PAGE_SIZE = 50;
 const START_BATCH_SIZE = 5000;
-import {WORK_FILTERS, overviewStatus, overviewCustomer, overviewCounts, matchesOverview, workFilterValues, selectionKey, deletionTarget} from './overview.mjs';
+import {WORK_FILTERS, matchesOverview, workFilterValues, selectionKey, deletionTarget} from './overview.mjs';
 
 export function createProgress({
   environment, ui, importsState, progressState, recordsState, reportState, resultsState, reviewState,
@@ -17,11 +19,20 @@ export function createProgress({
   const {document, window, location, localStorage, FormData} = environment;
   const {$, $$, toast} = ui;
   const selected = new Set();
-  let shownItems = [], deleting = false;
+  const viewState = {shownItems: []};
+  let deleting = false;
   const {activeWorkFilters, setWorkFilters, setWorkFilter, hasOnlyWorkFilter} = createWorkFilterState(progressState);
   const calendar = createImportCalendar({environment, ui, api, services, prefix: 'progress-calendar', popup: '#progress-calendar',
     readDate: () => $('#progress-date').value,
     selectDate: day => { $('#progress-date').value = day; changeProcessingDay(); }});
+
+  const {renderTask, renderOverview} = createWorkbenchSummary({environment, ui, progressState, ReceiptWorkbench});
+  const {loadDailyResults} = createDailyQuery({
+    environment, ui, progressState, importsState, recordsState, reportState, resultsState,
+    services, calendar, selected, viewState, pageSize: WORK_PAGE_SIZE,
+    ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartReview, syncStartRecognition,
+    renderQueueControl, renderTask, renderWorkbenchRows, hasOnlyWorkFilter, setWorkFilter
+  });
 
   async function showQueuedRetry(task) {
     $('#progress-date').value = (task.created_at || '').slice(0, 10) || localToday();
@@ -33,45 +44,9 @@ export function createProgress({
     await loadDailyResults();
   }
 
-  function renderTask(task) {
-    const percent = task.total ? Math.min(100, Math.round(task.completed / task.total * 100)) : 0;
-    const finished = task.total > 0 && task.completed >= task.total;
-    const summary = !task.total ? '暂无回单' : `已处理 ${task.completed} / ${task.total} 张${task.ready ? ` · ${task.ready} 张待开始` : finished ? ' · 识别已结束' : ''}`;
-    $('#task-summary').textContent = `${summary}${task.error_message ? ` · ${task.error_message}` : ''}`;
-    $('#task-progress').style.width = `${percent}%`;
-    $('#task-progress').parentElement.setAttribute('aria-valuenow', percent);
-    $('#task-summary').dataset.status = finished && task.pending_review ? 'review' : finished ? 'done' : 'running';
-    // A workbench request may finish after navigation; it must not replace the
-    // shared entry's current-filter scope on the records page.
-    if (document.body.dataset.activePage !== 'progress') return;
-    const count = Number(task.pending_review) || 0;
-    $('#review-entry-count').textContent = count;
-    $('#review-entry-count').classList.toggle('hidden', count === 0);
-    $('#open-batch-review').classList.toggle('has-pending', count > 0);
-    const scopeDay = $('#progress-date').value || localToday();
-    $('#open-batch-review').dataset.reviewDay = scopeDay;
-    $('#open-batch-review').setAttribute('aria-label', `人工复核，${scopeDay}，${count} 张待复核`);
-    $('#open-batch-review').title = count ? `复核 ${scopeDay} 当天的待复核回单` : `${scopeDay} 当天暂无待复核回单`;
-  }
-
-  function renderOverview(items) {
-    const counts = overviewCounts(items, ReceiptWorkbench);
-    const percent = counts.total ? Math.round(counts.completed / counts.total * 1000) / 10 : 0;
-    for (const [id, value] of Object.entries({'overview-completed': counts.completed.toLocaleString(), 'overview-total': counts.total.toLocaleString(), 'overview-percent': `${percent}%`})) {
-      if ($(`#${id}`)) $(`#${id}`).textContent = value;
-    }
-    $('#task-progress').style.width = `${percent}%`;
-    $('#task-progress').parentElement.setAttribute('aria-valuenow', percent);
-    if ($('#overview-remaining')) $('#overview-remaining').textContent = `剩余 ${counts.ready + counts.running} 张 · 待开始 ${counts.ready} 张 · 处理中 ${counts.running} 张`;
-    if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = !counts.total ? '暂无单据' : progressState.queueControl?.paused ? (progressState.queueControl.status === 'pausing' ? '暂停中' : '已暂停') : counts.running ? '正在识别' : counts.ready ? '等待处理' : '识别已结束';
-    const types = items.filter(item => item.status !== 'cancelled');
-    const customers = [...new Set(types.map(overviewCustomer))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    if ($('#workbench-type-counts')) $('#workbench-type-counts').innerHTML = '<span>按客户</span>' + customers.map(customer => `<button type="button" data-work-type="${escapeHtml(customer)}" aria-pressed="${progressState.workType === customer}">${escapeHtml(customer)} <b>${types.filter(item => overviewCustomer(item) === customer).length}</b></button>`).join('') + '<button type="button" data-work-type="" class="workbench-clear-type">全部客户</button>';
-  }
-
   function selectable(item) { return !!deletionTarget(item) && !importsState.uploadingJobs?.has(item.job?.id); }
   function syncSelection() {
-    const current = shownItems.filter(selectable), all = $('#workbench-select-all');
+    const current = viewState.shownItems.filter(selectable), all = $('#workbench-select-all');
     if (all) {
       all.checked = !!current.length && current.every(item => selected.has(selectionKey(item)));
       all.indeterminate = !all.checked && current.some(item => selected.has(selectionKey(item)));
@@ -84,7 +59,7 @@ export function createProgress({
     }
     $$('[data-work-select]').forEach(input => {
       input.checked = selected.has(input.dataset.workSelect);
-      input.disabled = deleting || !progressState.dailyReady || !shownItems.some(item => selectionKey(item) === input.dataset.workSelect && selectable(item));
+      input.disabled = deleting || !progressState.dailyReady || !viewState.shownItems.some(item => selectionKey(item) === input.dataset.workSelect && selectable(item));
     });
     if (selected.size && $('#workbench-page-note')) $('#workbench-page-note').textContent += ` · 已选 ${selected.size} 张`;
   }
@@ -148,7 +123,7 @@ export function createProgress({
       button.setAttribute('aria-pressed', String(pressed));
     });
     $$('[data-work-count]').forEach(label => label.textContent = items.filter(item => matchesOverview(item, label.dataset.workCount, ReceiptWorkbench)).length);
-    shownItems = shown;
+    viewState.shownItems = shown;
     const existing = new Set(items.filter(selectable).map(selectionKey));
     for (const key of selected) if (!existing.has(key)) selected.delete(key);
     renderOverview(items);
@@ -305,101 +280,6 @@ export function createProgress({
     syncStartReview();
   }
 
-  async function loadDailyResults({refreshRecords = true} = {}) {
-    progressState.dailyAttemptAt = Date.now();
-    const day = $('#progress-date').value || localToday();
-    $('#progress-date').value = day;
-    calendar.sync();
-    const reviewEntry = $('#open-batch-review');
-    if (document.body.dataset.activePage === 'progress' && reviewEntry.dataset.reviewDay !== day) {
-      reviewEntry.dataset.reviewDay = day;
-      reviewEntry.setAttribute('aria-label', `人工复核，${day}，当天全部`);
-      reviewEntry.title = `复核 ${day} 当天的回单`;
-      reviewEntry.classList.remove('has-pending');
-      $('#review-entry-count').textContent = '';
-      $('#review-entry-count').classList.add('hidden');
-    }
-    const requestId = progressState.dailyRequest = (progressState.dailyRequest || 0) + 1;
-    const previousDay = progressState.queueDay, newDay = previousDay !== day;
-    if (newDay) {
-      selected.clear(); shownItems = [];
-      if ($('#overview-completed')) $('#overview-completed').textContent = '—';
-      if ($('#overview-total')) $('#overview-total').textContent = '—';
-      if ($('#overview-percent')) $('#overview-percent').textContent = '—';
-      if ($('#overview-remaining')) $('#overview-remaining').textContent = '正在加载当天数据…';
-      if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '加载中';
-      if ($('#workbench-type-counts')) $('#workbench-type-counts').innerHTML = '';
-      $$('[data-work-count]').forEach(label => label.textContent = '—');
-      progressState.dailyReady = false;
-      syncSelection();
-      progressState.workVisibleLimit = WORK_PAGE_SIZE;
-      $('#task-section').classList.add('hidden');
-      $('#task-summary').textContent = '正在加载';
-      $('#task-summary').dataset.status = 'loading';
-      $('#task-progress').style.width = '0%';
-      $('#task-progress').parentElement.setAttribute('aria-valuenow', 0);
-      if ($('#workbench-total-label')) $('#workbench-total-label').textContent = '';
-      $('#progress-note').textContent = `正在加载 ${day} 的回单…`;
-    }
-    syncStartReview();
-    syncStartRecognition();
-    $('#progress-note').dataset.tone = '';
-    $('#task-section').setAttribute('aria-busy', 'true');
-    try {
-      const [jobs, control] = await Promise.all([
-        services.queue.list(day),
-        services.queue.control()
-      ]);
-      const signature = jobs.filter(job => ['succeeded', 'failed', 'cancelled'].includes(job.status)).map(job => `${job.id}:${job.status}:${job.finished_at}`).join('|');
-      const cached = progressState.progressRecordCache;
-      const reuse = !refreshRecords && cached?.day === day && cached.signature === signature && Date.now() - cached.at < 30000;
-      const records = reuse ? cached.records : await (services.records.daily(day));
-      if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
-      if (!reuse) progressState.progressRecordCache = {day, signature, records, at: Date.now()};
-      progressState.queueControl = control;
-      renderQueueControl();
-      progressState.queueJobs = new Map(jobs.map(job => [job.id, job]));
-      const items = ReceiptQueue.rows(records, jobs), counts = ReceiptQueue.counts(items);
-      counts.pending_review = items.filter(item => ReceiptWorkbench.category(item) === 'review').length;
-      counts.passed = items.filter(item => ReceiptWorkbench.category(item) === 'passed').length;
-      if (!progressState.workInitialFilterResolved) {
-        if (!progressState.workFilterChosen && hasOnlyWorkFilter('review') && counts.ready && !counts.pending_review) setWorkFilter('processing');
-        progressState.workInitialFilterResolved = true;
-      }
-      if (control.paused) counts.status = control.status === 'pausing' ? '暂停中' : '已暂停';
-      $('#task-section').classList.remove('hidden');
-      renderTask(counts);
-      // Keep visible receipts in place when a polling response adds newer jobs.
-      const key = item => item.id ? `record:${item.id}` : `job:${item.job?.id}`;
-      const ranks = new Map((newDay ? [] : progressState.workItems || []).map((item, index) => [key(item), index]));
-      progressState.workItems = items.sort((a, b) => (ranks.get(key(a)) ?? Infinity) - (ranks.get(key(b)) ?? Infinity));
-      progressState.queueDay = day;
-      progressState.dailyReady = true;
-      renderWorkbenchRows();
-      $('#progress-note').textContent = importsState.batchRunning || importsState.uploadingJobs?.size ? '正在上传，请保持页面打开。' : '';
-      $('#refresh-progress').textContent = '刷新';
-      if (previousDay === day && progressState.queueSignature !== undefined && progressState.queueSignature !== signature) {
-        recordsState.recordsStale = reportState.reportStale = true;
-        resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
-      }
-      progressState.queueDay = day; progressState.queueSignature = signature;
-    } catch (error) {
-      if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
-      progressState.dailyReady = false;
-      syncSelection();
-      if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '更新失败';
-      syncStartReview();
-      syncStartRecognition();
-      if (newDay) { $('#task-summary').textContent = '暂时无法加载'; $('#task-summary').dataset.status = 'error'; }
-      $('#progress-note').dataset.tone = 'danger';
-      $('#progress-note').textContent = newDay ? `${day} 的回单加载失败，请重试。` : '更新失败，当前显示上次成功加载的回单，请重试。';
-      $('#refresh-progress').textContent = '重试';
-      throw error;
-    } finally {
-      if (requestId === progressState.dailyRequest) $('#task-section').removeAttribute('aria-busy');
-    }
-  }
-
   function changeProcessingDay() {
     try { localStorage.setItem('receipt-progress-date', $('#progress-date').value); } catch (_) {}
     loadDailyResults().catch(error => toast(error.message,'danger'));
@@ -416,12 +296,12 @@ export function createProgress({
     $('#overview-delete')?.addEventListener('click', deleteSelected);
     $('#workbench-select-all')?.addEventListener('change', event => {
       if (deleting || !progressState.dailyReady) return;
-      shownItems.filter(selectable).forEach(item => event.target.checked ? selected.add(selectionKey(item)) : selected.delete(selectionKey(item)));
+      viewState.shownItems.filter(selectable).forEach(item => event.target.checked ? selected.add(selectionKey(item)) : selected.delete(selectionKey(item)));
       renderWorkbenchRows();
     });
     $('#queue').addEventListener('change', event => {
       const key = event.target.dataset.workSelect;
-      if (!key || deleting || !progressState.dailyReady || !shownItems.some(item => selectionKey(item) === key && selectable(item))) return;
+      if (!key || deleting || !progressState.dailyReady || !viewState.shownItems.some(item => selectionKey(item) === key && selectable(item))) return;
       event.target.checked ? selected.add(key) : selected.delete(key);
       renderWorkbenchRows();
     });

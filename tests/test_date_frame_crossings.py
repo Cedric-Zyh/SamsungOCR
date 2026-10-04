@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image, ImageDraw
 
-from receipt_ocr.recognition.date.workflow import _save_positioned_outer_frame_clean
+from receipt_ocr.recognition.date.preprocess.frame import _save_positioned_outer_frame_clean
 
 
 def clean(tmp_path, image):

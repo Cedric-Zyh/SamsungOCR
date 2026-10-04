@@ -95,7 +95,6 @@ def test_region_ocr_never_routes_to_the_retired_secondary_backend(tmp_path):
         artifact_dir=None,
         artifact_url_prefix="",
         ocr_backend="vision",
-        secondary_ocr_backend="paddle",
         allow_strict_date_without_requirement=False,
         creation_text="",
         temp_dir=tmp_path,

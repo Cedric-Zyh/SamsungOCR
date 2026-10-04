@@ -206,10 +206,12 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
             )
             merged["page_group"]["footer_result_id"] = int(footer.get("id") or 0)
 
-        reasons = [
-            reason for reason in (merged.get("review_reasons") or [])
-            if "首页未包含签收页脚" not in reason and "等待商品续页关联" not in reason
-        ]
+        if "review_issues" in merged:
+            merged["review_issues"] = [item for item in merged["review_issues"]
+                                      if item["code"] != "awaiting_continuation"]
+            reasons = [item["message"] for item in merged["review_issues"]]
+        else:
+            reasons = list(merged.get("review_reasons") or [])
         merged["review_reasons"] = reasons
         merged["signature_check"] = derive_signature_check(
             merged.get("fields") or {}, merged.get("signature_check")
@@ -223,7 +225,7 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
         if override:
             for key in (
                 "fields", "field_metadata", "product_table", "date_check",
-                "seal_check", "signature_check", "review_reasons", "review_status",
+                "seal_check", "signature_check", "review_reasons", "review_issues", "review_status",
                 "final_result", "overall", "human_note", "error_type",
             ):
                 if key in override:

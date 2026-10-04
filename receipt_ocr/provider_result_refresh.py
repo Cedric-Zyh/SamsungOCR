@@ -2,13 +2,14 @@
 
 from copy import deepcopy
 
-from .domain.decision import OPTIONAL_STAGE_REASONS, finalize_result
+from .domain.decision import finalize_result
+from .persistence.issue_migration import OPTIONAL_STAGE_REASONS, migrate_issues
 from .domain.fields.schema import PRINTED_FIELDS
 from .domain.parsing import compare_dates, parse_date
 from .domain.parsing.parsing_seals import compare_seal_text_strict
 from .provider_field_policy import DZT_LAYOUT_REASONS, accept_real_dzt_fields
 from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
-from receipt_ocr.recognition.seal.policy import combine_seal_provider_checks
+from receipt_ocr.recognition.seal.postprocess.providers import combine_seal_provider_checks
 
 
 REFRESH_ACTION = "识别规则更新"
@@ -189,4 +190,5 @@ def refresh_provider_result(current):
             result[key] = [reason for reason in result[key] if reason not in remove]
     if not refreshed and not accepted_fields and result == current:
         return result
+    result["review_issues"] = migrate_issues(result)
     return finalize_result(result)

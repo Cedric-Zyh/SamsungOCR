@@ -5,7 +5,6 @@ from .pipeline import (
     complete_result,
     execute_stage,
     normalize_result_contract,
-    run_legacy,
 )
 from .plans import validate_config, run_configured
 from .stage_coordinator import ReceiptAnalyzer
@@ -17,7 +16,7 @@ __all__ = [
     "resolve_recognition_options",
     "complete_result",
     "execute_stage",
-    "run_legacy", "validate_config", "run_configured", "normalize_result_contract",
+    "validate_config", "run_configured", "normalize_result_contract",
 ]
 
 

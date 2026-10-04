@@ -1,5 +1,7 @@
+import {createRecordTable} from './table.mjs';
+import {createRecordQuery} from './query.mjs';
 import {createApiClients} from '../core/api.mjs';
-import {localToday, filenameParts, statusClass, checkStatusLabel, escapeHtml} from '../core/ui.mjs';
+import {localToday, escapeHtml} from '../core/ui.mjs';
 import {activeFilterEntries, recordReviewScope} from './record_filters.mjs';
 import {createImportCalendar} from '../imports/import_calendar.mjs';
 import {createRecordRow} from './record_row.mjs';
@@ -15,17 +17,28 @@ export function createRecords({
   const {document, window, location, FormData, URLSearchParams, AbortController, setTimeout, clearTimeout} = environment;
   const {$, $$, toast} = ui;
   const recordRow = createRecordRow({ReceiptWorkbench, recordsState});
-  let recordSearchTimer, recordResetTimer, recordComposing = false;
+  let recordResetTimer;
+  const searchState = {timer: null, composing: false};
   let tablePopover, tablePopoverAnchor;
   let bulkActionPending = false;
   const selection = createRecordSelection({
     recordsState, $, $$, canBulkConfirm: item => canBulkConfirm(item),
-    isBusy: () => !!recordsState.recordLoading || bulkActionPending || recordComposing
+    isBusy: () => !!recordsState.recordLoading || bulkActionPending || searchState.composing
   });
   const {toggleSelected, selectCurrentPage, updateSelectionToolbar} = selection;
   const calendar = createImportCalendar({environment, ui, api, services, prefix: 'calendar', popup: '#import-calendar',
     readDate: () => $('#import-date').value,
     selectDate: day => { setImportDate(day); changeImportDate(); }});
+
+  const {renderRecords, showRecordEmptyState} = createRecordTable({
+    environment, ui, recordsState, currentFilters, recordRow, toggleSelected,
+    startRecordsReview, openProcessHistory, deleteRecords, retryOne
+  });
+  const {loadRecords, scheduleRecordSearch} = createRecordQuery({
+    environment, ui, recordsState, services, searchState, syncColumnFilters, renderFilterChips,
+    closeMoreMenu: () => { if (tablePopover?.id === 'record-more-menu') closeTablePopover(); },
+    updateSelectionToolbar, showRecordEmptyState, renderRecords
+  });
 
   function currentFilters() {
     const filters = Object.fromEntries(new FormData($('#filters')));
@@ -36,7 +49,7 @@ export function createRecords({
     return recordReviewScope(currentFilters(), kind, [...recordsState.selected]);
   }
   async function startRecordsReview(kind = 'filtered', recordId) {
-    if (recordComposing || recordsState.recordLoading || recordSearchTimer) {
+    if (searchState.composing || recordsState.recordLoading || searchState.timer) {
       toast('正在更新筛选，请稍候再开始复核', 'warning');
       return;
     }
@@ -96,19 +109,6 @@ export function createRecords({
     await loadRecords({page: 1, scrollToTable: true});
   }
 
-  function showRecordEmptyState({failed = false, message = ''} = {}) {
-    const filters = currentFilters();
-    const hasConditions = activeFilterEntries(filters).some(({key}) => key !== 'task_id');
-    const title = failed ? '记录加载失败' : hasConditions ? '没有符合筛选条件的回单' : '当前范围还没有回单';
-    const detail = failed ? message || '连接暂时不可用，请稍后重试。'
-      : hasConditions ? '可清除附加筛选后重试，导入日期和任务范围会保留。'
-      : filters.task_id ? '该任务暂无回单，可切换导入日期查看其他记录。' : '所选日期暂无导入记录，可切换日期查看。';
-    const action = failed ? '<button type="button" class="secondary-button" data-record-retry>重新加载</button>'
-      : hasConditions ? '<button type="button" class="secondary-button" data-clear-record-filters>清除附加筛选</button>'
-      : '<button type="button" class="secondary-button" data-record-date>选择其他日期</button>';
-    $('#records-body').innerHTML = `<tr><td colspan="8" class="empty-state"><div class="records-empty"><strong>${title}</strong><p>${escapeHtml(detail)}</p><div class="records-empty-actions">${action}</div></div></td></tr>`;
-  }
-
   function setImportDate(value) {
     $('#import-date').value = $('#import-date').defaultValue = value || localToday();
     calendar.sync();
@@ -122,10 +122,10 @@ export function createRecords({
       return false;
     }
 
-    clearTimeout(recordSearchTimer);
+    clearTimeout(searchState.timer);
     clearTimeout(recordResetTimer);
-    recordSearchTimer = recordResetTimer = null;
-    recordComposing = false;
+    searchState.timer = recordResetTimer = null;
+    searchState.composing = false;
     recordsState.recordController?.abort();
     recordsState.recordRequest = (recordsState.recordRequest || 0) + 1;
     recordsState.recordLoading = false;
@@ -210,115 +210,7 @@ export function createRecords({
     $('input,select,button', popover)?.focus();
   }
 
-  function scheduleRecordSearch(immediate = false) {
-    clearTimeout(recordSearchTimer);
-    recordsState.recordPage = 1;
-    recordsState.recordController?.abort();
-    recordsState.recordRequest = (recordsState.recordRequest || 0) + 1;
-    $('#record-filter-status').textContent = '正在筛选…';
-    recordsState.selected.clear(); $('#select-all').checked = false; $('#select-all').disabled = true; updateSelectionToolbar();
-    renderFilterChips();
-    $('#records-body').inert = true;
-    $('#records-body').setAttribute('aria-busy', 'true');
-    if (!recordComposing) recordSearchTimer = setTimeout(loadRecords, immediate ? 0 : 150);
-  }
   function isRecordFilter(target) { return target.form === $('#filters') && !['hidden','reset','submit'].includes(target.type); }
-
-  async function loadRecords({background = false, page = recordsState.recordPage, scrollToTable = false} = {}) {
-    if (background && (recordComposing || recordsState.recordLoading || recordSearchTimer)) return;
-    clearTimeout(recordSearchTimer);
-    recordSearchTimer = null;
-    recordsState.recordController?.abort();
-    const controller = recordsState.recordController = new AbortController();
-    $('#filters [name=task_id]').value = recordsState.batchFilter;
-    $$('[data-filter]').forEach(button => button.classList.toggle('active', button.dataset.filter === $('#filters').elements.namedItem('overall').value));
-    syncColumnFilters();
-    renderFilterChips();
-    const params = new URLSearchParams(new FormData($('#filters')));
-    const filterKey = params.toString();
-    if (filterKey !== recordsState.recordFilterKey) { page = 1; background = false; }
-    recordsState.recordFilterKey = filterKey;
-    params.set('page', String(page || 1)); params.set('page_size', String(recordsState.recordPageSize));
-
-    if (tablePopover?.id === 'record-more-menu') closeTablePopover();
-    const requestId = recordsState.recordRequest = (recordsState.recordRequest || 0) + 1;
-    recordsState.recordLoading = true; recordsState.recordAttemptAt = Date.now();
-    if (!background) { recordsState.selected.clear(); updateSelectionToolbar(); }
-    const body = $('#records-body');
-    if (!background) { $('#select-all').disabled = true; body.inert = true; }
-    body.setAttribute('aria-busy', 'true');
-    $('#records-page-prev').disabled = $('#records-page-next').disabled = true;
-    $('#record-filter-status').textContent = background ? '正在更新记录…' : '正在筛选…';
-    try {
-      const result = await (services.records.list(params, {signal: controller.signal}));
-      if (requestId !== recordsState.recordRequest) return;
-      const lastPage = Math.max(1, Math.ceil(result.total / result.page_size));
-      if (result.page > lastPage) { recordsState.recordLoading = false; return await loadRecords({background, page:lastPage, scrollToTable}); }
-      recordsState.records = result.items; recordsState.recordPage = result.page; recordsState.recordTotal = result.total;
-      recordsState.recordsLoaded = true; recordsState.recordsStale = false;
-      const visibleIds = new Set(recordsState.records.map(record => Number(record.id)));
-      recordsState.selected = new Set([...recordsState.selected].filter(id => visibleIds.has(id)));
-      $('#record-count').textContent = `共 ${result.total} 张`;
-      $('#records-page-info').textContent = `第 ${result.page} / ${lastPage} 页 · 本页 ${result.items.length} 张`;
-      $('#records-page-prev').disabled = result.page <= 1;
-      $('#records-page-next').disabled = result.page >= lastPage;
-    } catch (error) {
-      if (requestId !== recordsState.recordRequest || error.name === 'AbortError') return;
-      $('#record-filter-status').classList.remove('sr-only');
-      $('#record-filter-status').textContent = background ? '记录暂未更新，当前选择已保留' : '未能完成筛选，可在下方重新加载';
-      if (!background) {
-        recordsState.records = []; recordsState.recordsLoaded = false; recordsState.recordTotal = 0;
-        $('#record-count').textContent = '数量未更新';
-        $('#records-page-info').textContent = '加载失败';
-        showRecordEmptyState({failed: true, message: error.message});
-      } else {
-        const lastPage = Math.max(1, Math.ceil(recordsState.recordTotal / recordsState.recordPageSize));
-        $('#records-page-prev').disabled = recordsState.recordPage <= 1;
-        $('#records-page-next').disabled = recordsState.recordPage >= lastPage;
-      }
-      toast(error.message, 'danger'); return;
-    } finally {
-      if (requestId === recordsState.recordRequest) { recordsState.recordLoading = false; body.inert = false; body.removeAttribute('aria-busy'); $('#select-all').disabled = !recordsState.records.length; updateSelectionToolbar(); }
-    }
-    $('#record-filter-status').textContent = `已加载 ${recordsState.records.length} 张回单`;
-    $('#record-filter-status').classList.add('sr-only');
-    if (!recordsState.records.length) showRecordEmptyState();
-    else {
-      const table = $('.record-filter-table');
-      const previousScroll = {top: table.scrollTop, left: table.scrollLeft};
-      const active = document.activeElement;
-      const keepFocus = background && body.contains?.(active);
-      const focusTarget = !keepFocus ? '' : active.matches?.('.record-select') ? `.record-select[value="${Number(active.value)}"]`
-        : active.dataset.openReview ? `[data-open-review="${Number(active.dataset.openReview)}"].${active.classList.contains('record-file-link') ? 'record-file-link' : 'row-review'}`
-        : active.dataset.moreRecord ? `[data-more-record="${Number(active.dataset.moreRecord)}"]` : '';
-      body.innerHTML = recordsState.records.map(recordRow).join('');
-      if (focusTarget) $(focusTarget, body)?.focus({preventScroll: true});
-      if (!scrollToTable) { table.scrollTop = previousScroll.top; table.scrollLeft = previousScroll.left; }
-      $$('.record-select', body).forEach(input => input.addEventListener('change', () => toggleSelected(Number(input.value), input.checked)));
-      $$('[data-open-review]', body).forEach(button => button.addEventListener('click', () => {
-        const id = Number(button.dataset.openReview);
-        if (button.dataset.reviewMode === 'view') {
-          location.hash = `view/${id}`;
-          return;
-        }
-        startRecordsReview('filtered', id);
-      }));
-      $$('[data-process-result]', body).forEach(button => button.addEventListener('click', () => openProcessHistory({
-        resultId: Number(button.dataset.processResult),
-        filename: button.dataset.filename || ''
-      })));
-      $$('[data-delete-row]', body).forEach(button => button.addEventListener('click', () => deleteRecords([Number(button.dataset.deleteRow)])));
-      $$('[data-retry-row]', body).forEach(button => button.addEventListener('click', () => retryOne(Number(button.dataset.retryRow), button)));
-    }
-    if (scrollToTable) {
-      const table = $('.record-filter-table');
-      table.scrollTo?.({top: 0, behavior: 'instant'});
-      const bounds = table.getBoundingClientRect?.();
-      if (bounds && (bounds.top < 0 || bounds.top > window.innerHeight - 120)) {
-        table.scrollIntoView?.({block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'instant' : 'smooth'});
-      }
-    }
-  }
 
   function canBulkConfirm(item) {
     const date = item.date_check || {}, seal = item.seal_check || {};
@@ -445,11 +337,11 @@ export function createRecords({
       closeTablePopover(); deleteRecords([id]);
     });
 
-    document.addEventListener('compositionstart', event => { if (isRecordFilter(event.target)) { recordComposing = true; scheduleRecordSearch(); } });
-    document.addEventListener('compositionend', event => { if (isRecordFilter(event.target)) { recordComposing = false; scheduleRecordSearch(); } });
+    document.addEventListener('compositionstart', event => { if (isRecordFilter(event.target)) { searchState.composing = true; scheduleRecordSearch(); } });
+    document.addEventListener('compositionend', event => { if (isRecordFilter(event.target)) { searchState.composing = false; scheduleRecordSearch(); } });
     document.addEventListener('input', event => { if (isRecordFilter(event.target)) scheduleRecordSearch(event.target.type === 'date' || event.target.tagName === 'SELECT'); });
     document.addEventListener('change', event => { if (isRecordFilter(event.target) && ['SELECT', 'INPUT'].includes(event.target.tagName) && event.target.type !== 'search') scheduleRecordSearch(true); });
-    $('#filters').addEventListener('submit', event => { event.preventDefault(); if (!recordComposing) loadRecords(); });
+    $('#filters').addEventListener('submit', event => { event.preventDefault(); if (!searchState.composing) loadRecords(); });
 
     $('#select-all').addEventListener('change', event => selectCurrentPage(event.target.checked));
     $('#bulk-pass').addEventListener('click', () => bulkReview('确认通过', '通过'));

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .dependencies import ResultDependencies
+
 from datetime import date, datetime
 import hashlib
 import json
@@ -20,7 +22,7 @@ def page_options():
     return page, page_size
 
 
-def reviewable_results(ctx, rows):
+def reviewable_results(ctx: ResultDependencies, rows):
     """Filter logical receipts before pagination, including busy linked pages."""
     with ctx.database.connect() as connection:
         has_jobs = connection.execute(
@@ -66,8 +68,8 @@ def deferred_scope_metadata(rows, deferred_ids):
                 *(row.get("page_group") or {}).get("continuation_result_ids", [])})]}
 
 
-def receipt_listing(ctx, *, latest_by_filename):
-    filters = {key: request.args.get(key, "") for key in ctx.RESULT_FILTERS}
+def receipt_listing(ctx: ResultDependencies, *, latest_by_filename):
+    filters = {key: request.args.get(key, "") for key in ctx.result_filters}
     paged = "page" in request.args or "page_size" in request.args
     try:
         page, page_size = page_options() if paged else (1, min(max(request.args.get("limit", 200, type=int), 1), 2000))
@@ -97,7 +99,7 @@ def receipt_listing(ctx, *, latest_by_filename):
     return jsonify({**result, "page": page, "page_size": page_size} if paged else result["items"])
 
 
-def daily_results(ctx):
+def daily_results(ctx: ResultDependencies):
     day = request.args.get("import_date", "")
     try:
         if date.fromisoformat(day).isoformat() != day:
@@ -116,7 +118,7 @@ def daily_results(ctx):
             if not result_id or result_id in seen:
                 continue
             try:
-                projected = ctx._project_paginated_result(ctx.database.get_result(result_id))
+                projected = ctx.project_result(ctx.database.get_result(result_id))
                 if projected["id"] not in seen:
                     rows.append(projected)
                     seen.add(projected["id"])
@@ -136,11 +138,11 @@ def daily_results(ctx):
     return jsonify(rows)
 
 
-def list_results(ctx):
+def list_results(ctx: ResultDependencies):
     return receipt_listing(ctx, latest_by_filename=True)
 
 
-def import_dates(ctx):
+def import_dates(ctx: ResultDependencies):
     month = request.args.get("month", "")
     try:
         parsed = datetime.strptime(month, "%Y-%m")
@@ -151,7 +153,7 @@ def import_dates(ctx):
     return jsonify(ctx.database.import_date_counts(month, request.args.get("ocr_backend", "")))
 
 
-def list_result_history(ctx):
+def list_result_history(ctx: ResultDependencies):
     return receipt_listing(ctx, latest_by_filename=False)
 
 
@@ -164,23 +166,23 @@ def with_review_revision(result):
     return {**result, "review_revision": review_revision(result)}
 
 
-def get_result(ctx, result_id: int):
+def get_result(ctx: ResultDependencies, result_id: int):
     try:
-        return jsonify(with_review_revision(ctx._project_paginated_result(ctx.database.get_result(result_id))))
+        return jsonify(with_review_revision(ctx.project_result(ctx.database.get_result(result_id))))
     except KeyError:
         abort(404)
 
 
-def review_history(ctx, result_id: int):
+def review_history(ctx: ResultDependencies, result_id: int):
     return jsonify(ctx.database.history(result_id))
 
 
-def result_ground_truth(ctx, result_id: int):
+def result_ground_truth(ctx: ResultDependencies, result_id: int):
     try:
         current = ctx.database.get_result(result_id)
     except KeyError:
         abort(404)
-    truth = ctx.load_ground_truth(ctx.GROUND_TRUTH_PATH)
+    truth = ctx.load_ground_truth(ctx.ground_truth_path)
     filename = current["filename"]
     return jsonify({
         "filename": filename,

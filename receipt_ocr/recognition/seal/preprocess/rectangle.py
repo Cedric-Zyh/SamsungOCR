@@ -9,7 +9,7 @@ from receipt_ocr.imaging.contracts import SealRegion
 def prepare(source: Path, regions: list[SealRegion], destination: str | Path):
     """Correct page/rectangle orientation while preserving page coordinates."""
 
-    from . import orientation
+    from . import rectangle_orientation as orientation
 
     return orientation.prepare_rectangles(source, regions, destination)
 

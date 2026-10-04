@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from ..domain.documents.pagination import merge_paginated_results, page_group_candidates, page_identity
 from ..domain.fields.schema import derive_signature_check
 from .database_clock import now_iso
+from .read_model import SUMMARY_COLUMNS, load_selected_receipts
 
 
 class ResultOperationsMixin:
@@ -110,8 +111,8 @@ class ResultOperationsMixin:
                 changed += 1
             return changed
 
-    def get_result(self, result_id: int) -> dict:
-        with self.connect() as connection:
+    def get_result(self, result_id: int, *, _connection: sqlite3.Connection | None = None) -> dict:
+        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
             row = connection.execute("SELECT * FROM results WHERE id = ? AND deleted_at=''", (result_id,)).fetchone()
         if not row:
             raise KeyError(result_id)
@@ -172,6 +173,7 @@ class ResultOperationsMixin:
     def query_receipts(
         self, *, filters: dict | None = None, latest_by_filename: bool = False,
         limit: int | None = None, offset: int = 0, ordering: str = "id",
+        _connection: sqlite3.Connection | None = None,
     ) -> dict:
         """Filter and paginate complete logical receipts, including all pages.
 
@@ -199,56 +201,60 @@ class ResultOperationsMixin:
                 (task_id<>'' AND (task_id,page_key) IN
                  (SELECT task_id,page_key FROM results WHERE deleted_at='' AND substr(created_at,1,10)=?)))""")
             parameters.extend([day, day])
-        with self.connect() as connection:
+        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
+            if _connection is None:
+                connection.execute("BEGIN")
             rows = connection.execute(
-                f"SELECT * FROM results WHERE {' AND '.join(conditions)} ORDER BY id DESC", parameters
+                f"SELECT {SUMMARY_COLUMNS} FROM results WHERE {' AND '.join(conditions)} ORDER BY id DESC", parameters
             ).fetchall()
-        physical = [self._row_to_result(row) for row in rows]
-        if latest_by_filename:
-            # Legacy clients could resubmit a page into the same task. Keep
-            # only its current physical version before building a logical
-            # receipt, otherwise continuation rows are appended twice.
-            backend = str(filters.get("ocr_backend", "")).strip()
-            current_pages = {}
-            for item in physical:
-                key = (item["task_id"], item["filename"]) if item["task_id"] else ("", item["id"])
-                previous = current_pages.get(key)
-                if previous is None or (backend and previous.get("ocr_backend") != backend
-                                        and item.get("ocr_backend") == backend):
-                    current_pages[key] = item
-            physical = sorted(current_pages.values(), key=lambda item: item["id"], reverse=True)
-        items = merge_paginated_results(physical)
-        # Select the backend stream before filename dedup, preserving the
-        # latest production result even when another backend ran more recently.
-        stream_filters = {key: filters.get(key, "") for key in ("ocr_backend", "import_date", "task_id")}
-        items = [item for item in items if _matches_filters(item, stream_filters)]
-        if latest_by_filename:
-            seen, current = set(), []
-            for item in items:
-                key = str(item.get("filename") or f"__result_{item.get('id', '')}")
-                if key not in seen:
-                    seen.add(key)
-                    current.append(item)
-            items = current
-        filtered = [item for item in items if _matches_filters(item, filters)]
-        if ordering == "review":
-            completed = {"无需复核", "确认通过", "确认不通过"}
+            physical = [self._row_to_result(row) for row in rows]
+            if latest_by_filename:
+                # Legacy clients could resubmit a page into the same task. Keep
+                # only its current physical version before building a logical
+                # receipt, otherwise continuation rows are appended twice.
+                backend = str(filters.get("ocr_backend", "")).strip()
+                current_pages = {}
+                for item in physical:
+                    key = (item["task_id"], item["filename"]) if item["task_id"] else ("", item["id"])
+                    previous = current_pages.get(key)
+                    if previous is None or (backend and previous.get("ocr_backend") != backend
+                                            and item.get("ocr_backend") == backend):
+                        current_pages[key] = item
+                physical = sorted(current_pages.values(), key=lambda item: item["id"], reverse=True)
+            items = merge_paginated_results(physical)
+            # Select the backend stream before filename dedup, preserving the
+            # latest production result even when another backend ran more recently.
+            stream_filters = {key: filters.get(key, "") for key in ("ocr_backend", "import_date", "task_id")}
+            items = [item for item in items if _matches_filters(item, stream_filters)]
+            if latest_by_filename:
+                seen, current = set(), []
+                for item in items:
+                    key = str(item.get("filename") or f"__result_{item.get('id', '')}")
+                    if key not in seen:
+                        seen.add(key)
+                        current.append(item)
+                items = current
+            filtered = [item for item in items if _matches_filters(item, filters)]
+            if ordering == "review":
+                completed = {"无需复核", "确认通过", "确认不通过"}
 
-            def review_group(item: dict) -> int:
-                if item.get("review_status") in completed:
-                    return 0
-                if item.get("overall") == "识别失败" or item.get("error_message"):
-                    return 2
-                return 1
+                def review_group(item: dict) -> int:
+                    if item.get("review_status") in completed:
+                        return 0
+                    if item.get("overall") == "识别失败" or item.get("error_message"):
+                        return 2
+                    return 1
 
-            filtered.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
-            filtered.sort(
-                key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
-                reverse=True,
-            )
-            filtered.sort(key=review_group)
-        return {"items": filtered[offset:] if limit is None else filtered[offset:offset + limit],
-                "total": len(filtered)}
+                filtered.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
+                filtered.sort(
+                    key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+                    reverse=True,
+                )
+                filtered.sort(key=review_group)
+            selected = filtered[offset:] if limit is None else filtered[offset:offset + limit]
+            return {"items": load_selected_receipts(
+                        connection, selected, self._row_to_result, merge_paginated_results
+                    ), "total": len(filtered)}
 
     def delete_results(self, ids: list[int]) -> list[int]:
         """Delete selected daily records and their hidden repeats/linked pages."""

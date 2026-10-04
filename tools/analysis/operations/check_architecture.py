@@ -15,6 +15,12 @@ RULES = {
         "receipt_ocr.providers",
         "receipt_ocr.imaging",
         "receipt_ocr.web",
+        "receipt_ocr.application",
+        "receipt_ocr.stages",
+        "receipt_ocr.persistence",
+        "receipt_ocr.recognition",
+        "receipt_ocr.runtime",
+        "receipt_ocr.jobs",
         "PIL",
         "cv2",
         "numpy",
@@ -22,13 +28,16 @@ RULES = {
         "pathlib",
         "tempfile",
     },
-    "providers": {"receipt_ocr.web"},
-    "imaging": {"receipt_ocr.web", "receipt_ocr.providers"},
+    "providers": {"receipt_ocr.web", "receipt_ocr.application", "receipt_ocr.stages"},
+    "imaging": {"receipt_ocr.web", "receipt_ocr.providers", "receipt_ocr.application", "receipt_ocr.stages"},
     "web": {"receipt_ocr.imaging", "receipt_ocr.providers.paddle_runtime"},
+    "application": {"receipt_ocr.web", "receipt_ocr.persistence"},
+    "stages": {"receipt_ocr.web", "receipt_ocr.persistence", "receipt_ocr.jobs"},
+    "persistence": {"receipt_ocr.web", "receipt_ocr.application", "receipt_ocr.stages", "receipt_ocr.providers", "receipt_ocr.imaging", "receipt_ocr.recognition"},
 }
 
 
-def _imports(path: Path) -> list[tuple[int, str]]:
+def _imports(path: Path, root: Path = PACKAGE) -> list[tuple[int, str]]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     result = []
     for node in ast.walk(tree):
@@ -36,8 +45,14 @@ def _imports(path: Path) -> list[tuple[int, str]]:
             result.extend((node.lineno, alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                continue
-            result.append((node.lineno, node.module or ""))
+                package = (root.name, *path.relative_to(root).parent.parts)
+                base = package[:len(package) - node.level + 1]
+                module = ".".join((*base, *filter(None, (node.module or "").split("."))))
+            else:
+                module = node.module or ""
+            result.append((node.lineno, module))
+            result.extend((node.lineno, f"{module}.{alias.name}")
+                          for alias in node.names if alias.name != "*")
     return result
 
 
@@ -48,13 +63,13 @@ def violations(root: Path = PACKAGE) -> list[str]:
         if not layer_root.exists():
             continue
         for path in sorted(layer_root.rglob("*.py")):
-            for line, imported in _imports(path):
+            for line, imported in _imports(path, root):
                 if any(
                     imported == item or imported.startswith(item + ".")
                     for item in forbidden
                 ):
                     errors.append(
-                        f"{path.relative_to(ROOT)}:{line}: {layer} cannot import {imported}"
+                        f"{root.name}/{path.relative_to(root)}:{line}: {layer} cannot import {imported}"
                     )
     return errors
 

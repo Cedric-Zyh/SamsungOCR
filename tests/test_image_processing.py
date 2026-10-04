@@ -195,6 +195,44 @@ def test_wide_rectangular_border_remains_rectangular_stamp(tmp_path):
     assert seal_region_is_rectangular(source, region) is True
 
 
+def test_text_heavy_rectangular_border_remains_rectangular_stamp(tmp_path):
+    """Interior lettering must not lower a rectangle's outer-shape score."""
+    import cv2
+
+    image = np.full((600, 1000, 3), 255, dtype=np.uint8)
+    ink = (60, 60, 220)
+    cv2.rectangle(image, (100, 160), (900, 440), ink, 18)
+    cv2.putText(
+        image,
+        "0416-4665555",
+        (140, 330),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.8,
+        ink,
+        5,
+    )
+    source = tmp_path / "text-heavy-rectangle.jpg"
+    assert cv2.imwrite(str(source), image)
+    region = SealRegion(.08, .20, .84, .48, "red", "收货客户章", .1)
+
+    assert seal_region_is_rectangular(source, region) is True
+    assert seal_region_shape(source, region) == "rectangle"
+
+
+def test_7314696142_customer_rectangle_with_concave_ink():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "数据" / "7314696142.jpg"
+    region = SealRegion(
+        0.5743734842360549, 0.7591564927857936,
+        0.2445432497978982, 0.0793562708102109,
+        "red", "收货客户章", 0.0, "rectangle",
+    )
+
+    assert seal_region_shape(source, region) == "rectangle"
+    assert seal_region_is_elliptical(source, region) is False
+
+
 def test_unwrapped_seal_bands_preserve_three_exact_strips(tmp_path):
     import cv2
 

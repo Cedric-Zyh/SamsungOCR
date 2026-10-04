@@ -18,7 +18,9 @@ def seal_region_is_rectangular(
     rectangular border occupies almost all of its rotated bounding box,
     whereas an oval occupies roughly pi/4.  Use the colored border geometry
     and retain the historical aspect-ratio fallback only when no usable
-    contour survives the chroma gate.
+    contour survives the chroma gate.  The convex hull is measured instead
+    of the raw contour: lettering and broken ink make a real rectangular
+    border highly concave, even though its four outer corners remain clear.
     """
     image = _read_image(source)
     height, width = image.shape[:2]
@@ -55,9 +57,16 @@ def seal_region_is_rectangular(
         } or ratio >= 1.45
     rect = cv2.minAreaRect(contour)
     rw, rh = rect[1]
-    extent = cv2.contourArea(contour) / max(1.0, rw * rh)
-    perimeter = cv2.arcLength(contour, True)
-    vertices = len(cv2.approxPolyDP(contour, perimeter * 0.025, True))
+    # Text inside a rectangular stamp creates deep concavities in the
+    # connected contour.  Its convex hull preserves the four outer corners;
+    # an oval's hull still fills only about pi/4 of its rotated box.
+    hull = cv2.convexHull(contour)
+    extent = cv2.contourArea(hull) / max(1.0, rw * rh)
+    # Evaluate corners on the same outer hull as the extent.  Lettering and
+    # gaps in the border add concave vertices to the raw contour, even when
+    # the stamp's outer boundary is an unambiguous rectangle.
+    perimeter = cv2.arcLength(hull, True)
+    vertices = len(cv2.approxPolyDP(hull, perimeter * 0.025, True))
     return bool(extent >= 0.84 and vertices <= 8)
 
 

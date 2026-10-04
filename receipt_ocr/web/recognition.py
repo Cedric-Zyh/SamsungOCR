@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .dependencies import RecognitionDependencies
+
 from pathlib import Path
 import uuid
 
@@ -12,7 +14,7 @@ from receipt_ocr.application import resolve_recognition_options
 from receipt_ocr.providers.catalog import backend_label
 
 
-def analyze_upload(ctx):
+def analyze_upload(ctx: RecognitionDependencies):
     task_id = request.form.get("task_id", "").strip()
     if task_id:
         try:
@@ -29,14 +31,14 @@ def analyze_upload(ctx):
         original_name = Path(upload.filename).name
         safe_name = secure_filename(original_name) or f"receipt{Path(original_name).suffix}"
         suffix = Path(safe_name).suffix.lower()
-        if suffix not in ctx.ALLOWED_EXTENSIONS:
+        if suffix not in ctx.allowed_extensions:
             return jsonify({"error": "仅支持 JPG、PNG、BMP、WEBP 图片"}), 400
         stored_name = f"{uuid.uuid4().hex}{suffix}"
-        source = ctx.UPLOAD_DIR / stored_name
+        source = ctx.upload_dir / stored_name
         upload.save(source)
     elif sample_name:
-        source = (ctx.DATA_DIR / Path(sample_name).name).resolve()
-        if source.parent != ctx.DATA_DIR.resolve() or not source.is_file():
+        source = (ctx.data_dir / Path(sample_name).name).resolve()
+        if source.parent != ctx.data_dir.resolve() or not source.is_file():
             abort(404)
         original_name = source.name
         stored_name = f"sample:{source.name}"
@@ -50,7 +52,7 @@ def analyze_upload(ctx):
                 recognition_config=task.get("recognition_config"),
                 ocr_backend=task.get("ocr_backend"),
                 seal_recognition_mode=task.get("seal_recognition_mode"),
-                api_enabled=ctx.analyzer.seal_api.enabled,
+                api_enabled=ctx.seal_api_enabled,
             )
         except KeyError:
             return jsonify({"error": "批量任务不存在"}), 404
@@ -62,7 +64,7 @@ def analyze_upload(ctx):
                 recognition_config=request.form.get("recognition_config", "null"),
                 ocr_backend=request.form.get("ocr_backend", "auto"),
                 seal_recognition_mode=request.form.get("seal_recognition_mode"),
-                api_enabled=ctx.analyzer.seal_api.enabled,
+                api_enabled=ctx.seal_api_enabled,
             )
         except (ValueError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 400
@@ -72,25 +74,13 @@ def analyze_upload(ctx):
             options.seal_recognition_mode, options.recognition_config,
         )
 
-    token = uuid.uuid4().hex
-    preview_name = f"{token}.jpg"
-    artifacts = ctx.ARTIFACT_DIR / token
     try:
-        result = ctx._configured_analyze(
+        result, preview_name = ctx.documents.recognize(
             source,
-            ctx.PREVIEW_DIR / preview_name,
-            artifact_dir=artifacts,
-            artifact_url_prefix=f"/files/artifacts/{token}",
             recognition_config=options.recognition_config,
             filename=original_name,
             ocr_backend=options.ocr_backend,
             seal_recognition_mode=options.seal_recognition_mode,
-        )
-        result.update(
-            filename=original_name,
-            preview_url=f"/files/previews/{preview_name}",
-            created_at=ctx.now_iso(),
-            updated_at=ctx.now_iso(),
         )
         record_id = ctx.database.insert_result(
             filename=original_name,
@@ -103,7 +93,7 @@ def analyze_upload(ctx):
         ctx.database.update_task(task_id, success=True, pending_review=result["review_status"] == "待复核")
         return jsonify(result)
     except Exception as exc:
-        ctx.app.logger.exception("Receipt analysis failed")
+        ctx.logger.exception("Receipt analysis failed")
         failure = {
             "filename": original_name,
             "overall": "识别失败",

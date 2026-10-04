@@ -1,4 +1,4 @@
-/** Read saved failures, including records created before detailed error capture. */
+/** Read provider failures from evidence, independent of localized wording. */
 export function providerErrors(record) {
   const errors = new Set();
   for (const variants of Object.values(record.recognition_variants || {})) {
@@ -6,13 +6,13 @@ export function providerErrors(record) {
       if (variant.method === 'danzhengtong' && variant.error) errors.add(String(variant.error));
     }
   }
-  for (const reason of record.review_reasons || []) {
-    const text = String(reason);
-    const match = text.match(/(?:danzhengtong|单证通)[：:]\s*(.*)/i);
-    if (match?.[1]) errors.add(match[1]);
-    else if (/(?:danzhengtong|单证通)/i.test(text)) errors.add(text);
+  if (!errors.size) {
+    for (const issue of record.review_issues || []) {
+      if (issue.code === 'provider_failure' && issue.provider === 'danzhengtong') {
+        errors.add(String(issue.message));
+      }
+    }
   }
-  if (!errors.size && /单证通/.test(record.error_message || '')) errors.add(record.error_message);
   return [...errors];
 }
 

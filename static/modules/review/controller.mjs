@@ -1,12 +1,12 @@
+import {createReviewView} from './view.mjs';
 import {createApiClients} from '../core/api.mjs';
-import {localToday, filenameParts, statusPill, escapeHtml} from '../core/ui.mjs';
+import {localToday, statusPill, escapeHtml} from '../core/ui.mjs';
 import {createReviewImage} from './review_image.mjs';
 import {createReviewPreview} from './review_preview.mjs';
 import {reviewReadiness, reviewKeyboardAction} from './review_readiness.mjs';
-import {dateAuditText, sealEvidenceMarkup} from './review_provider_evidence.mjs';
 import {providerErrorIssues} from '../core/provider_errors.mjs';
 import {createReviewEditors} from './editors.mjs';
-import {collectReviewPayload, reviewSubmissionError} from './submission.mjs';
+import {createReviewSubmission} from './submission.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -24,6 +24,11 @@ export function createReview({
   const {$, $$, toast} = ui;
   const reviewImage = createReviewImage({environment, ui, reviewState});
   const reviewPreview = createReviewPreview({environment, ui});
+
+  const {submitReview} = createReviewSubmission({
+    ui, reviewState, services, currentReadiness, syncReviewReadiness,
+    markReviewSaved, continueReview, refreshVisibleResults
+  });
 
   function currentReadiness() {
     const item = reviewState.current || {}, content = $('#review-content');
@@ -81,6 +86,12 @@ export function createReview({
   }
   const {setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation} = createReviewEditors({
     ReceiptWorkbench, $, $$, statusPill, escapeHtml, setReviewDirty
+  });
+  const renderReview = createReviewView({
+    ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor, renderProductTable,
+    setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation, applyReviewMode,
+    focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
+    renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness
   });
   function showReviewEmpty({loading = false, error = ''} = {}) {
     reviewPreview.cancel();
@@ -162,79 +173,8 @@ export function createReview({
     }
     ensureReviewScope(item);
     reviewState.current = item; reviewState.reviewDirty = false; reviewState.reviewMode = mode;
-    $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
-    $('#review-dialog').dataset.reviewMode = mode;
-    $('#review-dialog-title').textContent = mode === 'view' ? '查看回单' : '人工复核';
-    $('#toggle-review-queue').classList.toggle('hidden', mode === 'view');
-    $('#review-session-progress').classList.toggle('hidden', mode === 'view');
-    $('.review-workspace').classList.toggle('view-mode', mode === 'view');
-    $('#review-title').textContent = filenameParts(item.filename).name;
-    $('#review-title').title = item.filename;
-    $('#review-subtitle').textContent = [item.fields?.['客户名称'], item.document_type?.label, item.page_group?.page_count > 1 ? `共 ${item.page_group.page_count} 页` : ''].filter(Boolean).join(' · ');
-    $('[data-save-state]').textContent = ''; $('[data-save-state]').classList.remove('unsaved');
-    const content = $('#review-content');
-    const replaceFocusedForm = content.contains?.(document.activeElement);
-    content.replaceChildren($('#review-template').content.cloneNode(true));
-    $('[name=result_id]', content).value = id;
-    const issues = ReceiptWorkbench.issues(item);
-    const renderFields = (selector, names) => { $(selector, content).innerHTML = names.map(name => fieldEditor(name, item.fields?.[name] || '', item.field_metadata?.[name])).join(''); };
-    renderFields('[data-fields]', fieldSchema.printed);
-    renderFields('[data-handwritten-fields]', fieldSchema.handwritten);
-    renderProductTable(item.product_table, content);
-    $('[data-product-count]', content).textContent = item.product_table?.status === '未执行' ? '未开启识别' : `${item.product_table?.rows?.length || 0} 行`;
-    $('[data-date-comparison]', content).innerHTML = `<span>要求到货 <b>${escapeHtml(item.fields?.['要求到货'] || item.date_check?.required || '未提供')}</b></span>`;
-    $('[data-date-result]', content).innerHTML = `<span>识别到的签收日期</span><b>${escapeHtml(item.date_check?.actual_display || item.date_check?.actual || '未识别')}</b>`;
-    $('[data-seal-comparison]', content).innerHTML = `<span>签章要求 <b>${escapeHtml(item.fields?.['签章要求'] || '未提供')}</b></span>`;
-    $('[data-seal-result]', content).textContent = item.seal_check?.message || '';
-    for (const key of ['date', 'seal', 'signature']) {
-      const status = ReceiptWorkbench.checkStatus(item, key);
-      const card = $(`[data-check-card="${key}"]`, content);
-      const blocking = ['date', 'seal'].includes(key) && status !== '匹配';
-      card.open = blocking;
-      card.classList.toggle('check-attention', blocking);
-      $(`[data-check-badge="${key}"]`, content).innerHTML = statusPill(status);
-    }
-    setupDateConfirmation(item, content);
-    const sealEvidence = sealEvidenceMarkup(item);
-    if (sealEvidence) {
-      const target = $('[data-seal-dual]', content);
-      target.classList.remove('hidden');
-      target.innerHTML = sealEvidence;
-    }
-    $('[data-date-audit-content]', content).textContent = dateAuditText(item);
-    setupSealConfirmation(item, content);
-    setupSignatureConfirmation(item, content);
-    $('[name=human_note]', content).value = item.human_note || '';
-    $('[name=error_type]', content).value = item.error_type || '';
-    applyReviewMode(mode, id, content);
-    reviewState.reviewImages = ReceiptWorkbench.imageSources(item);
-    $$('[data-image-source-group]', content).forEach(button => {
-      button.addEventListener('click', () => focusReviewImage(button.dataset.imageSourceGroup));
-    });
-    reviewImage.attach(content);
-    reviewPreview.attach(content, {
-      retry: () => setReviewImage(reviewState.reviewImageIndex, '', {retry: true}),
-      fallback: () => focusReviewImage('page'),
-    });
-    setReviewImage(0);
-    const firstImageIssue = issues.find(issue => ['date','seal'].includes(issue.target));
-    if (firstImageIssue) focusReviewImage(firstImageIssue.target);
-    $$('[data-focus-image]', content).forEach(button => button.addEventListener('click', () => focusReviewImage(button.dataset.focusImage)));
-    $('[data-status-summary]', content).addEventListener('click', event => {
-      const target = event.target.closest('[data-issue-target]');
-      if (target) focusReviewIssue(target.dataset.issueTarget);
-    });
-    reviewState.artifactTab = firstImageIssue?.target === 'seal' ? 'seals' : 'date';
-    $$('[data-artifact-tab]', content).forEach(button => { button.classList.toggle('active', button.dataset.artifactTab === reviewState.artifactTab); button.addEventListener('click', () => { reviewState.artifactTab = button.dataset.artifactTab; $$('[data-artifact-tab]', content).forEach(x => x.classList.toggle('active', x === button)); renderArtifacts(); }); });
-    renderArtifacts();
-    $('[data-retry]', content).addEventListener('click', () => { if (canLeaveReview()) retryOne(id); });
-    $('[data-save-pending]', content).addEventListener('click', () => submitReview('待复核', '需人工复核'));
-    $('[data-confirm-pass]', content).addEventListener('click', () => submitReview('确认通过', '通过'));
-    $('[data-confirm-fail]', content).addEventListener('click', () => submitReview('确认不通过', '不通过'));
-    $('#review-form', content).addEventListener('input', setReviewDirty);
-    $('#review-form', content).addEventListener('change', setReviewDirty);
-    $('#review-form', content).addEventListener('submit', event => event.preventDefault());
-    syncReviewReadiness();
+    const replaceFocusedForm = $('#review-content').contains?.(document.activeElement);
+    renderReview(item, id, mode);
     // Switching receipts stays inside a single modal history entry.
     const route = `${mode}/${id}`;
     if (document.body.dataset.activePage === 'review' || /^#(review|view)\//.test(location.hash)) history.replaceState(null, '', `#${route}`);
@@ -266,46 +206,6 @@ export function createReview({
       '[data-signature-choice]', '[data-signature-change]'
     ]) $(selector, content)?.setAttribute('disabled', 'disabled');
     $('[data-enter-review]', content).addEventListener('click', () => openReview(id, {mode: 'review'}));
-  }
-
-  async function submitReview(reviewStatus, finalResult) {
-    if (reviewState.reviewSaving) return;
-    const form = $('#review-form');
-    const {payload, saveGroundTruth, truthValue} = collectReviewPayload(
-      form, reviewStatus, finalResult, reviewState.current.review_revision,
-      selector => $$(selector, form)
-    );
-    const readiness = currentReadiness();
-    const validationError = reviewSubmissionError({
-      saveGroundTruth, truthValue, reviewStatus, ready: readiness.ready,
-      readinessMessage: readiness.message
-    });
-    if (validationError) return toast(validationError, 'warning');
-    const id = reviewState.current.id;
-    reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
-    const controls = $$('button,input,textarea,select', form).map(el => [el, el.disabled]);
-    reviewState.reviewSaving = true; controls.forEach(([el]) => el.disabled = true);
-    syncReviewReadiness();
-    $('[data-save-state]').textContent = '正在保存…';
-    let saved = false;
-    try {
-      reviewState.current = await (services.records.review(id, payload));
-      reviewState.reviewDirty = false; saved = true;
-      markReviewSaved(id, reviewStatus);
-      toast(reviewState.current.ground_truth_saved ? '复核与样单标注已保存' : '复核结果已保存');
-    } catch (error) {
-      const conflict = error.code === 'review_revision_conflict';
-      $('[data-save-state]').textContent = conflict ? '记录已更新，当前编辑已保留' : '保存失败，修改已保留';
-      toast(conflict ? `${error.message}。当前编辑已保留，请重新打开回单后核对。` : error.message, 'danger');
-    } finally {
-      reviewState.reviewSaving = false; controls.forEach(([el, disabled]) => el.disabled = disabled);
-      syncReviewReadiness();
-    }
-    if (saved) {
-      $('[data-save-state]').textContent = '已保存'; $('[data-save-state]').classList.remove('unsaved');
-      await continueReview().catch(error => toast(`已保存，下一张加载失败：${error.message}`, 'danger'));
-      refreshVisibleResults().catch(() => toast('已保存，列表暂未刷新，可稍后刷新查看'));
-    }
   }
 
   function dismissReview() {

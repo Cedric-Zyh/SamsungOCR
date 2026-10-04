@@ -84,3 +84,36 @@ test('QingTong rectangle preview uses the corrected crop after an automatic 180 
     url:'/files/artifacts/seal-after-180.jpg', label:'印章区域 · 已自动旋转 180°', group:'seal',
   });
 });
+
+test('local winning reading selects its own stamp instead of the remote candidate', () => {
+  const item = record();
+  item.seal_check.recognized = '三星售后6183342站';
+  item.seal_check.local_channel = {recognized: '三星售后6183342站', status: '匹配'};
+  item.processing_artifacts.seals = [
+    {index: 0, original_url: '/files/first.png', color_isolated_text: '04747-9521 | 三售882号'},
+    {index: 1, original_url: '/files/company.png', unwrapped_text: '其他公司章'},
+    {index: 2, original_url: '/files/customer.png', round_type_band_text: '三星售后6183342站',
+      color_isolated_oriented_url: '/files/customer-oriented.png'},
+  ];
+  assert.deepEqual(imageSources(item).filter(source => source.group === 'seal'), [
+    {url: '/files/customer-oriented.png', label: '印章区域 · 按章型文字旋正', group: 'seal'},
+  ]);
+});
+
+test('local-only closest candidate uses the comparison winner even without a full match', () => {
+  const item = record();
+  item.seal_check = {recognized: '三星售后618334站', status: '部分匹配', recognition_mode: 'local'};
+  item.processing_artifacts.seals = [
+    {index: 0, original_url: '/files/company.png', matching_texts: ['其他公司章']},
+    {index: 1, original_url: '/files/closest.png', matching_texts: ['三星售后618334站']},
+  ];
+  assert.equal(imageSources(item).find(source => source.group === 'seal').url, '/files/closest.png');
+});
+
+test('a local reading which did not win does not replace the selected provider stamp', () => {
+  const item = record();
+  item.seal_check.recognized = '清瞳选中的章';
+  item.seal_check.local_channel = {recognized: '其他公司章'};
+  item.processing_artifacts.seals = [{original_url: '/files/company.png', matching_texts: ['其他公司章']}];
+  assert.match(imageSources(item).find(source => source.group === 'seal').url, /selected-seal/);
+});

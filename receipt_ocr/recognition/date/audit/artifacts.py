@@ -29,9 +29,7 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
 
     The original crop is exposed only as a thumbnail. Every row in
     ``decision_rows`` comes from a clean derivative and is therefore safe for
-    the date stage to consume. Empty legacy audit fields are kept in the
-    payload so the review UI can render older records, but no audit producer
-    is called by the live pipeline.
+    the date stage to consume.
     """
     image = region.images
     line_box = image.line_box or (0.0, 0.0, 1.0, 1.0)
@@ -67,7 +65,6 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
         {
             "variant": "日期区域",
             "ocr_backend": run.services.backend_label(run.ocr_backend),
-            "secondary_ocr_backend": "",
             "original_url": _url(prefix, image.raw),
             "color_clean_url": _url(prefix, image.color_clean),
             "line_clean_url": _url(prefix, image.crop),
@@ -77,8 +74,6 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
             "date_line_positioned_frame_clean_url": _url(
                 prefix, image.line_positioned_frame_clean
             ),
-            "upper_date_line_original_url": "",
-            "upper_date_line_color_clean_url": "",
             "ocr_texts": [row.text for row in region.evidence.variant_rows],
             "decision_rows": [row.to_dict() for row in line_rows],
             "date_inputs": [
@@ -92,7 +87,6 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
                 for item in (region.prepared.inputs if region.prepared else ())
             ],
             "ocr_variants": region.evidence.ocr_variants,
-            "secondary_ocr_variants": [],
             "date_line_ocr_backend": (
                 run.services.backend_label(region.evidence.line_backend)
                 if region.evidence.line_backend
@@ -102,11 +96,5 @@ def _publish_date_region(run: DateCropRun, region: DateCropRegion) -> None:
             "date_line_display_ocr_variants": region.evidence.display_line_variants,
             "date_line_component_candidate": region.evidence.component_candidate,
             "date_line_component_confidence": region.evidence.component_candidate_confidence,
-            "far_lower_cross_model_candidate": "",
-            "far_lower_server_backend": "",
-            "far_lower_server_variants": [],
-            "far_lower_padded_line_url": "",
-            "far_lower_padded_variants": [],
-            "far_lower_cross_model_mode": "",
         }
     )

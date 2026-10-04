@@ -1,37 +1,18 @@
 """Shared final verdict policy for machine and reviewed evidence."""
 
-import re
+from .issues import issue, active_issues
 
 from .fields.schema import derive_signature_check
 
 
-OPTIONAL_STAGE_REASONS = {
-    "部分识别：未执行项目不能据此判定整单通过",
-    "本次为部分识别，未执行项目不参与整单通过判定",
-    # Signature/name comparison is shown for audit and may be confirmed by a
-    # reviewer, but it is not part of the overall acceptance gate.
-    "签收填写内容需人工确认",
-}
-
-
-_PROVIDER_NAME = re.compile(r"单证通|danzhengtong", re.IGNORECASE)
-_PROVIDER_FAILURE = re.compile(
-    r"失败|超时|timeout|connectionerror|readtimeout|max retries|nodename|无法连接|连接失败",
-    re.IGNORECASE,
-)
-
-
 def has_provider_failure(result: dict) -> bool:
-    """Recognize provider failures even when the outer OCR job completed."""
+    """Provider identity and failure codes decide failure, never UI text."""
     for variants in (result.get("recognition_variants") or {}).values():
         for variant in variants or []:
             if variant.get("method") == "danzhengtong" and variant.get("error"):
                 return True
-    messages = [result.get("error_message"), *(result.get("review_reasons") or [])]
-    return any(
-        _PROVIDER_NAME.search(str(message)) and _PROVIDER_FAILURE.search(str(message))
-        for message in messages if message
-    )
+    return any(item.get("code") == "provider_failure" and item.get("provider") == "danzhengtong"
+               for item in result.get("review_issues", []))
 
 
 def apply_signature_match_mode(result: dict) -> None:
@@ -68,20 +49,9 @@ def apply_signature_match_mode(result: dict) -> None:
     }
 
 
-def blocking_review_reasons(reasons):
-    """Only date and seal evidence decide the machine pass verdict for now.
-
-    Product and handwriting rules are intentionally not part of the current
-    acceptance policy. Keep filtering these legacy notices here so records
-    created before the policy change are also eligible when date and seal are
-    both reliable matches.
-    """
-    return [reason for reason in reasons if str(reason).strip() not in OPTIONAL_STAGE_REASONS]
-
-
 def decide_overall(
     date_check: dict, seal_check: dict, review_reasons: list[str], acceptance: dict | None = None,
-    signature_check: dict | None = None,
+    signature_check: dict | None = None, *, review_issues=None,
 ) -> str:
     """Never auto-pass or auto-fail when date/seal evidence itself is unreliable."""
     acceptance = acceptance or {}
@@ -93,13 +63,12 @@ def decide_overall(
     reject_mode = acceptance.get("reject_mode", "none")
     if not date_enabled:
         date_check = {"status": "未核对", "reliable": True}
-        review_reasons = [reason for reason in review_reasons if not re.search(r"日期|到货", str(reason))]
     if not seal_enabled:
         seal_check = {"status": "未核对", "reliable": True}
-        review_reasons = [reason for reason in review_reasons if not re.search(r"印章|签章", str(reason))]
-    review_reasons = blocking_review_reasons(review_reasons)
-    if low_confidence_mode == "ignore":
-        review_reasons = [reason for reason in review_reasons if "低置信度" not in str(reason)]
+    issues = review_issues if review_issues is not None else [
+        issue("review_required", "document", message) for message in review_reasons
+    ]
+    review_reasons = active_issues(issues, acceptance)
     if (
         review_reasons
         or not date_check.get("reliable")
@@ -129,15 +98,20 @@ def decide_overall(
 
 def finalize_result(result: dict) -> dict:
     """Write every machine verdict field from the completed stage evidence."""
-    reasons = blocking_review_reasons(list(result.get("review_reasons", [])))
+    issues = list(result.get("review_issues", [
+        issue("review_required", "document", message)
+        for message in result.get("review_reasons", [])
+    ]))
     acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
     if acceptance.get("low_confidence_mode", "check") == "check" and any(
         meta.get("low_confidence")
         for name, meta in result.get("field_metadata", {}).items()
         if name != "仓库接收人"
     ):
-        reasons.append("存在低置信度字段")
-    reasons = list(dict.fromkeys(reasons))
+        issues.append(issue("low_confidence", "fields", "存在低置信度字段"))
+    issues = active_issues(issues, acceptance)
+    result["review_issues"] = issues
+    reasons = list(dict.fromkeys(item["message"] for item in issues))
     result["review_reasons"] = reasons
     apply_signature_match_mode(result)
     provider_failed = has_provider_failure(result)
@@ -145,7 +119,7 @@ def finalize_result(result: dict) -> dict:
         "识别失败" if provider_failed else
         decide_overall(result.get("date_check", {}), result.get("seal_check", {}), reasons,
                        (result.get("recognition_config") or {}).get("acceptance"),
-                       result.get("signature_check"))
+                       result.get("signature_check"), review_issues=issues)
     )
     result.update(
         overall=overall,

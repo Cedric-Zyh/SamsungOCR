@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from receipt_ocr.recognition.seal.decision import _reconstruct_exact_company_stamp_from_region
+from receipt_ocr.recognition.seal.postprocess.rules import _reconstruct_exact_company_stamp_from_region
 
 
 def _latest_original_results(database: Path, backend: str) -> dict[str, dict]:

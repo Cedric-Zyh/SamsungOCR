@@ -1,7 +1,7 @@
 import {escapeHtml, planLabels} from '../core/ui.mjs';
 
 const methodLabels = {paddle_v6:'Paddle v6 Small', paddle_seal:'Paddle 印章专用', qingtong:'清瞳', danzhengtong:'单证通'};
-const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）', combined:'两者结合'};
+const sealOrientationLabels = {none:'不处理', polygon:'文本框角度估计', doc_ori:'文档方向分类（doc_ori）', combined:'四方向择优校正'};
 const presetLabels = {danzhengtong:'单证通',full:'完整核验', date:'仅日期', seal:'仅印章', 'seal-test':'印章测试'};
 const localMethods = ['paddle_v6', 'paddle_seal'];
 const storageKey = 'receipt-recognition-plan';

@@ -7,6 +7,8 @@ import json
 from ..domain.documents.pagination import page_identity
 from .constants import DEFAULT_RECOGNITION_SETTINGS, DEFAULT_RETENTION_DAYS
 from .database_clock import now_iso
+from .read_model import initialize_read_model
+from .issue_migration import migrate_saved_issues
 
 
 def initialize_database(database) -> None:
@@ -157,6 +159,8 @@ def initialize_database(database) -> None:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_results_task ON results(task_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_results_page_group ON results(page_group)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_results_task_page_key ON results(task_id,page_key)")
+            initialize_read_model(connection)
+            migrate_saved_issues(connection)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ground_truth_filename ON ground_truth_history(filename)"
             )

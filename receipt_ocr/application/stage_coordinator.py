@@ -5,19 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 from ..recognition.seal.api import SealApiClient
-from ..runtime.execution import recognition_run
-from .pipeline import execute_stage, run_legacy
+from ..providers.text import default_text_recognizer
+from .pipeline import execute_stage
+from .plans import run_configured
 
 
 class ReceiptAnalyzer:
     """Register and dispatch recognition stages for one application run."""
 
-    def __init__(self, seal_api: Any | None = None):
-        self.seal_api = seal_api or SealApiClient()
+    def __init__(self, seal_api: Any | None = None, *, text_recognizer=None):
+        self.seal_api = seal_api if seal_api is not None else SealApiClient()
+        self.text_recognizer = text_recognizer if text_recognizer is not None else default_text_recognizer()
 
-    @recognition_run
-    def analyze(self, image_path, preview_path=None, **options):
-        return run_legacy(self, image_path, preview_path, **options)
+    def analyze(self, image_path, preview_path=None, *, recognition_config=None, previous_fields=None, **options):
+        return run_configured(self, image_path, preview_path, config=recognition_config,
+                              previous_fields=previous_fields, **options)
 
     def run_stage(self, context, stage, request):
         return execute_stage(self, context, stage, request)
@@ -28,7 +30,7 @@ class ReceiptAnalyzer:
         return recognize_receipt_date(*args, **kwargs)
 
     def _recognize_local_seals(self, *args, **kwargs):
-        from receipt_ocr.recognition.seal.workflow import recognize_local_seals
+        from receipt_ocr.recognition.seal.api import recognize_local_seals
 
         return recognize_local_seals(*args, **kwargs)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from collections import OrderedDict
+from threading import RLock
 from pathlib import Path
 from typing import Iterator
 import cv2
@@ -26,16 +28,35 @@ class ImageCache:
     source frame for a later stage.
     """
 
-    images: dict[str, np.ndarray] = field(default_factory=dict)
+    max_bytes: int = 128 * 1024 * 1024
+    images: OrderedDict = field(default_factory=OrderedDict)
+    _bytes: int = 0
+    _lock: RLock = field(default_factory=RLock)
 
     def read(self, path: str | Path) -> np.ndarray:
-        key = str(Path(path).resolve())
-        if key not in self.images:
-            self.images[key] = _decode_image(path)
-        return self.images[key].copy()
+        source = Path(path).resolve()
+        stat = source.stat()
+        key = (str(source), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        with self._lock:
+            if key in self.images:
+                self.images.move_to_end(key)
+                return self.images[key].copy()
+            image = _decode_image(source)
+            # Replaced files must not retain an old decoded version.
+            for old in list(self.images):
+                if old[0] == key[0]:
+                    self._bytes -= self.images.pop(old).nbytes
+            if image.nbytes <= self.max_bytes:
+                while self.images and self._bytes + image.nbytes > self.max_bytes:
+                    self._bytes -= self.images.popitem(last=False)[1].nbytes
+                self.images[key] = image
+                self._bytes += image.nbytes
+            return image.copy()
 
     def clear(self) -> None:
-        self.images.clear()
+        with self._lock:
+            self.images.clear()
+            self._bytes = 0
 
 
 _active_cache: ContextVar[ImageCache | None] = ContextVar(
@@ -47,6 +68,9 @@ _active_cache: ContextVar[ImageCache | None] = ContextVar(
 def image_cache_scope(cache: ImageCache) -> Iterator[ImageCache]:
     """Activate a cache only for the current recognition execution context."""
 
+    if _active_cache.get() is cache:
+        yield cache
+        return
     token = _active_cache.set(cache)
     try:
         yield cache

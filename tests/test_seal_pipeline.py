@@ -5,7 +5,7 @@ import numpy as np
 
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.recognition.seal import pipeline
-from receipt_ocr.recognition.seal.preprocess.orientation import (
+from receipt_ocr.recognition.seal.orientation import (
     choose_rectangular_stamp_angle,
     prepare_rectangular_stamp,
 )

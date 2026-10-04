@@ -1,22 +1,11 @@
-"""HTTP route registration for the Flask application.
-
-Handlers stay in :mod:`receipt_ocr.web.application` so their injected runtime
-objects remain easy to replace in tests. This module owns only the URL map and
-keeps the composition root from becoming a second list of route declarations.
-"""
+"""HTTP route registration without mutable module dependencies."""
 
 from __future__ import annotations
 
 
-def register_routes(app, handlers) -> None:
-    """Attach all HTTP and lifecycle handlers to *app*.
-
-    ``handlers`` is the application module rather than a copied dependency
-    bag. Handler globals therefore continue to resolve against the live web
-    composition, including test-time database and storage substitutions.
-    """
-
-    app.before_request(handlers.ensure_initialized)
+def register_routes(app, handlers, *, before_request) -> None:
+    """Attach explicit endpoint functions and the initialization hook."""
+    app.before_request(before_request)
 
     routes = [
         ("/", "index", ("GET",)),
@@ -61,4 +50,4 @@ def register_routes(app, handlers) -> None:
         count = endpoint_counts.get(name, 0)
         endpoint_counts[name] = count + 1
         endpoint = name if count == 0 else f"{name}_{count}"
-        app.add_url_rule(rule, endpoint, getattr(handlers, name), methods=list(methods))
+        app.add_url_rule(rule, endpoint, handlers[name], methods=list(methods))
