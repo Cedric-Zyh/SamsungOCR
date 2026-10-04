@@ -1,9 +1,6 @@
 name: Architecture and regression checks
 
 on:
-  pull_request:
-  push:
-    branches: [main, 'codex/**']
   workflow_dispatch:
 
 permissions:

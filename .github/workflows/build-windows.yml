@@ -2,12 +2,6 @@ name: Build Windows Tauri installer
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - codex/windows-release
-    tags:
-      - "v*"
 
 permissions:
   contents: write
