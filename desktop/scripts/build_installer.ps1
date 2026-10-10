@@ -20,6 +20,9 @@ try {
     if (Test-Path $ResourceServer) { Remove-Item -Recurse -Force $ResourceServer }
     New-Item -ItemType Directory -Force -Path $ResourceServer | Out-Null
     Copy-Item -Recurse -Force "dist\SamsungReceipt\*" $ResourceServer
+    if (-not (Test-Path (Join-Path $ResourceServer "SamsungReceipt.exe") -PathType Leaf)) {
+        throw "打包资源中缺少 SamsungReceipt.exe，无法生成安装包。"
+    }
 
     Write-Host "[3/4] 构建桌面前端..." -ForegroundColor Cyan
     Push-Location $Desktop

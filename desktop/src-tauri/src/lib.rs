@@ -49,6 +49,8 @@ fn packaged_server(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let candidates = [
         resource_dir.join("SamsungReceipt").join(executable),
         resource_dir.join("resources").join("SamsungReceipt").join(executable),
+        // Older installers preserved the parent component as Tauri's `_up_` directory.
+        resource_dir.join("_up_").join("resources").join("SamsungReceipt").join(executable),
         resource_dir.join(executable),
         resource_dir.join("server").join(executable),
     ];
