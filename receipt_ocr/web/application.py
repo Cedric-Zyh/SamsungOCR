@@ -83,6 +83,16 @@ app.config.update(MAX_CONTENT_LENGTH=500 * 1024 * 1024, JSON_AS_ASCII=False,
                   BACKGROUND_WORKER=True, TEMPLATES_AUTO_RELOAD=True)
 
 
+@app.after_request
+def javascript_content_type(response):
+    """Do not let host MIME mappings make browsers reject ES modules."""
+    if request.endpoint == 'static' and response.status_code in (200, 206):
+        filename = (request.view_args or {}).get('filename', '')
+        if Path(filename).suffix.lower() in {'.js', '.mjs'}:
+            response.mimetype = 'text/javascript'
+    return response
+
+
 @app.template_global()
 def asset_url(filename: str) -> str:
     """Return a cache-busted URL for a static asset based on its mtime."""
