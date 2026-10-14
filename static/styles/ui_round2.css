@@ -11,7 +11,6 @@ button:disabled { cursor:not-allowed; }
 .progress-note[data-tone="danger"] { color:#b4433c; }
 .workbench-table-wrap,.record-filter-table { max-height:clamp(320px,calc(100dvh - 405px),720px); overflow:auto; overscroll-behavior:contain; scroll-padding-top:58px; scrollbar-gutter:stable; }
 .workbench-table-wrap { max-height:clamp(280px,calc(100dvh - 470px),720px); }
-.records-section:has(#selection-toolbar:not(.hidden)) .record-filter-table { max-height:clamp(260px,calc(100dvh - 510px),620px); }
 .workbench-table-wrap:focus-visible,.record-filter-table:focus-visible { outline-offset:2px; }
 .workbench-table-wrap th,.record-filter-table th { position:sticky; top:0; z-index:3; box-shadow:0 1px 0 #dfe5ee; }
 .workbench-table-wrap th:last-child,.record-filter-table th:last-child { z-index:5; box-shadow:-4px 0 8px #253d600a,0 1px 0 #dfe5ee; }

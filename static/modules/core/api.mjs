@@ -48,6 +48,7 @@ export function createApiClients(api) {
     queue: {
       list: (importDate, options) => api(query('/api/queue', {import_date: importDate}), options),
       control: options => api('/api/queue/control', options),
+      manage: (ids, action) => api('/api/jobs/manage', {method: 'POST', json: {ids, action}}),
       start: ids => api('/api/jobs/start', {method: 'POST', json: {ids}}),
       cancel: ids => api('/api/jobs/cancel', {method: 'POST', json: {ids}}),
       cancelOne: id => api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {method: 'POST'}),

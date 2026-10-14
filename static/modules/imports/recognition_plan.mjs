@@ -132,6 +132,7 @@ export function createRecognitionPlan({environment, ui, importsState, services =
     return plan;
   }
   function presetUnavailable(name) {
+    if (name === 'danzhengtong' && !available('fields', 'danzhengtong')) return '单证通尚未配置完整';
     if (name === 'seal-test') {
       const missing = [];
       if (!available('fields', 'paddle_v6')) missing.push('Paddle v6 不可用');

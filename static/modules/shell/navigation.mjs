@@ -7,7 +7,7 @@ export function createNavigation({
   const {$, $$, toast} = ui;
 
   const pageInfo = {
-    records: ['回单记录', '查询回单，优先处理需要你确认的项目。'],
+    records: ['回单记录', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
     quality: ['质量统计', '查看识别准确率、错误分布与样单评测结果。'],
     settings: ['设置', '选择识别内容与方式，让每次测试更有针对性。'],

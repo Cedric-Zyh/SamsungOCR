@@ -9,14 +9,14 @@ export function createRecordTable({environment, ui, recordsState, currentFilters
   function showRecordEmptyState({failed = false, message = ''} = {}) {
     const filters = currentFilters();
     const hasConditions = activeFilterEntries(filters).some(({key}) => key !== 'task_id');
-    const title = failed ? '记录加载失败' : hasConditions ? '没有符合筛选条件的回单' : '当前范围还没有回单';
+    const title = failed ? '记录加载失败' : hasConditions ? '没有符合筛选条件的回单' : filters.task_id ? '当前任务还没有回单' : '当天还没有导入回单';
     const detail = failed ? message || '连接暂时不可用，请稍后重试。'
       : hasConditions ? '可清除附加筛选后重试，导入日期和任务范围会保留。'
-      : filters.task_id ? '该任务暂无回单，可切换导入日期查看其他记录。' : '所选日期暂无导入记录，可切换日期查看。';
+      : filters.task_id ? '该任务暂无回单，可切换导入日期查看其他记录。' : '试试其他日期，或导入新的回单开始核验。';
     const action = failed ? '<button type="button" class="secondary-button" data-record-retry>重新加载</button>'
       : hasConditions ? '<button type="button" class="secondary-button" data-clear-record-filters>清除附加筛选</button>'
-      : '<button type="button" class="secondary-button" data-record-date>选择其他日期</button>';
-    $('#records-body').innerHTML = `<tr><td colspan="8" class="empty-state"><div class="records-empty"><strong>${title}</strong><p>${escapeHtml(detail)}</p><div class="records-empty-actions">${action}</div></div></td></tr>`;
+      : `${filters.task_id ? '' : '<a href="#import" class="primary-button">导入回单</a>'}<button type="button" class="secondary-button" data-record-date>选择其他日期</button>`;
+    $('#records-body').innerHTML = `<tr><td colspan="8" class="empty-state"><div class="records-empty"><img class="records-empty-illustration" src="/static/images/records-empty.svg" width="136" height="104" alt=""><strong>${title}</strong><p>${escapeHtml(detail)}</p><div class="records-empty-actions">${action}</div></div></td></tr>`;
   }
 
   function renderRecords({background, scrollToTable}) {

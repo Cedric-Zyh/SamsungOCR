@@ -1,6 +1,6 @@
 /** Task counters and customer overview rendering. */
-import {localToday, escapeHtml} from '../core/ui.mjs';
-import {overviewCounts, overviewCustomer} from './overview.mjs';
+import {localToday} from '../core/ui.mjs';
+import {overviewCounts} from './overview.mjs';
 
 export function createWorkbenchSummary({environment, ui, progressState, ReceiptWorkbench}) {
   const {document} = environment;
@@ -28,17 +28,15 @@ export function createWorkbenchSummary({environment, ui, progressState, ReceiptW
 
   function renderOverview(items) {
     const counts = overviewCounts(items, ReceiptWorkbench);
-    const percent = counts.total ? Math.round(counts.completed / counts.total * 1000) / 10 : 0;
-    for (const [id, value] of Object.entries({'overview-completed': counts.completed.toLocaleString(), 'overview-total': counts.total.toLocaleString(), 'overview-percent': `${percent}%`})) {
+    const percent = counts.total ? Math.round(counts.processed / counts.total * 1000) / 10 : 0;
+    for (const [id, value] of Object.entries({'overview-completed': counts.processed.toLocaleString(), 'overview-total': counts.total.toLocaleString(), 'overview-percent': `${percent}%`})) {
       if ($(`#${id}`)) $(`#${id}`).textContent = value;
     }
     $('#task-progress').style.width = `${percent}%`;
     $('#task-progress').parentElement.setAttribute('aria-valuenow', percent);
-    if ($('#overview-remaining')) $('#overview-remaining').textContent = `剩余 ${counts.ready + counts.running} 张 · 待开始 ${counts.ready} 张 · 处理中 ${counts.running} 张`;
-    if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = !counts.total ? '暂无单据' : progressState.queueControl?.paused ? (progressState.queueControl.status === 'pausing' ? '暂停中' : '已暂停') : counts.running ? '正在识别' : counts.ready ? '等待处理' : '识别已结束';
-    const types = items.filter(item => item.status !== 'cancelled');
-    const customers = [...new Set(types.map(overviewCustomer))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    if ($('#workbench-type-counts')) $('#workbench-type-counts').innerHTML = '<span>按客户</span>' + customers.map(customer => `<button type="button" data-work-type="${escapeHtml(customer)}" aria-pressed="${progressState.workType === customer}">${escapeHtml(customer)} <b>${types.filter(item => overviewCustomer(item) === customer).length}</b></button>`).join('') + '<button type="button" data-work-type="" class="workbench-clear-type">全部客户</button>';
+    if ($('#overview-remaining')) $('#overview-remaining').textContent = `剩余 ${counts.ready + counts.queued + counts.running} 张 · 待开始 ${counts.ready} 张 · 排队中 ${counts.queued} 张 · 识别中 ${counts.running} 张`;
+    if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = !counts.total ? '暂无单据' : progressState.queueControl?.paused ? (progressState.queueControl.status === 'pausing' ? '暂停中' : '已暂停') : counts.running ? '正在识别' : counts.ready + counts.queued ? '等待处理' : '识别已结束';
+
   }
 
   return {renderTask, renderOverview};

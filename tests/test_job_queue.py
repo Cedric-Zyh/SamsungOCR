@@ -665,3 +665,79 @@ def test_legacy_retry_revisions_upgrade_only_if_source_is_unchanged(store, edite
     assert store.get(job["id"])["status"] == ("failed" if edited else "succeeded")
     if edited:
         assert store.database.get_result(record_id)["fields"]["客户名称"] == "人工修正客户"
+
+
+def test_queue_withdraw_preserves_upload_and_can_restart(store):
+    job = queued(store)
+    store.manage_queued([job['id']], 'withdraw')
+    saved = store.get(job['id'])
+    assert saved['stored_name'] == 'saved.jpg'
+    assert store.public(saved)['status'] == 'ready'
+    assert store.claim() is None
+    store.start_jobs([job['id']])
+    assert store.claim()['id'] == job['id']
+
+
+def test_queue_priority_changes_next_claim_but_not_running_job(store):
+    first = queued(store, 'first')
+    second = queued(store, 'second')
+    third = queued(store, 'third')
+    running = store.claim()
+    assert running['id'] == first['id']
+    store.manage_queued([third['id']], 'prioritize')
+    assert store.get(first['id'])['status'] == 'running'
+    assert store.claim()['id'] == third['id']
+    assert store.claim()['id'] == second['id']
+    with pytest.raises(ValueError):
+        store.manage_queued([first['id']], 'withdraw')
+
+
+def test_queue_adjustment_is_atomic_on_stale_selection(store):
+    first = queued(store, 'first')
+    second = queued(store, 'second')
+    store.claim()
+    with pytest.raises(ValueError):
+        store.manage_queued([second['id'], first['id']], 'withdraw')
+    assert store.public(store.get(second['id']))['status'] == 'queued'
+    with pytest.raises(KeyError):
+        store.manage_queued([second['id'], 'missing'], 'prioritize')
+    assert store.get(second['id'])['priority'] == 0
+
+
+def test_queue_manage_http_preserves_saved_retry_result(web_queue, store):
+    record_id, job = prepare_retry(store)
+    # prepare_retry claims the retry; move it to queued to test withdrawal.
+    with store.database.connect() as con:
+        con.execute("UPDATE recognition_jobs SET status='queued' WHERE id=?", (job['id'],))
+    before = store.database.get_result(record_id)
+    client = web_queue.app.test_client()
+    assert client.post('/api/jobs/manage', json={'ids': [job['id']], 'action': 'withdraw'}).status_code == 200
+    assert store.database.get_result(record_id) == before
+    assert store.public(store.get(job['id']))['status'] == 'ready'
+    assert client.post('/api/jobs/manage', json={'ids': [job['id']], 'action': 'prioritize'}).status_code == 409
+    assert client.post('/api/jobs/manage', json={'ids': ['missing'], 'action': 'withdraw'}).status_code == 404
+    for data in [[], {'ids': [], 'action': 'withdraw'}, {'ids': [job['id']], 'action': 'invalid'}]:
+        assert client.post('/api/jobs/manage', json=data).status_code in (400, 409)
+
+
+def test_remove_waiting_job_rejects_claim_race_and_preserves_results(web_queue, store):
+    client = web_queue.app.test_client()
+    task = batch(store, task_id='ready-remove')
+    job_id = task['items'][0]['id']
+    store.accept_upload(job_id, 'remove.jpg')
+    upload = web_queue.UPLOAD_DIR / 'remove.jpg'
+    upload.write_bytes(b'test')
+    response = client.post('/api/jobs/manage', json={'ids': [job_id], 'action': 'remove'})
+    assert response.status_code == 200 and response.json == {'updated': 1}
+    assert not upload.exists()
+    with pytest.raises(KeyError):
+        store.get(job_id)
+    running = queued(store, 'running-remove')
+    store.claim()
+    assert client.post('/api/jobs/manage', json={'ids': [running['id']], 'action': 'remove'}).status_code == 409
+    record_id, retry = prepare_retry(store)
+    with store.database.connect() as con:
+        con.execute("UPDATE recognition_jobs SET status='queued',start_requested=0 WHERE id=?", (retry['id'],))
+    before = store.database.get_result(record_id)
+    assert client.post('/api/jobs/manage', json={'ids': [retry['id']], 'action': 'remove'}).status_code == 200
+    assert store.database.get_result(record_id) == before

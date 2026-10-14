@@ -95,6 +95,7 @@ def receipt_listing(ctx: ResultDependencies, *, latest_by_filename):
             filters=filters, latest_by_filename=latest_by_filename,
             limit=page_size, offset=offset,
             ordering="review" if latest_by_filename else "id",
+            include_status_counts=request.args.get("include_status_counts") == "1",
         )
     return jsonify({**result, "page": page, "page_size": page_size} if paged else result["items"])
 

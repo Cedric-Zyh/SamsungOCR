@@ -12,12 +12,13 @@ export function createWorkFilterState(progressState) {
     progressState.workFilters = values;
     progressState.workFilter = values.length === 0 ? 'all'
       : values.length === 1 ? values[0]
-      : values.length === 2 && values.includes('ready') && values.includes('running') ? 'processing' : 'multi';
+      : values.length === 3 && ['ready', 'queued', 'running'].every(value => values.includes(value)) ? 'processing' : 'multi';
   }
   function setWorkFilter(filter) {
     // Programmatic queue actions select a logical filter and clear any manual
     // multi-selection that was active before the action.
     progressState.workFilters = null;
+    progressState.workNeedsReview = false;
     progressState.workFilter = filter;
   }
   function hasOnlyWorkFilter(filter) {

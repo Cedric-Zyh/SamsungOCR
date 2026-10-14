@@ -16,17 +16,20 @@
                   <label class="plan-method" title="{{ '使用已配置的清瞳印章服务' if seal_api_enabled else '需要先配置清瞳服务密钥' }}"><input type="checkbox" data-method="qingtong" data-stage="seal" data-available="{{ 'true' if seal_api_enabled else 'false' }}" {{ 'disabled' if not seal_api_enabled else '' }}><span>清瞳</span><small>{{ '远程' if seal_api_enabled else '未配置' }}</small></label>
 {% endif %}
 {% if key != 'products' %}
-                  <label class="plan-method" title="生产环境真实识别，每次处理一张，每隔 2 秒查询结果"><input type="checkbox" data-method="danzhengtong" data-stage="{{ key }}" data-available="true"><span>单证通</span><small>远程</small></label>
+                  <label class="plan-method" title="生产环境真实识别，每次处理一张，每隔 2 秒查询结果"><input type="checkbox" data-method="danzhengtong" data-stage="{{ key }}" data-available="{{ 'true' if dzt_status.configured else 'false' }}" {{ 'disabled' if not dzt_status.configured else '' }}><span>单证通</span><small>{{ '远程' if dzt_status.configured else dzt_status.status }}</small></label>
 {% endif %}
                 </div>
 {% if key == 'seal' %}
                 <div class="seal-orientation-setting">
-                  <label for="seal-orientation-mode"><span>印章方向处理</span><select id="seal-orientation-mode" aria-label="印章方向处理方式">
+                  <div class="setting-item-copy">
+                    <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M19 12a7 7 0 1 0-2 5"/><path d="m9 9 6 2-2 6-6-2z"/></svg></span>
+                    <div><label for="seal-orientation-mode">印章方向处理</label><small id="seal-orientation-description"></small></div>
+                  </div>
+                  <div class="setting-select-wrap"><select id="seal-orientation-mode" aria-label="印章方向处理方式" aria-describedby="seal-orientation-description">
 {% for mode in seal_orientation_modes %}
                     <option value="{{ mode.id }}">{{ mode.label }}</option>
 {% endfor %}
-                  </select></label>
-                  <small id="seal-orientation-description"></small>
+                  </select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></div>
                 </div>
 {% endif %}
               </section>
@@ -49,12 +52,69 @@
           </aside>
         </div>
       </div>
+      <section class="settings-card remote-services" aria-labelledby="remote-services-title">
+        <div class="settings-section-heading"><div><h2 id="remote-services-title">远程识别服务</h2><p>管理服务凭据，配置后可在识别方式中选择。</p></div><span class="remote-local-note">配置保存在本机</span></div>
+        <div class="remote-service-row">
+          <span class="remote-service-icon" aria-hidden="true">单</span>
+          <div class="remote-service-copy"><h3>单证通 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h3><p>识别回单字段、手写签名、日期与印章</p></div>
+          <button type="button" class="secondary-button" data-service-dialog="dzt-settings-dialog" aria-haspopup="dialog" aria-label="配置单证通">配置<span aria-hidden="true"> ›</span></button>
+        </div>
+        <div class="remote-service-row">
+          <span class="remote-service-icon" aria-hidden="true">清</span>
+          <div class="remote-service-copy"><h3>清瞳 <span class="remote-status {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</span></h3><p>在线印章识别与核验</p></div>
+          <button type="button" class="secondary-button" data-service-dialog="qingtong-settings-dialog" aria-haspopup="dialog" aria-label="配置清瞳">配置<span aria-hidden="true"> ›</span></button>
+        </div>
+      </section>
+      <dialog id="dzt-settings-dialog" class="service-dialog" aria-labelledby="dzt-settings-title">
+        <header class="service-dialog-header"><div><h2 id="dzt-settings-title">单证通配置 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h2><p>保存后用于后续识别，密钥留空保留原值。</p></div><button type="button" class="service-dialog-close" data-service-close aria-label="关闭单证通配置" autofocus>×</button></header>
+        <div class="service-dialog-body">
+          <form id="dzt-config-form" class="dzt-config-form">
+            <div class="dzt-config-grid">
+{% for key, label in [('app_id','App ID'), ('key_id','Key ID'), ('app_key','App Key'), ('app_secret','App Secret'), ('callback_url','回调地址')] %}
+              <label class="{{ 'service-field-wide' if key == 'callback_url' else '' }}">{{ label }}<input name="{{ key }}" type="{{ 'password' if key in dzt_status.secrets_set else 'text' }}" autocomplete="{{ 'new-password' if key in dzt_status.secrets_set else 'off' }}" value="{{ dzt_status['values'].get(key, '') }}" placeholder="{{ '已设置，留空保留' if dzt_status.secrets_set.get(key) else '请输入' }}" maxlength="4096">{% if key == 'callback_url' %}<small>使用服务方提供或认可的地址</small>{% endif %}</label>
+{% endfor %}
+            </div>
+            <details class="service-advanced"><summary>高级配置<span>接口地址、模型与查询设置</span></summary><div class="dzt-config-grid">
+{% for key, label in [('base_url','接口地址'), ('upload_url','文件上传地址'), ('org_id','组织 ID'), ('sys_code','系统编码'), ('model_id','模型 ID'), ('upload_source_code','上传来源编码'), ('poll_timeout_seconds','查询超时（秒）')] %}
+              <label class="{{ 'service-field-wide' if key in ['base_url','upload_url'] else '' }}">{{ label }}<input name="{{ key }}" type="{{ 'number' if key == 'poll_timeout_seconds' else 'text' }}" value="{{ dzt_status['values'].get(key, '') }}" {{ 'min=1 max=60 step=1' if key == 'poll_timeout_seconds' else '' }}>{% if key == 'upload_source_code' %}<small>留空时使用系统编码</small>{% endif %}</label>
+{% endfor %}
+            </div></details>
+          </form>
+          <section class="service-test" aria-labelledby="dzt-test-title">
+            <div class="service-test-heading"><h3 id="dzt-test-title">测试识别</h3><span>请先保存配置</span></div>
+            <form id="dzt-test-form" class="dzt-test-form">
+              <label class="service-file-picker"><input id="dzt-test-file" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" aria-label="选择测试回单" required><span class="service-file-button">选择回单</span><span id="dzt-test-filename">未选择图片</span></label>
+              <button type="submit" class="secondary-button" {{ 'disabled' if not dzt_status.configured else '' }}>测试识别</button>
+            </form>
+            <p>图片将上传至单证通，可能产生费用；测试不保存为正式记录。</p>
+          </section>
+          <p id="dzt-save-status" class="service-feedback" role="status" aria-live="polite"></p>
+        </div>
+        <footer class="service-dialog-footer"><button type="button" id="dzt-clear" class="service-clear">清除配置</button><div><button type="button" class="secondary-button" data-service-close>关闭</button><button type="submit" form="dzt-config-form" class="primary-button">保存配置</button></div></footer>
+      </dialog>
+      <dialog id="qingtong-settings-dialog" class="service-dialog service-dialog-small" aria-labelledby="qingtong-settings-title">
+        <header class="service-dialog-header"><div><h2 id="qingtong-settings-title">清瞳配置 <span class="remote-status {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</span></h2><p>连接在线印章识别服务</p></div><button type="button" class="service-dialog-close" data-service-close aria-label="关闭清瞳配置" autofocus>×</button></header>
+        <div class="service-dialog-body">
+          <form id="qingtong-form" class="service-key-form">
+            <label for="qingtong-api-key">API 密钥</label>
+            <input id="qingtong-api-key" type="password" autocomplete="new-password" placeholder="{{ '已设置，输入新密钥可替换' if seal_api_enabled else '粘贴清瞳 API 密钥' }}" required maxlength="4096" aria-describedby="qingtong-key-note">
+            <p id="qingtong-key-note">密钥保存在本机，已保存的内容不会在页面显示。</p>
+          </form>
+          <p id="qingtong-save-status" class="service-feedback" role="status" aria-live="polite"></p>
+        </div>
+        <footer class="service-dialog-footer"><button id="clear-qingtong-key" type="button" class="service-clear">清除配置</button><div><button type="button" class="secondary-button" data-service-close>关闭</button><button type="submit" form="qingtong-form" class="primary-button">保存密钥</button></div></footer>
+      </dialog>
       <section class="settings-card retention-settings" aria-labelledby="retention-settings-title">
-        <div class="retention-settings-copy"><h2 id="retention-settings-title">数据保留</h2><p>自动清理超过保留期限的回单、识别记录和本地中间文件，默认保留 {{ retention_default_days }} 天。</p></div>
+        <div class="setting-item-copy retention-settings-copy">
+          <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></span>
+          <div><h2 id="retention-settings-title">数据保留</h2><p id="retention-description">到期自动清理回单、识别记录及本地中间文件</p><small id="retention-range">默认 {{ retention_default_days }} 天 · 可设置 1–3650 天</small></div>
+        </div>
         <form id="retention-form" class="retention-form">
           <label for="retention-days">保留天数</label>
-          <div class="retention-input-wrap"><input id="retention-days" name="retention_days" type="number" min="1" max="3650" step="1" value="{{ retention_days }}" inputmode="numeric"><span>天</span></div>
-          <button id="save-retention-days" type="submit" class="secondary-button">保存</button>
+          <div class="retention-controls">
+            <div class="retention-input-wrap"><input id="retention-days" name="retention_days" type="number" min="1" max="3650" step="1" value="{{ retention_days }}" inputmode="numeric" aria-describedby="retention-description retention-range"><span>天</span></div>
+            <button id="save-retention-days" type="submit" class="primary-button">保存</button>
+          </div>
           <span id="retention-save-status" class="retention-save-status" role="status" aria-live="polite"></span>
         </form>
       </section>
@@ -66,7 +126,7 @@
             <div><span><strong>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</strong><small>{{ {'paddle_v6':'本地小模型，速度较快','paddle_seal':'仅识别印章三张处理图，不参与页面和日期'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
 {% endfor %}
             <div><span><strong>清瞳</strong><small>在线印章服务，按所选方案执行</small></span><b class="settings-availability {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</b></div>
-            <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b class="settings-availability">已接入</b></div>
+            <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b data-dzt-status class="settings-availability {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</b></div>
           </div>
         </details>
         <details class="settings-card settings-disclosure acceptance-card" aria-labelledby="acceptance-settings-title">

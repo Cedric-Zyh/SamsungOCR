@@ -4,14 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>三星回单核验台</title>
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <main id="app">
-      <div class="loading-card">
-        <div class="spinner" aria-hidden="true"></div>
-        <h1>三星回单核验台</h1>
-        <p id="status">正在启动本地识别服务…</p>
-      </div>
+      <section class="launch" aria-labelledby="app-title" data-state="loading">
+        <div class="brand-mark" aria-hidden="true">回<span></span></div>
+        <h1 id="app-title">三星回单核验台</h1>
+        <p class="tagline">让每一张回单，有据可查</p>
+        <div class="launch-status" role="status" aria-live="polite" aria-atomic="true">
+          <p id="status">正在准备工作空间</p>
+          <div class="loading-track" aria-hidden="true"><span></span></div>
+          <p id="hint" class="hint">正在启动识别服务，请稍候</p>
+        </div>
+        <details id="error-details" hidden>
+          <summary>查看错误详情</summary>
+          <p id="error-message"></p>
+        </details>
+        <button id="retry" type="button" hidden>重新尝试</button>
+      </section>
+      <footer class="launch-footer">三星回单 <span aria-hidden="true">/</span> 核验工作台</footer>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

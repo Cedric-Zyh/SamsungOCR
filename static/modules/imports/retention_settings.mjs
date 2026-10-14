@@ -39,6 +39,27 @@ export function createRetentionSettings({environment, ui, api, services = create
     if (initialized) return;
     initialized = true;
     $('#retention-form')?.addEventListener?.('submit', save);
+    const form = $('#qingtong-form');
+    async function saveQingtong(key) {
+      const status = $('#qingtong-save-status');
+      const buttons = environment.document.querySelectorAll('#qingtong-settings-dialog button:not([data-service-close])');
+      buttons.forEach(button => { button.disabled = true; });
+      status.textContent = '正在保存…';
+      try {
+        await api('/api/settings/qingtong', {method: 'PATCH', json: {api_key: key}});
+        $('#qingtong-api-key').value = '';
+        environment.location.reload();
+      } catch (error) {
+        status.textContent = error.message || '保存失败，请重试';
+      } finally {
+        buttons.forEach(button => { button.disabled = false; });
+      }
+    }
+    form?.addEventListener?.('submit', event => {
+      event.preventDefault();
+      saveQingtong($('#qingtong-api-key').value.trim());
+    });
+    $('#clear-qingtong-key')?.addEventListener?.('click', () => saveQingtong(''));
   }
 
   return {initialize, save};

@@ -9,7 +9,7 @@ export function createState() {
     // `workFilter` remains for compatibility with queued actions and older
     // persisted state. `workFilters` is null until the user makes a choice,
     // then contains the selected status cards.
-    progress: {workFilter: 'review', workFilters: null},
+    progress: {workFilter: 'all', workFilters: null, workNeedsReview: false},
     report: {},
     navigation: {},
     results: {},

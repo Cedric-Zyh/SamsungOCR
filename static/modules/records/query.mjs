@@ -4,6 +4,13 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
   showRecordEmptyState, renderRecords}) {
   const {FormData, URLSearchParams, AbortController, setTimeout, clearTimeout} = environment;
   const {$, $$, toast} = ui;
+  function renderStatusCounts(counts) {
+    $$('[data-status-count]').forEach(node => {
+      const count = counts?.[node.dataset.statusCount];
+      node.textContent = Number.isInteger(count) ? String(count) : '—';
+      node.setAttribute('aria-label', Number.isInteger(count) ? `${count} 张` : '数量待更新');
+    });
+  }
   function scheduleRecordSearch(immediate = false) {
     clearTimeout(searchState.timer);
     recordsState.recordPage = 1;
@@ -23,7 +30,11 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
     recordsState.recordController?.abort();
     const controller = recordsState.recordController = new AbortController();
     $('#filters [name=task_id]').value = recordsState.batchFilter;
-    $$('[data-filter]').forEach(button => button.classList.toggle('active', button.dataset.filter === $('#filters').elements.namedItem('overall').value));
+    $$('[data-filter]').forEach(button => {
+      const active = button.dataset.filter === $('#filters').elements.namedItem('overall').value;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
     syncColumnFilters();
     renderFilterChips();
     const params = new URLSearchParams(new FormData($('#filters')));
@@ -31,11 +42,12 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
     if (filterKey !== recordsState.recordFilterKey) { page = 1; background = false; }
     recordsState.recordFilterKey = filterKey;
     params.set('page', String(page || 1)); params.set('page_size', String(recordsState.recordPageSize));
+    params.set('include_status_counts', '1');
 
     closeMoreMenu();
     const requestId = recordsState.recordRequest = (recordsState.recordRequest || 0) + 1;
     recordsState.recordLoading = true; recordsState.recordAttemptAt = Date.now();
-    if (!background) { recordsState.selected.clear(); updateSelectionToolbar(); }
+    if (!background) { recordsState.selected.clear(); updateSelectionToolbar(); renderStatusCounts(); }
     const body = $('#records-body');
     if (!background) { $('#select-all').disabled = true; body.inert = true; }
     body.setAttribute('aria-busy', 'true');
@@ -51,11 +63,16 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
       const visibleIds = new Set(recordsState.records.map(record => Number(record.id)));
       recordsState.selected = new Set([...recordsState.selected].filter(id => visibleIds.has(id)));
       $('#record-count').textContent = `共 ${result.total} 张`;
-      $('#records-page-info').textContent = `第 ${result.page} / ${lastPage} 页 · 本页 ${result.items.length} 张`;
+      renderStatusCounts(result.status_counts);
+      const day = params.get('import_date') || '';
+      const dateLabel = /^\d{4}-\d{2}-\d{2}$/.test(day) ? day.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$1年$2月$3日') : '当前范围';
+      $('#records-page-info').textContent = result.total ? `第 ${result.page} / ${lastPage} 页 · 本页 ${result.items.length} 张` : `${dateLabel} · 共 0 张回单`;
+      for (const id of ['records-page-prev', 'records-page-next']) $(`#${id}`).classList.toggle('hidden', !result.total);
       $('#records-page-prev').disabled = result.page <= 1;
       $('#records-page-next').disabled = result.page >= lastPage;
     } catch (error) {
       if (requestId !== recordsState.recordRequest || error.name === 'AbortError') return;
+      renderStatusCounts();
       $('#record-filter-status').classList.remove('sr-only');
       $('#record-filter-status').textContent = background ? '记录暂未更新，当前选择已保留' : '未能完成筛选，可在下方重新加载';
       if (!background) {

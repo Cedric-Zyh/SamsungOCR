@@ -13,6 +13,13 @@ from .runtime.progress import report_dzt_progress, recognition_paused
 
 ROOT = Path(__file__).resolve().parents[1]
 _SINGLE_DOCUMENT = threading.Lock()
+_software_settings = None
+
+
+def set_software_settings(settings):
+    """Atomically replace defaults; existing clients keep their frozen snapshot."""
+    global _software_settings
+    _software_settings = settings
 
 
 @dataclass(frozen=True, repr=False)
@@ -32,6 +39,8 @@ class Settings:
 
     @classmethod
     def load(cls):
+        if _software_settings is not None:
+            return _software_settings
         path = ROOT / 'config' / 'danzhengtong.local.json'
         local = json.loads(path.read_text()) if path.exists() else {}
         if os.getenv('DZT_MODE', local.get('mode', 'real')) != 'real':

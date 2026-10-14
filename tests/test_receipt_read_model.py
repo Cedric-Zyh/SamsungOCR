@@ -60,3 +60,34 @@ def test_summary_and_review_write_share_transaction_and_rollback(tmp_path):
     edited["fields"]["客户名称"] = "重识别客户"
     db.replace_after_retry(identity, edited, "retry.jpg")
     assert db.query_receipts(filters={"customer": "重识别客户"})["items"][0]["preview_name"] == "retry.jpg"
+
+
+def test_status_counts_keep_scope_and_latest_decisions_across_pages(tmp_path, monkeypatch):
+    from receipt_ocr.web import application as web
+    db = Database(tmp_path / "counts.db")
+    db.initialize()
+    for filename, customer, status in (
+        ("a.jpg", "甲", "通过"), ("b.jpg", "甲", "通过"),
+        ("a.jpg", "甲", "不通过"), ("c.jpg", "甲", "需人工复核"),
+        ("d.jpg", "甲", "通过"), ("e.jpg", "乙", "通过"),
+    ):
+        db.insert_result(filename=filename, stored_name=filename, preview_name="", task_id="",
+                         result={"overall": "通过", "final_result": status,
+                                 "fields": {"客户名称": customer}})
+    day = db.get_result(1)["created_at"][:10]
+    filters = {"import_date": day, "customer": "甲", "overall": "通过"}
+    expected = {"": 4, "通过": 2, "需人工复核": 1, "不通过": 1, "识别失败": 0}
+    for offset in (0, 1):
+        result = db.query_receipts(filters=filters, latest_by_filename=True,
+                                   limit=1, offset=offset, include_status_counts=True)
+        assert result["total"] == 2
+        assert len(result["items"]) == 1
+        assert result["status_counts"] == expected
+    assert "status_counts" not in db.query_receipts(filters=filters)
+    assert db.query_receipts(filters={**filters, "customer": "不存在"},
+                             include_status_counts=True)["status_counts"][""] == 0
+    monkeypatch.setattr(web, "database", db)
+    response = web.app.test_client().get("/api/results", query_string={
+        **filters, "page": 1, "page_size": 1, "include_status_counts": "1"})
+    assert response.status_code == 200
+    assert response.json["status_counts"] == expected

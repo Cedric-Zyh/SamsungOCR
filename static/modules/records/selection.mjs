@@ -29,7 +29,7 @@ export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBu
     for (const id of ['bulk-pending', 'bulk-delete', 'clear-record-selection']) $(`#${id}`).disabled = busy || !selected.length;
     $('#review-selected-records').textContent = `复核选中（${recordsState.selected.size}）`;
     $('#review-selected-records').disabled = !recordsState.selected.size || busy;
-    $('#review-filtered-records').disabled = !!recordsState.recordLoading;
+    $('#review-filtered-records').disabled = busy || !recordsState.recordsLoaded || !recordsState.recordTotal;
     $('#select-all').checked = !!recordsState.records.length && recordsState.records.every(record => recordsState.selected.has(Number(record.id)));
     $('#select-all').indeterminate = recordsState.selected.size > 0 && !$('#select-all').checked;
   }

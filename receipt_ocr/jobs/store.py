@@ -94,6 +94,8 @@ class JobStore:
             if 'start_requested' not in columns:
                 # Jobs imported before this change already had permission to run.
                 con.execute('ALTER TABLE recognition_jobs ADD COLUMN start_requested INTEGER NOT NULL DEFAULT 1')
+            if 'priority' not in columns:
+                con.execute('ALTER TABLE recognition_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
             if 'progress_json' not in columns:
                 con.execute("ALTER TABLE recognition_jobs ADD COLUMN progress_json TEXT NOT NULL DEFAULT '{}'")
             con.execute('''CREATE TRIGGER IF NOT EXISTS require_recognition_start
@@ -179,6 +181,7 @@ class JobStore:
             'id', 'task_id', 'client_key', 'filename', 'status', 'created_at',
             'uploaded_at', 'started_at', 'finished_at', 'result_id',
             'target_result_id', 'attempt', 'error_message')}
+        output['priority'] = job.get('priority', 0)
         output['start_requested'] = bool(job['start_requested'])
         output['progress'] = public_progress(job)
         end = job.get('finished_at') or now_iso()
@@ -243,6 +246,46 @@ class JobStore:
             items = [self.public(dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()))
                      for job_id in job_ids]
         return {'started': started, 'items': items}
+
+    def manage_queued(self, job_ids, action):
+        """Adjust unclaimed jobs atomically; saved receipt results are never deleted."""
+        if action not in ('withdraw', 'prioritize', 'remove'):
+            raise ValueError('不支持的队列操作')
+        if (not isinstance(job_ids, list) or not job_ids or len(job_ids) > 5000
+                or any(not isinstance(value, str) or not value.strip() or len(value) > 100
+                       for value in job_ids)):
+            raise ValueError('请选择有效的排队任务')
+        job_ids = list(dict.fromkeys(job_ids))
+        with self.database.connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            jobs = []
+            for job_id in job_ids:
+                row = con.execute('SELECT * FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                allowed = (row['status'] in ('queued', 'awaiting_upload') and not row['start_requested']) if action == 'remove' else (row['status'] == 'queued' and row['start_requested'])
+                if not allowed:
+                    raise ValueError('任务状态已变化，请刷新后操作；只能调整未开始的任务')
+                jobs.append(row)
+            priority = con.execute("SELECT COALESCE(MAX(priority),0)+1 FROM recognition_jobs WHERE status='queued'").fetchone()[0]
+            for job in jobs:
+                if action == 'remove':
+                    con.execute('DELETE FROM recognition_jobs WHERE id=?', (job['id'],))
+                    con.execute('UPDATE batch_tasks SET total=MAX(0,total-1) WHERE id=?', (job['task_id'],))
+                elif action == 'withdraw':
+                    con.execute('UPDATE recognition_jobs SET start_requested=0,priority=0 WHERE id=?', (job['id'],))
+                    self._log(con, job['id'], job['task_id'], 'withdrawn', '已取消排队',
+                              '文件保留在本地，可再次开始识别', 'ready')
+                else:
+                    con.execute('UPDATE recognition_jobs SET priority=? WHERE id=?', (priority, job['id']))
+                    self._log(con, job['id'], job['task_id'], 'prioritized', '已优先安排',
+                              '当前任务结束后优先处理', 'queued')
+                self._refresh(con, job['task_id'])
+        result = {'updated': len(jobs)}
+        if action == 'remove':
+            result['removed_jobs'] = [{'stored_name': job['stored_name'],
+                                       'preserve_upload': bool(job['target_result_id'] or job['result_id'])} for job in jobs]
+        return result
 
     def create_retries(self, task_id, result_ids, options):
         """All selections enqueue atomically; duplicate active retries are rejected."""
@@ -378,7 +421,7 @@ class JobStore:
             con.execute('BEGIN IMMEDIATE')
             if con.execute('SELECT paused FROM queue_control WHERE id=1').fetchone()[0]:
                 return None
-            row = con.execute("SELECT * FROM recognition_jobs WHERE status='queued' AND start_requested=1 ORDER BY uploaded_at,rowid LIMIT 1").fetchone()
+            row = con.execute("SELECT * FROM recognition_jobs WHERE status='queued' AND start_requested=1 ORDER BY priority DESC,uploaded_at,rowid LIMIT 1").fetchone()
             if row is None:
                 return None
             timestamp = now_iso()

@@ -3,8 +3,8 @@ import {localToday} from '../core/ui.mjs';
 
 export function createDailyQuery({environment, ui, progressState, importsState, recordsState,
   reportState, resultsState, services, calendar, selected, viewState, pageSize,
-  ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartReview, syncStartRecognition,
-  renderQueueControl, renderTask, renderWorkbenchRows, hasOnlyWorkFilter, setWorkFilter}) {
+  ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
+  renderQueueControl, renderTask, renderWorkbenchRows}) {
   const {document} = environment;
   const {$, $$} = ui;
   async function loadDailyResults({refreshRecords = true} = {}) {
@@ -43,7 +43,6 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       if ($('#workbench-total-label')) $('#workbench-total-label').textContent = '';
       $('#progress-note').textContent = `正在加载 ${day} 的回单…`;
     }
-    syncStartReview();
     syncStartRecognition();
     $('#progress-note').dataset.tone = '';
     $('#task-section').setAttribute('aria-busy', 'true');
@@ -64,10 +63,6 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       const items = ReceiptQueue.rows(records, jobs), counts = ReceiptQueue.counts(items);
       counts.pending_review = items.filter(item => ReceiptWorkbench.category(item) === 'review').length;
       counts.passed = items.filter(item => ReceiptWorkbench.category(item) === 'passed').length;
-      if (!progressState.workInitialFilterResolved) {
-        if (!progressState.workFilterChosen && hasOnlyWorkFilter('review') && counts.ready && !counts.pending_review) setWorkFilter('processing');
-        progressState.workInitialFilterResolved = true;
-      }
       if (control.paused) counts.status = control.status === 'pausing' ? '暂停中' : '已暂停';
       $('#task-section').classList.remove('hidden');
       renderTask(counts);
@@ -89,8 +84,8 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
       progressState.dailyReady = false;
       syncSelection();
+      if (!newDay) renderWorkbenchRows();
       if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '更新失败';
-      syncStartReview();
       syncStartRecognition();
       if (newDay) { $('#task-summary').textContent = '暂时无法加载'; $('#task-summary').dataset.status = 'error'; }
       $('#progress-note').dataset.tone = 'danger';

@@ -213,3 +213,20 @@ def process_history(ctx: QueueDependencies):
         return jsonify(ctx.job_store.process_history(job_id=job_id, result_id=result_id))
     except KeyError:
         abort(404)
+
+
+def manage_queued(ctx: QueueDependencies, *, wake):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify(error='请提供有效的队列操作'), 400
+    try:
+        result = ctx.job_store.manage_queued(payload.get('ids'), payload.get('action'))
+    except KeyError:
+        return jsonify(error='任务不存在'), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 409
+    for job in result.pop('removed_jobs', []):
+        _cleanup_cancelled_upload(ctx, job)
+    if payload.get('action') == 'prioritize':
+        wake()
+    return jsonify(result)

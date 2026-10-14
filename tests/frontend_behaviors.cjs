@@ -197,7 +197,7 @@ if (process.argv.includes('--render-samples')) {
     assert.equal(h.$('#task-summary').textContent,'已处理 1 / 1 张 · 识别已结束');
     assert.equal(h.$('#task-summary').dataset.status,'review');
     assert.equal(h.$('#progress-note').textContent,'');
-    assert.equal(h.$('#workbench-visible-count').textContent,'待复核 1 张');
+    assert.equal(h.$('#workbench-visible-count').textContent,'全部 0 张');
     h.controllers.progress.renderTask({total:0,completed:0,pending_review:0});
     assert.equal(h.$('#task-summary').textContent,'暂无回单');
   });
@@ -220,17 +220,17 @@ if (process.argv.includes('--render-samples')) {
 
   test('workbench tabs keep selection and list count synchronized', async () => {
     const h=harness(); const metric=element(), filter=element();
-    metric.dataset.workFilter='review'; filter.dataset.workFilter='processing';
+    metric.dataset.workFilter='completed'; filter.dataset.workFilter='processing';
     h.context.$$=selector=>selector==='[data-work-filter]'?[metric,filter]:[];
     let scroll=0; h.$('.workbench-table-wrap').scrollTo=()=>scroll++;
     h.bags.progress.workItems=[{id:1,status:'succeeded',record:row(1)}];
     h.controllers.progress.initialize();
     await metric.dispatch('click');
-    assert.equal(h.bags.progress.workFilter,'review');
+    assert.equal(h.bags.progress.workFilter,'completed');
     assert.equal(metric.attributes['aria-pressed'],'true');
     assert.equal(filter.attributes['aria-pressed'],'false');
     assert.equal(scroll,1);
-    assert.match(h.$('#workbench-visible-count').textContent,/待复核 1 张/);
+    assert.match(h.$('#workbench-visible-count').textContent,/已完成 1 张/);
   });
 
   test('API writes invalidate cached results only after success and preserve conflict details', async () => {

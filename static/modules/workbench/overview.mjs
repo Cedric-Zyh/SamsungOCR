@@ -1,49 +1,35 @@
-export const WORK_FILTERS = {all: '全部', ready: '待开始', running: '处理中', processing: '待开始 / 处理中', review: '待复核', passed: '通过', rejected: '不通过', failed: '失败'};
-export const DOCUMENT_TYPES = {receipt: '三星出库回单', product_continuation: '商品明细续页', warehouse_authorization: '仓库货物接收委托书', unknown: '未知文档', unclassified: '待分类'};
-const pending = new Set(['awaiting_upload', 'ready', 'queued']);
-
-// The workbench filter used to be a single string. Keep accepting that shape
-// for persisted state and callers, while allowing the UI to pass a set of
-// statuses when several cards are selected.
+export const WORK_FILTERS = {all: '全部', ready: '待开始', queued: '排队中', running: '识别中', completed: '已完成', failed: '失败', processing: '待处理'};
 export function workFilterValues(filter) {
   const values = Array.isArray(filter) ? filter : filter ? [filter] : [];
-  const order = ['ready', 'running', 'review', 'passed', 'rejected', 'failed'];
-  return [...new Set(values.flatMap(value => value === 'processing' ? ['ready', 'running'] : value === 'all' ? [] : [value]))]
+  const order = ['ready', 'queued', 'running', 'completed', 'failed'];
+  return [...new Set(values.flatMap(value => value === 'processing' ? ['ready', 'queued', 'running'] : value === 'all' ? [] : [value]))]
     .filter(value => order.includes(value)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 export function overviewStatus(item, workbench) {
-  return pending.has(item.status) ? 'ready' : item.status === 'running' ? 'running' : workbench.category(item);
-}
-export function overviewType(item) {
-  const type = item.record?.document_type?.type;
-  if (Object.hasOwn(DOCUMENT_TYPES, type)) return type;
-  return pending.has(item.status) || item.status === 'running' ? 'unclassified' : 'unknown';
-}
-export function overviewCustomer(item) {
-  return String(item.record?.fields?.['客户名称'] || item.record?.internal_fields?.['客户名称'] || '').trim() || '待识别客户';
+  if (item.status === 'awaiting_upload') return 'ready';
+  if (['ready', 'queued', 'running', 'cancelled'].includes(item.status)) return item.status;
+  return workbench.category(item) === 'failed' ? 'failed' : 'completed';
 }
 export function matchesOverview(item, filter, workbench, type = '', query = '') {
-  const status = overviewStatus(item, workbench);
-  if (status === 'cancelled') return false;
-  const filters = workFilterValues(filter);
-  if (filters.length && !filters.includes(status)) return false;
-  if (type && overviewCustomer(item) !== type) return false;
+  const status = overviewStatus(item, workbench), filters = workFilterValues(filter);
+  if (status === 'cancelled' || (filters.length && !filters.includes(status))) return false;
   query = query.trim().toLocaleLowerCase();
   return !query || [item.filename, item.record?.fields?.['客户订单号']].some(value => String(value || '').toLocaleLowerCase().includes(query));
 }
 export function overviewCounts(items, workbench) {
-  const counts = {total: 0, completed: 0, ready: 0, running: 0, review: 0, passed: 0, rejected: 0, failed: 0};
+  const counts = {total: 0, completed: 0, ready: 0, queued: 0, running: 0, failed: 0, processed: 0};
   for (const item of items) {
     const status = overviewStatus(item, workbench);
     if (status === 'cancelled') continue;
     counts.total++; counts[status]++;
-    if (!['ready', 'running'].includes(status)) counts.completed++;
+    if (['completed', 'failed'].includes(status)) counts.processed++;
   }
   return counts;
 }
 export function selectionKey(item) { return item.job?.id ? `job:${item.job.id}` : `record:${item.id}`; }
-export function deletionTarget(item) {
-  if (item.job?.id && (pending.has(item.status) || item.status === 'running')) return {kind: 'job', id: item.job.id};
-  if (Number.isSafeInteger(Number(item.id)) && Number(item.id) > 0) return {kind: 'record', id: Number(item.id)};
-  return null;
+export function orderedQueue(items, workbench) {
+  const rank = {running: 0, queued: 1, ready: 2, failed: 3, completed: 4, cancelled: 5};
+  return [...items].sort((a, b) => rank[overviewStatus(a, workbench)] - rank[overviewStatus(b, workbench)]
+    || (a.status === 'queued' && b.status === 'queued' ? (b.job?.priority || 0) - (a.job?.priority || 0)
+      || String(a.job?.uploaded_at || '').localeCompare(b.job?.uploaded_at || '') : 0));
 }

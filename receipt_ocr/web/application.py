@@ -54,6 +54,7 @@ from receipt_ocr.web import queue as queue_handlers
 from receipt_ocr.web import recognition as recognition_handlers
 from receipt_ocr.web import results as result_handlers
 from receipt_ocr.web import review as review_handlers
+from receipt_ocr.web import remote_settings
 from receipt_ocr.web.settings import normalize_recognition_settings as _normalize_recognition_settings
 
 
@@ -188,6 +189,10 @@ def initialize(*, start_worker: bool = True) -> None:
     for directory in (UPLOAD_DIR, PREVIEW_DIR, ARTIFACT_DIR, EXPORT_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     database.initialize()
+    remote_settings.restore(database)
+    saved_qingtong = database.get_json_setting('qingtong_credentials', None)
+    if isinstance(saved_qingtong, dict):
+        analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
     job_store = JobStore(database)
     job_store.initialize()
     _purge_expired_data()
@@ -237,6 +242,7 @@ def index():
         output_fields=OUTPUT_FIELDS, printed_fields=PRINTED_FIELDS, handwritten_fields=HANDWRITTEN_FIELDS,
         seal_api_enabled=analyzer.seal_api.enabled,
         python_path=sys.executable,
+        dzt_status=remote_settings.status(database),
         default_ocr_backend=default_backend(),
         ocr_backend_catalog=backend_catalog(),
         seal_recognition_modes=SEAL_RECOGNITION_MODES,
@@ -296,6 +302,33 @@ def retention_settings():
     if request.method == "GET":
         return jsonify(_settings_payload())
     return _update_retention_settings()
+
+
+def qingtong_settings():
+    if request.method == 'PATCH':
+        # Only accept JSON from this application's own origin.
+        origin = request.headers.get('Origin')
+        if origin and origin != request.host_url.rstrip('/'):
+            return jsonify(error='请在软件设置页面保存配置'), 403
+        if not request.is_json:
+            return jsonify(error='配置必须使用 JSON 提交'), 400
+        payload = request.get_json(silent=True)
+        key = payload.get('api_key') if isinstance(payload, dict) else None
+        if not isinstance(key, str) or len(key) > 4096 or any(c.isspace() for c in key.strip()):
+            return jsonify(error='请输入有效密钥，不能包含空白字符'), 400
+        key = key.strip()
+        database.set_json_setting('qingtong_credentials', {'api_key': key})
+        analyzer.seal_api.api_key = key
+    # Never return credentials to the browser.
+    return jsonify(configured=analyzer.seal_api.enabled)
+
+
+def danzhengtong_settings():
+    return remote_settings.settings_handler(database)
+
+
+def test_danzhengtong_settings():
+    return remote_settings.test_handler(database, ALLOWED_EXTENSIONS)
 
 
 def get_recognition_settings():
@@ -367,6 +400,10 @@ def upload_job(job_id):
 def start_jobs():
     return queue_handlers.start_jobs(_queue_dependencies(), wake=_wake_jobs)
 
+
+
+def manage_queued():
+    return queue_handlers.manage_queued(_queue_dependencies(), wake=_wake_jobs)
 
 
 def retry_job(job_id):
@@ -698,6 +735,9 @@ register_routes(app, {
     'update_settings': update_settings,
     'retention_settings': retention_settings,
     'get_recognition_settings': get_recognition_settings,
+    'qingtong_settings': qingtong_settings,
+    'danzhengtong_settings': danzhengtong_settings,
+    'test_danzhengtong_settings': test_danzhengtong_settings,
     'update_recognition_settings': update_recognition_settings,
     'create_task': create_task,
     'list_tasks': list_tasks,
@@ -707,6 +747,7 @@ register_routes(app, {
     'queue_control': queue_control,
     'upload_job': upload_job,
     'start_jobs': start_jobs,
+    'manage_queued': manage_queued,
     'retry_job': retry_job,
     'cancel_job': cancel_job,
     'cancel_jobs': cancel_jobs,

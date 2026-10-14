@@ -173,6 +173,7 @@ class ResultOperationsMixin:
     def query_receipts(
         self, *, filters: dict | None = None, latest_by_filename: bool = False,
         limit: int | None = None, offset: int = 0, ordering: str = "id",
+        include_status_counts: bool = False,
         _connection: sqlite3.Connection | None = None,
     ) -> dict:
         """Filter and paginate complete logical receipts, including all pages.
@@ -234,6 +235,17 @@ class ResultOperationsMixin:
                         seen.add(key)
                         current.append(item)
                 items = current
+            metadata = {}
+            if include_status_counts:
+                # Count logical receipts across tabs, retaining every other filter.
+                scope = {key: value for key, value in filters.items() if key != "overall"}
+                items = [item for item in items if _matches_filters(item, scope)]
+                counts = {status: 0 for status in ("通过", "需人工复核", "不通过", "识别失败")}
+                for item in items:
+                    status = item.get("final_result") or item.get("overall", "")
+                    if status in counts:
+                        counts[status] += 1
+                metadata["status_counts"] = {"": len(items), **counts}
             filtered = [item for item in items if _matches_filters(item, filters)]
             if ordering == "review":
                 completed = {"无需复核", "确认通过", "确认不通过"}
@@ -254,7 +266,7 @@ class ResultOperationsMixin:
             selected = filtered[offset:] if limit is None else filtered[offset:offset + limit]
             return {"items": load_selected_receipts(
                         connection, selected, self._row_to_result, merge_paginated_results
-                    ), "total": len(filtered)}
+                    ), "total": len(filtered), **metadata}
 
     def delete_results(self, ids: list[int]) -> list[int]:
         """Delete selected daily records and their hidden repeats/linked pages."""

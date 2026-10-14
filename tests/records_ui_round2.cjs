@@ -59,6 +59,22 @@ const row = (id, ready = false) => ({id, filename: `${id}.jpg`, fields: {}, date
 const page = (items, total = items.length, number = 1, size = 100) => ({items, total, page: number, page_size: size});
 const target = name => ({closest: selector => selector === `[${name}]` ? {} : null});
 
+test('empty records disable review and hide pagination until records return', async () => {
+  const h = harness();
+  h.fields.import_date.value = '2026-10-13';
+  await h.controller.loadRecords();
+  assert.equal(h.$('#review-filtered-records').disabled, true);
+  assert.equal(h.$('#records-page-prev').classList.contains('hidden'), true);
+  assert.equal(h.$('#records-page-info').textContent, '2026年10月13日 · 共 0 张回单');
+  assert.match(h.$('#records-body').innerHTML, /当天还没有导入回单/);
+  assert.match(h.$('#records-body').innerHTML, /href="#import"/);
+  h.respond(async () => page([row(1)], 30, 1, 25));
+  await h.controller.loadRecords();
+  assert.equal(h.$('#review-filtered-records').disabled, false);
+  assert.equal(h.$('#records-page-next').classList.contains('hidden'), false);
+  assert.equal(h.$('#records-page-next').disabled, false);
+});
+
 test('a failed foreground query clears stale counts and offers an escaped in-place retry', async () => {
   const h = harness();
   h.respond(async () => page([row(1)], 300)); await h.controller.loadRecords();

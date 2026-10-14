@@ -8,10 +8,12 @@ import {createReview} from '../review/review.mjs';
 import {createReviewEvidence} from '../review/review_evidence.mjs';
 import {createReviewQueue} from '../review/review_queue.mjs';
 import {createProgress} from '../workbench/workbench.mjs';
+import {createResultPreview} from '../workbench/result_preview.mjs';
 import {createReport} from '../report/report.mjs';
 import {createNavigation} from './navigation.mjs';
 import {createProcessHistory} from '../records/process_history.mjs';
 import {createRetentionSettings} from '../imports/retention_settings.mjs';
+import {createRemoteSettings} from '../imports/remote_settings.mjs';
 import {createPolling} from '../core/polling.mjs';
 
 /** Composition root: controllers communicate through explicit callbacks.
@@ -34,6 +36,7 @@ export function createApplication(environment, options = {}) {
     services
   });
   const retention_settings = createRetentionSettings({environment, ui, api, services});
+  const remote_settings = createRemoteSettings({environment, ui, api});
   const records = createRecords({
     ReceiptWorkbench,
     environment,
@@ -119,6 +122,8 @@ export function createApplication(environment, options = {}) {
     showReviewEmpty: (...args) => review.showReviewEmpty(...args),
     showPage: (...args) => navigation.showPage(...args)
   });
+  const result_preview = createResultPreview({environment, ui, services, ReceiptWorkbench,
+    enterReview: id => review_queue.startReviewScope({kind: 'selected', ids: [id], label: '当前单据'}, {recordId: id})});
   const progress = createProgress({
     environment,
     ui,
@@ -132,6 +137,7 @@ export function createApplication(environment, options = {}) {
     services,
     ReceiptWorkbench,
     ReceiptQueue,
+    openResultPreview: (...args) => result_preview.open(...args),
     retryOne: (...args) => imports.retryOne(...args),
     startReviewScope: (...args) => review_queue.startReviewScope(...args),
     openProcessHistory: (...args) => process_history.open(...args)
@@ -210,7 +216,9 @@ export function createApplication(environment, options = {}) {
     if (initialized) return;
     initialized = true;
     process_history.initialize();
+    result_preview.initialize();
     retention_settings.initialize();
+    remote_settings.initialize();
     records.initialize();
     recognition_plan.initialize();
     imports.initialize();
@@ -219,7 +227,6 @@ export function createApplication(environment, options = {}) {
     progress.initialize();
     report.initialize();
     navigation.initialize();
-    $('#workbench-open-records')?.addEventListener('click', () => records.openDayRecords($('#progress-date').value));
     document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQueue(); });
 
     window.addEventListener('beforeunload', event => { if (importsState.batchRunning || importsState.importScanning || reviewState.reviewDirty || reviewState.reviewSaving) { event.preventDefault(); event.returnValue=''; } });
