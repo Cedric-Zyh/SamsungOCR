@@ -6,11 +6,10 @@ import numpy as np
 
 from receipt_ocr.imaging.crops import save_region_crop, save_color_isolated_seal
 
-from receipt_ocr.imaging.ellipse import save_ellipse_normalized_seal, map_ellipse_box_to_normalized
-
 from receipt_ocr.imaging.bands import save_round_seal_type_band, round_seal_type_band_box
 
 from receipt_ocr.imaging.unwrap import save_ring_text_band_preview, save_unwrapped_seal
+from receipt_ocr.imaging.ring_border import trace_ellipse_border, save_ring_border_overlay
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
 from .round import prepare_round_stamp
@@ -148,19 +147,15 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
         except Exception as exc:
             artifact["errors"].append({"step": "orientation", "message": str(exc)})
     artifact["orientation"] = orientation
-    normalization_source = working
     if shape == "ellipse":
-        normalized = path("normalized")
-        save_ellipse_normalized_seal(working, normalized, color=region.color)
-        working = normalized
-        artifact["ellipse_normalized_url"] = add("normalized", working, "椭圆拉伸校正图")
+        artifact["ring_geometry"] = "ellipse_direct_normals"
 
     # Always read the final color-safe geometry, never the original form crop.
     body_input = inputs[-1]
     body_input.update(
         ocr_input=shape == "rectangle",
         channel="body",
-        label=("椭圆拉伸校正图 · 环形 OCR 几何图"
+        label=("旋正椭圆原比例图 · 环形 OCR 几何图"
                 if shape == "ellipse" else "章色识别图"),
     )
     artifact["body_input_id"] = body_input["id"]
@@ -194,17 +189,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
         try:
             aligned = bool(artifact.get("color_isolated_oriented_url")) or shape == "ellipse"
             source_mask_box = source_focus
-            if shape == "ellipse" and source_mask_box:
-                # The oval is stretched after orientation. Carry the same
-                # exact detector box through the crop/resize transform.
-                focus = map_ellipse_box_to_normalized(
-                    normalization_source, source_focus, color=region.color
-                )
-                mask_box = map_ellipse_box_to_normalized(
-                    normalization_source, source_mask_box, color=region.color
-                )
-            else:
-                mask_box = source_mask_box
+            mask_box = source_mask_box
             if mask_box:
                 box = tuple(int(round(value)) for value in mask_box)
                 save_round_seal_type_band(working, center, orientation_aligned=aligned, focus_box=focus)
@@ -226,7 +211,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     ),
                 )
                 ring_input_label = (
-                    "椭圆拉伸校正图 · 横向文字区域填白（环形 OCR 实际输入）"
+                    "旋正椭圆原比例图 · 横向文字区域填白（环形 OCR 实际输入）"
                     if shape == "ellipse"
                     else (
                         "旋正章色图 · 横向文字框及对称框填白（环形 OCR 实际输入）"
@@ -235,7 +220,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     )
                 )
                 artifact["ring_input_operation"] = (
-                    "在椭圆拉伸校正图上，仅将 OCR dt_polys 合并外接框填白"
+                    "在旋正椭圆原比例图上，仅将 OCR dt_polys 合并外接框填白，直接沿椭圆展开"
                     if shape == "ellipse"
                     else (
                         "在旋正章色整图上，仅将横向文字框及中轴线对称框填白"
@@ -258,7 +243,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 # full stamp is already the correct ring-OCR input.
                 _copy_ring_input(working, ring_input)
                 ring_input_label = (
-                    "椭圆拉伸校正图 · 无横向文字，直接作为环形 OCR 实际输入"
+                    "旋正椭圆原比例图 · 无横向文字，直接作为环形 OCR 实际输入"
                     if shape == "ellipse"
                     else "旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入"
                 )
@@ -272,23 +257,37 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             )
             artifact["ring_input_url"] = ring_input_url
             artifact["ring_input_source_url"] = (
-                artifact.get("ellipse_normalized_url")
-                if shape == "ellipse"
-                else artifact.get("color_isolated_oriented_url") or artifact.get("color_isolated_url")
+                artifact.get("color_isolated_oriented_url") or artifact.get("color_isolated_url")
             )
             # The ring input is already a corrected, white-covered stamp
             # image.  Use the ellipse-aware sampler for both round and oval
             # stamps: the outer border remains visible after the cover, while
             # the inner border may be missing and must be estimated.
+            ring_guide = None
+            if shape == "ellipse":
+                # Measure the intact ring before the centre-row white mask can
+                # cut through it. All downstream images reuse these coordinates.
+                ring_guide = trace_ellipse_border(working, color=region.color)
+                if ring_guide is not None:
+                    overlay = path("ring-border")
+                    save_ring_border_overlay(working, overlay, ring_guide)
+                    artifact["ring_border_url"] = add("ring-border", overlay, "检测到的椭圆边框")
+                    artifact["ring_border_detection"] = ring_guide.summary()
+                    artifact["ring_geometry"] = "ellipse_observed_border"
+                else:
+                    artifact["ring_border_detection"] = {
+                        "method": "ellipse_estimate", "note": "可见边框不足，使用椭圆几何估计"
+                    }
             ring_band = path("ring-text-band")
-            save_ring_text_band_preview(ring_input, ring_band, color=region.color)
+            save_ring_text_band_preview(ring_input, ring_band, color=region.color, ring_guide=ring_guide)
             artifact["ring_text_band_url"] = add(
                 "ring-text-band",
                 ring_band,
                 "环形文字带（展开前）",
             )
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
-                                elliptical=True, normalized=True, single_line=True)
+                                elliptical=True, normalized=True, single_line=True,
+                                direct_ellipse=shape == "ellipse", ring_guide=ring_guide)
             ring_url = add("ring", ring, "圆环公司文字", "ring")
             jobs.append((inputs[-1], ring))
             artifact.update(unwrapped_url=ring_url, unwrapped_text="", unwrap_texts=[])

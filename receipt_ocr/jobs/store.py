@@ -4,7 +4,8 @@ import hashlib
 import json
 import uuid
 
-from ..persistence.database import now_iso
+from ..persistence.database import now_iso, DEFAULT_RECOGNITION_SETTINGS
+from ..domain.recognition import options_with_current_settings
 from ..runtime.progress import public_progress, merge_progress, seconds_between, STAGE_LABELS, MODEL_LABELS
 
 
@@ -176,7 +177,7 @@ class JobStore:
         return dict(row)
 
     @staticmethod
-    def public(job):
+    def public(job, current_settings=None):
         output = {key: job[key] for key in (
             'id', 'task_id', 'client_key', 'filename', 'status', 'created_at',
             'uploaded_at', 'started_at', 'finished_at', 'result_id',
@@ -191,8 +192,10 @@ class JobStore:
         if output['status'] == 'queued' and not output['start_requested']:
             output['status'] = 'ready'
         options = json.loads(job['payload_json'])
+        if current_settings is not None and job['status'] in ('awaiting_upload', 'queued', 'failed'):
+            options = options_with_current_settings(options, current_settings)
         plan = options.get('recognition_config')
-        output['uses_remote'] = any(method in {'qingtong', 'danzhengtong'} for methods in plan.values() for method in methods) if plan is not None else options.get('seal_recognition_mode') in ('qingtong', 'qingtong_only')
+        output['uses_remote'] = any(method in {'qingtong', 'danzhengtong'} for methods in plan.values() if isinstance(methods, list) for method in methods) if plan is not None else options.get('seal_recognition_mode') in ('qingtong', 'qingtong_only')
         output['review_status'] = job.get('review_status', '')
         output['final_result'] = job.get('final_result', '')
         return output
@@ -220,6 +223,7 @@ class JobStore:
                        for job_id in job_ids)):
             raise ValueError('请选择有效的待开始回单')
         job_ids = list(dict.fromkeys(job_ids))
+        settings = self.database.get_json_setting('recognition_defaults', DEFAULT_RECOGNITION_SETTINGS)
         with self.database.connect() as con:
             con.execute('BEGIN IMMEDIATE')
             jobs = []
@@ -243,7 +247,7 @@ class JobStore:
                     tasks.add(job['task_id'])
             for task_id in tasks:
                 self._refresh(con, task_id)
-            items = [self.public(dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()))
+            items = [self.public(dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()), settings)
                      for job_id in job_ids]
         return {'started': started, 'items': items}
 
@@ -373,8 +377,8 @@ class JobStore:
         """Compatibility alias for callers that use the queue action name."""
         return self.delete_job(job_id)
 
-    def delete_jobs(self, job_ids):
-        """Delete unfinished queue items atomically; finished rows are reported but kept."""
+    def delete_jobs(self, job_ids, *, inactive_only=False):
+        """Cancel unfinished jobs, or remove inactive jobs from the workbench."""
         if (not isinstance(job_ids, list) or not job_ids or len(job_ids) > 5000
                 or any(not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 100
                        for job_id in job_ids)):
@@ -390,7 +394,7 @@ class JobStore:
                 rows.append(row)
             deleted, kept, tasks = [], [], set()
             for row in rows:
-                if row['status'] not in ACTIVE:
+                if (row['status'] == 'running' if inactive_only else row['status'] not in ACTIVE):
                     kept.append(dict(row))
                     continue
                 con.execute('DELETE FROM recognition_jobs WHERE id=?', (row['id'],))
@@ -424,9 +428,14 @@ class JobStore:
             row = con.execute("SELECT * FROM recognition_jobs WHERE status='queued' AND start_requested=1 ORDER BY priority DESC,uploaded_at,rowid LIMIT 1").fetchone()
             if row is None:
                 return None
+            settings_row = con.execute(
+                "SELECT value FROM app_settings WHERE key='recognition_defaults'"
+            ).fetchone()
+            settings = json.loads(settings_row['value']) if settings_row else DEFAULT_RECOGNITION_SETTINGS
+            options = options_with_current_settings(json.loads(row['payload_json']), settings)
             timestamp = now_iso()
-            con.execute("UPDATE recognition_jobs SET status='running',started_at=?,attempt=attempt+1,error_message='',progress_json='{}' WHERE id=?",
-                        (timestamp, row['id']))
+            con.execute("UPDATE recognition_jobs SET status='running',started_at=?,attempt=attempt+1,error_message='',progress_json='{}',payload_json=? WHERE id=?",
+                        (timestamp, json.dumps(options, ensure_ascii=False), row['id']))
             self._log(con, row['id'], row['task_id'], 'running', '开始识别',
                       f"第 {int(row['attempt']) + 1} 次处理", 'running', event_at=timestamp)
             self._refresh(con, row['task_id'])
@@ -550,13 +559,14 @@ class JobStore:
                            counts['failed'], counts['pending_review'], task_id))
 
     def task(self, task_id):
+        settings = self.database.get_json_setting('recognition_defaults', DEFAULT_RECOGNITION_SETTINGS)
         with self.database.connect() as con:
             task = con.execute('SELECT * FROM batch_tasks WHERE id=?', (task_id,)).fetchone()
             if task is None:
                 raise KeyError(task_id)
             output = dict(task)
             output.update(self._counts(con, task_id))
-            output['items'] = [self.public(dict(row)) for row in con.execute(
+            output['items'] = [self.public(dict(row), settings) for row in con.execute(
                 'SELECT * FROM recognition_jobs WHERE task_id=? ORDER BY CAST(client_key AS INTEGER)', (task_id,))]
         return output
 
@@ -690,10 +700,11 @@ class JobStore:
                 'job': self.public(dict(jobs[-1])) if jobs else None}
 
     def daily(self, day):
+        settings = self.database.get_json_setting('recognition_defaults', DEFAULT_RECOGNITION_SETTINGS)
         with self.database.connect() as con:
-            return [self.public(dict(row)) for row in con.execute('''SELECT j.*,r.review_status,r.final_result FROM recognition_jobs j
+            return [self.public(dict(row), settings) for row in con.execute('''SELECT j.*,r.review_status,r.final_result FROM recognition_jobs j
                 JOIN batch_tasks t ON t.id=j.task_id
                 LEFT JOIN results r ON r.id=COALESCE(j.result_id,j.target_result_id) AND r.deleted_at=''
                 WHERE substr(t.created_at,1,10)=?
                   AND (COALESCE(j.result_id,j.target_result_id) IS NULL OR r.id IS NOT NULL)
-                ORDER BY j.status IN ('queued','running') DESC,j.created_at DESC,j.rowid DESC''', (day,))]
+                ORDER BY j.created_at DESC,j.rowid DESC''', (day,))]

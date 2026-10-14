@@ -132,3 +132,6 @@ body[data-active-page="progress"] .app-sidebar {background:#f2f1ed}
 .workbench-page .queue-tools [data-work-filter="all"][aria-pressed="true"] {display:none}
 .workbench-page .work-item-failed .work-row-actions .queue-primary {background:transparent;color:#4f5b43;border-color:#9ca58f}
 .workbench-page .work-item-failed .work-row-actions .queue-primary:hover:not(:disabled) {background:#e9ecdf}
+
+.workbench-page .mini-button.queue-delete {color:#a65f4e}
+.workbench-page .mini-button.queue-delete:hover:not(:disabled) {background:#f5e9e1}

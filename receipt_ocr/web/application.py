@@ -232,6 +232,11 @@ def ensure_initialized() -> None:
 
 
 def _configured_analyze(*args, recognition_config=None, previous_fields=None, **kwargs):
+    # Other windows may have saved new credentials since this worker started.
+    remote_settings.restore(database)
+    saved_qingtong = database.get_json_setting('qingtong_credentials', None)
+    if isinstance(saved_qingtong, dict):
+        analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
     return recognition_service.recognize(
         *args,
         recognition_config=recognition_config,
@@ -435,6 +440,10 @@ def cancel_jobs():
     return queue_handlers.cancel_jobs(_queue_dependencies())
 
 
+def delete_queue_jobs():
+    return queue_handlers.cancel_jobs(_queue_dependencies(), inactive_only=True)
+
+
 
 def process_history():
     return queue_handlers.process_history(_queue_dependencies())
@@ -535,6 +544,7 @@ def retry_result(result_id: int):
     payload = request.get_json(silent=True) or {}
     try:
         options = resolve_recognition_options(
+            settings=database.get_json_setting("recognition_defaults"),
             recognition_config=payload.get("recognition_config", current.get("recognition_config")),
             ocr_backend=payload.get("ocr_backend") or current.get("ocr_backend"),
             seal_recognition_mode=(
@@ -575,6 +585,7 @@ def bulk_retry():
             if not source or not source.is_file():
                 raise FileNotFoundError("原始图片不存在")
             options = resolve_recognition_options(
+                settings=database.get_json_setting("recognition_defaults"),
                 recognition_config=payload.get("recognition_config", current.get("recognition_config")),
                 ocr_backend=payload.get("ocr_backend") or current.get("ocr_backend"),
                 seal_recognition_mode=(
@@ -611,6 +622,7 @@ def _enqueue_result_retries(ids, payload):
             if source is None or not source.is_file():
                 return jsonify(error=f"原始图片不存在：{current['filename']}"), 409
             resolved = resolve_recognition_options(
+                settings=database.get_json_setting("recognition_defaults"),
                 recognition_config=payload.get('recognition_config', current.get('recognition_config')),
                 ocr_backend=payload.get('ocr_backend') or current.get('ocr_backend'),
                 seal_recognition_mode=(
@@ -761,6 +773,7 @@ register_routes(app, {
     'retry_job': retry_job,
     'cancel_job': cancel_job,
     'cancel_jobs': cancel_jobs,
+    'delete_queue_jobs': delete_queue_jobs,
     'process_history': process_history,
     'analyze_upload': analyze_upload,
     'daily_results': daily_results,

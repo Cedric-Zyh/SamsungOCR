@@ -64,7 +64,7 @@ def test_rendered_attributes_preserve_quotes_without_creating_event_handlers():
 
     record = Elements()
     record.feed(samples["markup"])
-    assert any(attrs.get("title") == samples["filename"] for _, attrs in record.tags)
+    assert any(attrs.get("data-more-filename") == samples["filename"] for _, attrs in record.tags)
     assert any(attrs.get("title") == samples["customer"] for _, attrs in record.tags)
     products = Elements()
     products.feed(samples["productMarkup"])

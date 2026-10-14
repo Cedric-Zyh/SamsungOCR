@@ -8,7 +8,7 @@ from .contracts import SealRegion
 from .io import _read_image
 from .colors import _ocr_color_mask
 from .shapes import seal_region_is_rectangular
-from .ellipse import _save_ellipse_annulus_unwrapped
+from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ellipse_normal_maps
 
 
 def _robust_round_seal_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -60,84 +60,24 @@ def save_ring_text_band_preview(
     destination: str | Path,
     *,
     color: str = "red",
+    ring_guide=None,
 ) -> Path:
-    """Save the radial text band used before ellipse-aware ring unwrapping.
-
-    This is an auditable preview only.  It uses the same outer-border fit and
-    missing-inner-border estimate as ``_save_ellipse_annulus_unwrapped`` so a
-    reviewer can see which coloured pixels are eligible for the unwrap.
-    """
+    """Show exactly the band sampled by the shared border guide or ellipse."""
     image = _read_image(source)
     mask = _ocr_color_mask(image, color)
-    fit_mask = cv2.morphologyEx(
-        mask,
-        cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
-    )
-    contours, _ = cv2.findContours(fit_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-    fitted = []
-    for contour in contours:
-        if len(contour) < 20 or cv2.contourArea(contour) < mask.size * 0.01:
-            continue
-        try:
-            ellipse = cv2.fitEllipse(contour)
-            (cx, cy), (axis_a, axis_b), angle = ellipse
-            mean_axis = (float(axis_a) + float(axis_b)) / 2.0
-            if mean_axis <= 0:
-                continue
-            points = contour[:, 0].astype(np.float32)
-            theta = np.deg2rad(float(angle))
-            dx, dy = points[:, 0] - cx, points[:, 1] - cy
-            x_rot = dx * np.cos(theta) + dy * np.sin(theta)
-            y_rot = -dx * np.sin(theta) + dy * np.cos(theta)
-            residual = np.sqrt(
-                (x_rot / (float(axis_a) / 2.0)) ** 2
-                + (y_rot / (float(axis_b) / 2.0)) ** 2
-            )
-            fitted.append((mean_axis, float(np.median(np.abs(residual - 1.0))), ellipse))
-        except (cv2.error, ValueError, ZeroDivisionError):
-            continue
-    clean = [item for item in fitted if item[1] <= 0.06]
-    if not clean:
-        clean = [item for item in fitted if item[1] <= 0.12]
-
+    if ring_guide is not None and tuple(mask.shape) != ring_guide.source_shape:
+        raise ValueError("印章边框与预览图片坐标不一致")
+    geometry = ring_guide.annulus if ring_guide is not None else _fit_ellipse_annulus(mask)
     preview = np.full_like(image, 255)
-    if clean:
-        outer = max(clean, key=lambda item: item[0])
-        inner_candidates = [
-            item for item in clean
-            if outer[0] * 0.35 < item[0] < outer[0] * 0.88
-        ]
-        estimated_inner = not inner_candidates
-        inner = max(inner_candidates, key=lambda item: item[0]) if inner_candidates else (
-            outer[0] * 0.55,
-            outer[1],
-            (
-                outer[2][0],
-                (outer[2][1][0] * 0.55, outer[2][1][1] * 0.55),
-                outer[2][2],
-            ),
-        )
-        (outer_cx, outer_cy), _, _ = outer[2]
-        (inner_cx, inner_cy), _, _ = inner[2]
-        center_x = (float(outer_cx) + float(inner_cx)) / 2.0
-        center_y = (float(outer_cy) + float(inner_cy)) / 2.0
-
-        def radius(ellipse, angles):
-            (_, _), (axis_a, axis_b), angle = ellipse
-            radians = angles - np.deg2rad(float(angle))
-            return 1.0 / np.sqrt(
-                (np.cos(radians) / (float(axis_a) / 2.0)) ** 2
-                + (np.sin(radians) / (float(axis_b) / 2.0)) ** 2
-            )
-
-        yy, xx = np.indices(mask.shape, dtype=np.float32)
-        angles = np.arctan2(yy - center_y, xx - center_x)
-        radial = np.hypot(xx - center_x, yy - center_y)
-        outer_limit = radius(outer[2], angles) * (0.96 if estimated_inner else 0.98)
-        inner_limit = radius(inner[2], angles) * (0.88 if estimated_inner else 1.08)
-        band = (radial >= inner_limit) & (radial <= outer_limit) & (mask > 0)
-        preview[band] = image[band]
+    if geometry is not None:
+        map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
+                        else _ellipse_normal_maps(*geometry))
+        band = np.zeros(mask.shape, dtype=np.uint8)
+        for row, value in ((0, 255), (-1, 0)):
+            polygon = np.rint(np.column_stack((map_x[row], map_y[row]))).astype(np.int32)
+            cv2.fillPoly(band, [polygon], value)
+        keep = (band > 0) & (mask > 0)
+        preview[keep] = image[keep]
     else:
         preview[mask > 0] = image[mask > 0]
 
@@ -161,6 +101,8 @@ def save_unwrapped_seal(
     color: str = "red",
     normalized: bool = False,
     single_line: bool = False,
+    direct_ellipse: bool = False,
+    ring_guide=None,
 ) -> bool:
     """Unwrap circular stamp text into a horizontal line for conventional OCR.
 
@@ -214,7 +156,7 @@ def save_unwrapped_seal(
             raise ValueError("矩形印章校正图片编码失败")
         encoded.tofile(str(destination))
         return False
-    if elliptical and normalized:
+    if elliptical and (normalized or direct_ellipse):
         # Keep anti-aliased red strokes for the v6 recognizer; hard threshold
         # turns the thin oval company glyphs into broken blobs.
         b, g, r = (channel.astype(np.float32) for channel in cv2.split(crop))
@@ -224,9 +166,12 @@ def save_unwrapped_seal(
             dominance = b - np.maximum(g, r)
         gray = 255.0 - np.clip(dominance * (255.0 / 160.0), 0.0, 255.0)
         if _save_ellipse_annulus_unwrapped(
-            gray.astype(np.uint8), mask, destination, single_line=single_line
+            gray.astype(np.uint8), mask, destination, single_line=single_line,
+            ring_guide=ring_guide,
         ):
             return False
+        if direct_ellipse:
+            raise ValueError("椭圆边框不足以可靠展开，请核对原图")
     # Normalize the colored-ink bounding box to a square before polar
     # unwrapping.  Padding a 2:1 oval into a square leaves its text on an
     # ellipse, which a circular polar transform bends into waves.  Stretching

@@ -28,8 +28,8 @@ export function overviewCounts(items, workbench) {
 }
 export function selectionKey(item) { return item.job?.id ? `job:${item.job.id}` : `record:${item.id}`; }
 export function orderedQueue(items, workbench) {
-  const rank = {running: 0, queued: 1, ready: 2, failed: 3, completed: 4, cancelled: 5};
-  return [...items].sort((a, b) => rank[overviewStatus(a, workbench)] - rank[overviewStatus(b, workbench)]
-    || (a.status === 'queued' && b.status === 'queued' ? (b.job?.priority || 0) - (a.job?.priority || 0)
-      || String(a.job?.uploaded_at || '').localeCompare(b.job?.uploaded_at || '') : 0));
+  const importedAt = item => Date.parse(item.job?.created_at || item.record?.created_at || '') || 0;
+  // Display order is independent of the worker's processing priority.
+  return [...items].sort((a, b) => importedAt(b) - importedAt(a)
+    || (a.job && b.job ? 0 : (Number(b.id) || 0) - (Number(a.id) || 0)));
 }

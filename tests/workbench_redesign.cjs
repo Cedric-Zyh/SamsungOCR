@@ -152,7 +152,7 @@ test('filenames, customers, errors, review text and job IDs remain escaped', asy
   assert.doesNotMatch(h.$('#queue').innerHTML, /<img/);
 });
 
-test('expanding the list survives polling with stable receipt order and resets on tabs and dates', async () => {
+test('new imports appear first after polling while expanded list size is preserved', async () => {
   const h = harness(); h.state.progress.workNeedsReview = true; h.data = Array.from({length: 120}, (_, index) => row(index + 1));
   await h.controller.loadDailyResults();
   assert.equal((h.$('#queue').innerHTML.match(/data-work-view=/g) || []).length, 50);
@@ -161,7 +161,7 @@ test('expanding the list survives polling with stable receipt order and resets o
   h.data = [row(121), ...h.data.slice().reverse()];
   await h.controller.loadDailyResults();
   assert.equal(h.$('#workbench-page-note').textContent, '已显示 100 / 121 张');
-  assert.equal(h.$('#queue').innerHTML.match(/data-work-view="(\d+)"/)[1], '1');
+  assert.equal(h.$('#queue').innerHTML.match(/data-work-view="(\d+)"/)[1], '121');
   await h.filters[1].dispatch('click'); await h.filters[0].dispatch('click');
   assert.equal(h.$('#workbench-page-note').textContent, '已显示 50 / 121 张');
   await h.$('#workbench-more').dispatch('click');
@@ -475,7 +475,7 @@ test('reuploading a held remote job has no confirmation and still waits for expl
 test('removing a held import asks first and uses the guarded queue endpoint', async () => {
   const h = harness(); h.data = []; h.jobs = [readyJob('remove-1')];
   await h.controller.loadDailyResults();
-  await h.$('#queue').dispatch('click', node({jobRemove: 'remove-1'}));
+  await h.$('#queue').dispatch('click', node({workDelete: 'job:remove-1'}));
   assert.equal(h.requests.some(r => r.options?.method), false);
   h.confirm = true;
   const read = h.api;
@@ -483,8 +483,86 @@ test('removing a held import asks first and uses the guarded queue endpoint', as
     if (options?.method) { h.jobs = []; return {updated: 1}; }
     return read(url, options);
   };
-  await h.$('#queue').dispatch('click', node({jobRemove: 'remove-1'}));
+  await h.$('#queue').dispatch('click', node({workDelete: 'job:remove-1'}));
   assert.deepEqual(h.requests.filter(r => r.options?.method).map(r => [r.url, r.options.json]),
-    [['/api/jobs/manage', {ids: ['remove-1'], action: 'remove'}]]);
+    [['/api/jobs/delete', {ids: ['remove-1']}]]);
   assert.doesNotMatch(h.$('#queue').innerHTML, /remove-1.jpg/);
+});
+
+test('queue display sorts imports newest first across statuses and polling updates', async () => {
+  const h = harness(); h.data = [];
+  h.state.progress.workFilters = ['ready', 'queued', 'running', 'completed', 'failed'];
+  h.jobs = [
+    readyJob('old-running', {status: 'running', created_at: '2026-09-10T10:00:00'}),
+    readyJob('recent-done', {status: 'succeeded', created_at: '2026-09-10T12:00:00', result_id: 1}),
+    readyJob('middle-queued', {status: 'queued', priority: 100, created_at: '2026-09-10T11:00:00'})
+  ];
+  await h.controller.loadDailyResults();
+  const order = () => [...h.$('#queue').innerHTML.matchAll(/data-work-select="job:([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(order(), ['recent-done', 'middle-queued', 'old-running']);
+  h.jobs.push(readyJob('new-import', {created_at: '2026-09-10T13:00:00'}));
+  await h.controller.loadDailyResults({refreshRecords: false});
+  assert.deepEqual(order(), ['new-import', 'recent-done', 'middle-queued', 'old-running']);
+});
+
+test('completed record can be deleted singly and cancellation makes no write', async () => {
+  const h = harness(); h.state.progress.workFilters = ['completed'];
+  await h.controller.loadDailyResults();
+  assert.match(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
+  await h.$('#queue').dispatch('click', node({workDelete: 'record:1'}));
+  assert.equal(h.requests.some(r => r.options?.method), false);
+  const read = h.api; h.confirm = true;
+  h.api = async (url, options) => {
+    if (url === '/api/results/delete') { assert.deepEqual(options.json.ids, [1]); h.data = []; return {ids: [1]}; }
+    return read(url, options);
+  };
+  await h.$('#queue').dispatch('click', node({workDelete: 'record:1'}));
+  assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1.jpg/);
+  assert.equal(h.state.records.recordsStale, true);
+});
+
+test('bulk deletion includes failed and completed rows, but preserves a job claimed meanwhile', async () => {
+  const h = harness(); h.confirm = true;
+  h.state.progress.workFilters = ['ready', 'queued', 'running', 'completed', 'failed'];
+  h.jobs = [readyJob('done', {status: 'succeeded', result_id: 1}), readyJob('failure', {status: 'failed'}),
+    readyJob('pending', {status: 'queued', target_result_id: 2}), readyJob('running', {status: 'running'})];
+  h.data = [row(1), row(2)];
+  await h.controller.loadDailyResults();
+  assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-delete="job:running"/);
+  const all = h.$('#workbench-select-all'); all.checked = true; await all.dispatch('change');
+  assert.equal(h.$('#queue-selected-delete').textContent, '删除所选（3）');
+  const read = h.api;
+  h.api = async (url, options) => {
+    if (url === '/api/jobs/delete') {
+      assert.deepEqual(new Set(options.json.ids), new Set(['done', 'failure', 'pending']));
+      h.jobs = h.jobs.filter(job => ['pending', 'running'].includes(job.id));
+      h.jobs[0].status = 'running';
+      return {deleted_ids: ['done', 'failure'], kept_ids: ['pending'], result_ids: [1]};
+    }
+    if (url === '/api/results/delete') { assert.deepEqual(options.json.ids, [1]); h.data = [row(2)]; return {ids: [1]}; }
+    return read(url, options);
+  };
+  await h.$('#queue-selected-delete').dispatch('click');
+  assert.match(h.notices.at(-1), /1 张已开始识别/);
+  assert.match(h.$('#queue').innerHTML, /pending.jpg/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /done.jpg|failure.jpg/);
+});
+
+test('deletion locks duplicate clicks and refreshes records even after partial failure', async () => {
+  const h = harness(); h.confirm = true; h.state.progress.workFilters = ['completed'];
+  h.jobs = [readyJob('done', {status: 'succeeded', result_id: 1})];
+  await h.controller.loadDailyResults();
+  const read = h.api, pending = deferred();
+  h.api = async (url, options) => {
+    if (url === '/api/jobs/delete') { await pending.promise; h.jobs = []; return {deleted_ids: ['done'], result_ids: [1]}; }
+    if (url === '/api/results/delete') throw Error('记录删除失败');
+    return read(url, options);
+  };
+  const click = () => h.$('#queue').dispatch('click', node({workDelete: 'job:done'}));
+  const saving = click(); await click();
+  assert.equal(h.requests.filter(r => r.url === '/api/jobs/delete').length, 1);
+  pending.resolve(); await saving;
+  assert.match(h.notices.at(-1), /删除未全部完成/);
+  assert.match(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
+  assert.equal(h.state.records.recordsStale, true);
 });

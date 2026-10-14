@@ -255,3 +255,17 @@ def test_ring_input_uses_oriented_image_and_its_detected_type_box():
         },
     )
     assert _ring_input(evidence) == (oriented, [20, 30, 100, 50])
+
+
+def test_four_way_equivalent_text_prefers_small_fine_correction():
+    def candidate(angle, fine, confidence, text='收货专用章'):
+        return dict(angle=angle, fine_rotation=fine, band_confidence=confidence,
+                    band_text=text, rank=((1, 5, 3), 1, confidence), error='')
+    original = candidate(0, -11.723, .965)
+    sideways = candidate(270, 78.254, .9865)
+    select = combined_orientation._select_four_way_candidate
+    assert select([original, sideways]) is original
+    stronger = candidate(270, 78.254, .999)
+    assert select([original, stronger]) is stronger
+    different = candidate(270, 78.254, .9865, '售后专用章')
+    assert select([original, different]) is different

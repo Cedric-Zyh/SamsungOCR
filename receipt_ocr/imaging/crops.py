@@ -42,11 +42,11 @@ def save_color_isolated_seal(
     destination: str | Path,
     region: SealRegion,
 ) -> None:
-    """Keep only colored stamp ink on white while preserving stroke intensity.
+    """Keep colored stamp ink on white with a modest red contrast gain.
 
     Binary isolation is useful for faint contours, but it removes the local
     intensity variation that OCR detectors sometimes need to separate curved
-    Chinese glyphs.  This variant retains the original red/blue pixels and
+    Chinese glyphs.  This variant retains red/blue intensity variations and
     removes every neutral printed form pixel, so it is safe matching evidence
     even when the stamp overlaps the printed signature requirement.
     """
@@ -59,6 +59,10 @@ def save_color_isolated_seal(
     mask = _ocr_color_mask(crop, region.color)
     canvas = np.full_like(crop, 255)
     canvas[mask > 0] = crop[mask > 0]
+    if region.color == "red":
+        # Modest contrast gain on retained ink only; keep white paper white.
+        ink = canvas[mask > 0].astype(np.float32)
+        canvas[mask > 0] = np.clip(255.0 - (255.0 - ink) * 1.20, 0, 255).astype(np.uint8)
     target_width = max(1000, canvas.shape[1])
     scale = target_width / max(1, canvas.shape[1])
     canvas = cv2.resize(canvas, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)

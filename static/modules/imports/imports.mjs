@@ -5,7 +5,7 @@ import {confirmInline} from '../core/inline_confirm.mjs';
 export function createImports({
   environment, ui, importsState, recordsState, progressState = {}, api, services = createApiClients(api), ReceiptImport, readRecognitionPlan, readAcceptancePolicy,
   usesRemotePlan, updateRecognitionPlan, loadDailyResults, showQueuedRetry, closeModal,
-  syncStartRecognition = () => {}
+  syncStartRecognition = () => {}, flushSettings = async () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, localStorage, FormData} = environment;
@@ -53,6 +53,7 @@ export function createImports({
     importsState.batchRunning = true;
     importsState.uploadingJobs = new Set();
     try {
+      await flushSettings();
       syncStartRecognition();
       $('#choose-file').disabled = $('#choose-folder').disabled = true;
       updateRecognitionPlan();
@@ -112,6 +113,7 @@ export function createImports({
     if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: '重新识别会将这张完整回单上传至所选远程识别服务。'})) return;
     if (button) button.disabled = true;
     try {
+      await flushSettings();
       const payload = {background: true,
         ocr_backend: importsState.ocrBackend, seal_recognition_mode: importsState.sealRecognitionMode, recognition_config: readRecognitionPlan(), acceptance_policy: readAcceptancePolicy?.()};
       const task = await (services.records.retry(id, payload));
@@ -125,6 +127,7 @@ export function createImports({
     const button = $('#bulk-retry'); button.disabled = true;
     if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: `批量重新识别会将 ${recordsState.selected.size} 张完整回单上传至所选远程识别服务。`})) { button.disabled = false; return; }
     try {
+      await flushSettings();
       const payload = {background: true, ids: [...recordsState.selected], ocr_backend: importsState.ocrBackend,
         seal_recognition_mode: importsState.sealRecognitionMode, recognition_config: readRecognitionPlan(), acceptance_policy: readAcceptancePolicy?.()};
       const task = await (services.records.bulkRetry(payload));

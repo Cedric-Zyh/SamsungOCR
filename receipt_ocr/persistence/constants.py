@@ -11,7 +11,7 @@ DEFAULT_RECOGNITION_SETTINGS = {
         "products": [],
         "handwriting": ["paddle_v6"],
         "date": ["paddle_v6"],
-        "seal": ["paddle_v6", "qingtong"],
+        "seal": ["paddle_v6"],
         "seal_orientation": "polygon",
     },
     "acceptance_policy": {

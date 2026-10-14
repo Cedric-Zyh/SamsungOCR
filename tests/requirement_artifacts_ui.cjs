@@ -105,3 +105,18 @@ test('date tab and old records do not show fabricated requirement screenshots', 
   assert.doesNotMatch(render([], 'date'), /签章要求行原图/);
   assert.match(render([], 'seals', false), /旧记录可重新识别生成/);
 });
+
+test('observed ellipse border is inspectable beside the actual unwrapped input', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '椭圆',
+    original_url: '/files/artifacts/test/original.png',
+    color_isolated_oriented_url: '/files/artifacts/test/oriented.png',
+    ring_input_url: '/files/artifacts/test/ring-input.png',
+    unwrapped_url: '/files/artifacts/test/ring.png',
+    ring_geometry: 'ellipse_observed_border',
+    ring_border_url: '/files/artifacts/test/border.png',
+  }]);
+  assert.match(html, /沿检测到的边框环展开/);
+  assert.match(html, /绿色实测，黄色补全/);
+  assert.match(html, /\/files\/artifacts\/test\/border.png/);
+});

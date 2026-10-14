@@ -18,7 +18,7 @@ function node(dataset = {}) {
     fire(event) { listeners.get(event)?.({target:this}); },
   };
 }
-function harness({saved = null, providers = ['paddle_v6', 'paddle_seal', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true, orientationNode = false} = {}) {
+function harness({services = null, saved = null, providers = ['paddle_v6', 'paddle_seal', 'qingtong', 'danzhengtong'], unavailable = [], failSave = false, failRead = false, optionalNodes = true, orientationNode = false} = {}) {
   const targets = Object.fromEntries(stages.map(stage => [stage, node({target:stage})]));
   const cards = Object.fromEntries(stages.map(stage => [stage, node()]));
   const statuses = Object.fromEntries(stages.map(stage => [stage, node()]));
@@ -64,7 +64,7 @@ function harness({saved = null, providers = ['paddle_v6', 'paddle_seal', 'qingto
   const controller = createRecognitionPlan({environment:{localStorage:{
     getItem() { if (failRead) throw Error('read unavailable'); return typeof saved === 'string' ? saved : JSON.stringify(saved); },
     setItem(key, value) { if (failSave) throw Error('quota exceeded'); writes.push({key, plan:JSON.parse(value)}); },
-  }}, ui:{$, $$}, importsState:state});
+  }}, ui:{$, $$}, importsState:state, services});
   controller.initialize();
   return {controller, targets, cards, statuses, ids, methods, reset, writes, state,
     acceptance, rejection, lowConfidence,
@@ -261,4 +261,36 @@ test('the PP-OCRv6 tier is selectable, counts as a local method, and renders its
   const oldBrowser = harness({saved:{...emptyPlan(), date:['danzhengtong', 'paddle_v6']}, unavailable:['date:paddle_v6']});
   assert.deepEqual(oldBrowser.controller.readRecognitionPlan().date, ['danzhengtong']);
   assert.throws(() => harness({saved:{...emptyPlan(), date:['paddle_v6']}, unavailable:['date:paddle_v6']}).controller.readRecognitionPlan(), /签收日期/);
+});
+
+test('starting waits for service settings and a save failure is not silently ignored', async () => {
+  let complete, reject;
+  const h = harness({services:{settings:{updateRecognition: () => new Promise((resolve, fail) => {complete = resolve; reject = fail;})}}});
+  h.controller.updateRecognitionPlan();
+  let flushed = false;
+  const pending = h.controller.flushSettings().then(() => {flushed = true;});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(flushed, false);
+  complete({}); await pending;
+  assert.match(h.ids['plan-save-status'].textContent, /统一使用最新配置/);
+  h.controller.updateRecognitionPlan();
+  const failure = assert.rejects(h.controller.flushSettings(), /最新配置尚未保存/);
+  await new Promise(resolve => setImmediate(resolve));
+  reject(Error('offline')); await failure;
+  assert.match(h.ids['plan-save-status'].textContent, /保存失败/);
+  h.controller.updateRecognitionPlan();
+  await new Promise(resolve => setImmediate(resolve));
+  complete({}); await h.controller.flushSettings();
+});
+
+test('a late initial settings response cannot overwrite a new user selection', async () => {
+  let loaded;
+  const h = harness({services:{settings:{recognition: () => new Promise(resolve => {loaded = resolve;}), updateRecognition: async () => ({})}}});
+  await new Promise(resolve => setImmediate(resolve));
+  const changed = {...emptyPlan(), fields:['danzhengtong']};
+  h.controller.applyPlan(changed);
+  await h.controller.flushSettings();
+  loaded({recognition_config: {...emptyPlan(), fields:['paddle_v6']}, acceptance_policy:{}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.controller.readRecognitionPlan().fields, ['danzhengtong']);
 });

@@ -520,3 +520,55 @@ def test_customer_stamp_starting_above_footer_cutoff_is_kept_by_center(tmp_path)
 
     assert len(regions) == 1
     assert regions[0].y < .43
+
+
+def test_faint_red_strokes_are_retained_and_gently_darkened(tmp_path):
+    import cv2
+
+    image = np.full((200, 1000, 3), 255, dtype=np.uint8)
+    image[40:80, 100:300] = (235, 235, 250)
+    image[100:120, 100:900] = (90, 90, 90)
+    source, target = tmp_path / 'pale.png', tmp_path / 'color.png'
+    cv2.imwrite(str(source), image)
+    save_color_isolated_seal(source, target, SealRegion(0, 0, 1, 1, 'red', '客户章', 0))
+    output = cv2.imread(str(target))
+    assert output[60, 200, 0] < 235
+    assert output[60, 200, 2] > output[60, 200, 0]
+    assert np.all(output[110, 200] == 255)
+    assert np.all(output[0, 0] == 255)
+
+
+def test_ellipse_fit_rejects_extrapolated_border_and_offset_inner():
+    from receipt_ocr.imaging.ellipse import _ellipse_fits_canvas, _concentric_inner
+    bad = ((495.3, 213.6), (1222.2, 1669.8), 174.7)
+    good = ((553.4, 532.7), (931.4, 968.9), 156.1)
+    assert not _ellipse_fits_canvas(bad, (1101, 1101))
+    assert _ellipse_fits_canvas(good, (1101, 1101))
+    assert not _concentric_inner((670, .03, ((732, 596), (565, 775), 15)), (950, .02, good))
+
+
+def test_direct_ellipse_does_not_stretch_or_fall_back_to_circular_warp(tmp_path):
+    import cv2
+    import pytest
+    from receipt_ocr.imaging.unwrap import save_unwrapped_seal
+    source, target = tmp_path / 'blank.png', tmp_path / 'ring.png'
+    cv2.imwrite(str(source), np.full((100, 300, 3), 255, dtype=np.uint8))
+    with pytest.raises(ValueError, match='椭圆边框不足'):
+        save_unwrapped_seal(source, target, None, elliptical=True,
+                            direct_ellipse=True, single_line=True)
+    assert not target.exists()
+
+
+def test_normal_ellipse_unwrap_keeps_ring_markers_and_excludes_center(tmp_path):
+    import cv2
+    mask = np.zeros((500, 900), np.uint8)
+    cv2.ellipse(mask, (450, 250), (390, 190), 0, 0, 360, 255, 5)
+    gray = np.full_like(mask, 255)
+    cv2.rectangle(gray, (435, 75), (465, 120), 90, -1)
+    cv2.rectangle(gray, (785, 235), (815, 265), 130, -1)
+    cv2.rectangle(gray, (420, 220), (480, 280), 0, -1)
+    target = tmp_path / 'oval-ring.png'
+    assert _save_ellipse_annulus_unwrapped(gray, mask, target, single_line=True)
+    output = cv2.imread(str(target), 0)
+    assert (output < 160).sum() > 100
+    assert output.min() > 50

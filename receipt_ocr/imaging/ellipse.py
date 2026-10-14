@@ -9,6 +9,22 @@ from .io import _read_image
 from .colors import _ocr_color_mask
 
 
+def _ellipse_fits_canvas(ellipse, shape):
+    """Reject extrapolated borders that extend well outside the stamp crop."""
+    (cx, cy), (a, b), angle = ellipse
+    height, width = shape[:2]
+    theta = np.deg2rad(angle)
+    rx = np.hypot(a * np.cos(theta), b * np.sin(theta)) / 2
+    ry = np.hypot(a * np.sin(theta), b * np.cos(theta)) / 2
+    return bool(a > 0 and b > 0
+                and cx - rx >= -width * .10 and cx + rx <= width * 1.10
+                and cy - ry >= -height * .10 and cy + ry <= height * 1.10)
+
+
+def _concentric_inner(inner, outer):
+    return np.linalg.norm(np.subtract(inner[2][0], outer[2][0])) <= outer[0] * .08
+
+
 def save_ellipse_normalized_seal(
     source: str | Path,
     destination: str | Path,
@@ -127,21 +143,8 @@ def map_ellipse_box_to_normalized(
     return [mapped_left, mapped_top, mapped_right, mapped_bottom]
 
 
-def _save_ellipse_annulus_unwrapped(
-    gray: np.ndarray,
-    mask: np.ndarray,
-    destination: str | Path,
-    *,
-    single_line: bool = False,
-) -> bool:
-    """Unwrap a normalized oval's annulus with ellipse-aware sampling.
-
-    ``warpPolar`` assumes both boundaries are concentric circles.  Even after
-    an oval is stretched, the printed inner/outer borders are not perfectly
-    concentric, so polar sampling creates the duplicated/wavy text seen in
-    the v6 result.  Fit the two visible ellipse borders and sample between
-    them directly instead.
-    """
+def _fit_ellipse_annulus(mask):
+    """Share the measured ring geometry between the preview and OCR input."""
     # The stamp border is often broken by scan streaks and page text.  Fit
     # geometry on a lightly closed mask so those gaps do not make the outer
     # ellipse disappear; keep the original mask for the actual pixel sample.
@@ -160,6 +163,8 @@ def _save_ellipse_annulus_unwrapped(
             continue
         try:
             ellipse = cv2.fitEllipse(contour)
+            if not _ellipse_fits_canvas(ellipse, mask.shape):
+                continue
             (cx, cy), (axis_a, axis_b), angle = ellipse
             mean_axis = (float(axis_a) + float(axis_b)) / 2.0
             if mean_axis <= 0:
@@ -179,7 +184,7 @@ def _save_ellipse_annulus_unwrapped(
         except (cv2.error, ValueError, ZeroDivisionError):
             continue
     if not fitted:
-        return False
+        return None
     # Reject contours that are mostly connected glyph blobs; real oval
     # borders have a much tighter ellipse residual.
     clean = [item for item in fitted if item[1] <= 0.06]
@@ -191,11 +196,12 @@ def _save_ellipse_annulus_unwrapped(
         # reliable two-border fit; the ordinary path keeps its stricter gate.
         clean = [item for item in fitted if item[1] <= 0.12]
     if not clean:
-        return False
+        return None
     outer = max(clean, key=lambda item: item[0])
     inner_candidates = [
         item for item in clean
         if outer[0] * 0.35 < item[0] < outer[0] * 0.88
+        and _concentric_inner(item, outer)
     ]
     estimated_inner = not inner_candidates
     if inner_candidates:
@@ -212,6 +218,77 @@ def _save_ellipse_annulus_unwrapped(
             outer[1],
             ((outer_cx, outer_cy), (outer_a * 0.55, outer_b * 0.55), outer_angle),
         )
+    return outer, inner, estimated_inner
+
+
+def _ellipse_normal_maps(outer, inner, estimated_inner):
+    """Sample equal arc distances, with upright rows along border normals.
+
+    Rays from the centre shear characters on an ellipse. Normals are locally
+    perpendicular to the text baseline; equal arc distances also avoid
+    squeezing characters near the ends of the major axis.
+    """
+    (cx, cy), (axis_a, axis_b), angle = outer[2]
+    a, b = axis_a / 2, axis_b / 2
+    rotation = np.deg2rad(angle)
+    co, si = np.cos(rotation), np.sin(rotation)
+    start = np.arctan2(co / b, si / a)  # seam on the bottom ray
+    theta = np.linspace(start, start + 2 * np.pi, 12001)
+    x = cx + a * np.cos(theta) * co - b * np.sin(theta) * si
+    y = cy + a * np.cos(theta) * si + b * np.sin(theta) * co
+    distance = np.r_[0.0, np.cumsum(np.hypot(np.diff(x), np.diff(y)))]
+    width = max(1200, min(3600, round(distance[-1])))
+    theta = np.interp(np.linspace(0, distance[-1], width, endpoint=False), distance, theta)
+    x = cx + a * np.cos(theta) * co - b * np.sin(theta) * si
+    y = cy + a * np.cos(theta) * si + b * np.sin(theta) * co
+    nx = np.cos(theta) / a * co - np.sin(theta) / b * si
+    ny = np.cos(theta) / a * si + np.sin(theta) / b * co
+    norm = np.hypot(nx, ny)
+    nx, ny = nx / norm, ny / norm
+    begin = min(a, b) * .05
+    end = min(a, b) * .55 if estimated_inner else max(begin + 1, (outer[0] - inner[0]) / 2 * .92)
+    # Avoid intersecting normals at the narrow tips of a very elongated oval.
+    end = min(end, .85 * min(a, b) ** 2 / max(a, b))
+    height = max(96, round((end - begin) * width / distance[-1]))
+    depth = np.linspace(begin, end, height)[:, None]
+    return ((x - depth * nx).astype(np.float32),
+            (y - depth * ny).astype(np.float32))
+
+
+def _trim_ring_whitespace(image):
+    """Trim only outside the text span, retaining every pixel inside it."""
+    height, width = image.shape
+    _, _, stats, _ = cv2.connectedComponentsWithStats((image < 225).astype(np.uint8))
+    components = [s for s in stats[1:]
+                  if s[cv2.CC_STAT_AREA] >= 10 and s[cv2.CC_STAT_HEIGHT] >= height * .20
+                  and s[cv2.CC_STAT_TOP] > height * .08]
+    if len(components) < 3:
+        return image
+    left = min(s[0] for s in components)
+    right = max(s[0] + s[2] for s in components)
+    top = min(s[1] for s in components)
+    bottom = max(s[1] + s[3] for s in components)
+    # Include faint/short fragments adjacent to the strong character bodies.
+    pad = max(15, round(height * .10))
+    return image[max(0, top - 8):min(height, bottom + 8),
+                 max(0, left - pad):min(width, right + pad)]
+
+
+def _save_ellipse_annulus_unwrapped(
+    gray: np.ndarray,
+    mask: np.ndarray,
+    destination: str | Path,
+    *,
+    single_line: bool = False,
+    ring_guide=None,
+) -> bool:
+    """Unwrap with an observed border guide, or fitted normals as fallback."""
+    if ring_guide is not None and tuple(gray.shape[:2]) != ring_guide.source_shape:
+        raise ValueError("印章边框与展开图片坐标不一致")
+    geometry = ring_guide.annulus if ring_guide is not None else _fit_ellipse_annulus(mask)
+    if geometry is None:
+        return False
+    outer, inner, estimated_inner = geometry
     (outer_cx, outer_cy), _, _ = outer[2]
     (inner_cx, inner_cy), _, _ = inner[2]
     center_x = (float(outer_cx) + float(inner_cx)) / 2.0
@@ -234,6 +311,12 @@ def _save_ellipse_annulus_unwrapped(
 
     strips = []
     for phase in ((0.0,) if single_line else (0.0, 2.0 * np.pi / 3.0, 4.0 * np.pi / 3.0)):
+        if single_line:
+            map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
+                            else _ellipse_normal_maps(outer, inner, estimated_inner))
+            strips.append(cv2.remap(gray, map_x, map_y, cv2.INTER_CUBIC,
+                                   borderMode=cv2.BORDER_CONSTANT, borderValue=255))
+            break
         angles = np.linspace(
             np.pi / 2.0 + phase,
             np.pi / 2.0 + phase + 2.0 * np.pi,
@@ -278,6 +361,8 @@ def _save_ellipse_annulus_unwrapped(
         border_lines, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5))
     )
     output = cv2.bitwise_not(cv2.subtract(unwrapped_ink, border_lines))
+    if single_line:
+        output = _trim_ring_whitespace(output)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", output)

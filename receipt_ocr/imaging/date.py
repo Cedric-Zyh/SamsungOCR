@@ -7,7 +7,24 @@ import numpy as np
 from ..runtime.execution import timed
 from .contracts import DateCropOutOfRange
 from .io import _read_image, _write_stage_image
-from .colors import _color_masks
+
+
+def _remove_date_red_stamp(crop: np.ndarray) -> np.ndarray:
+    """Suppress red ink while preserving the observed dark stroke cores.
+
+    Saturated red is bright in the red channel even when its luminance is
+    low. Map that channel's 20..200 range to black..white, but retain the
+    original grayscale wherever red is below 100 (including red-tinted
+    black handwriting at stamp crossings). No strokes are reconstructed.
+    """
+    red = crop[:, :, 2]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    cleaned = np.clip(
+        (red.astype(np.float64) - 20) * 255 / 180, 0, 255
+    ).astype(np.uint8)
+    dark_core = red < 100
+    cleaned[dark_core] = gray[dark_core]
+    return cleaned
 
 
 @timed('date_crop_generation')
@@ -44,32 +61,10 @@ def save_receipt_date_crop(
         )
     if raw_destination:
         _write_stage_image(raw_destination, crop, ".jpg")
-    # A broad HSV mask treats a dark handwritten stroke underneath a red
-    # stamp as red as well, so it erases the very pixels needed by OCR.  Keep
-    # the luminance of all dark ink and suppress only bright, strongly red
-    # pixels.  This leaves a little pale stamp residue when the two inks are
-    # physically fused, but it does not manufacture or delete handwriting.
-    blue, green, red = (channel.astype(np.int16) for channel in cv2.split(crop))
-    red_excess = red - np.maximum(green, blue)
-    bright_red = (
-        (red_excess >= 35)
-        & (np.minimum(green, blue) >= 140)
-        & (red >= 160)
-    )
-    cleaned_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    cleaned_gray[bright_red] = 255
-    # Remove the bright part of the red stamp from the displayed/line OCR
-    # derivative, but keep dark pixels at a stamp intersection.  The old
-    # full-chroma mask erased a black handwritten ``1`` whenever the stamp
-    # added a little red to its antialiased edge; on this form that turned
-    # ``11`` into ``1``.  A luminance gate cleanly separates pale red stamp
-    # ink from the dark pen stroke while still removing the visible stamp.
-    red_mask, _ = _color_masks(crop)
-    stamp_only = (red_mask > 0) & (cleaned_gray >= 140)
-    visual_cleaned = crop.copy()
-    visual_cleaned[stamp_only] = (255, 255, 255)
+    # Both displayed date lines and OCR derivatives share the same cleanup.
+    cleaned_gray = _remove_date_red_stamp(crop)
     if color_clean_destination:
-        _write_stage_image(color_clean_destination, visual_cleaned, ".png")
+        _write_stage_image(color_clean_destination, cleaned_gray, ".png")
     gray = cleaned_gray
     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     _, ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
@@ -78,12 +73,9 @@ def save_receipt_date_crop(
         cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, ink.shape[1] // 9), 2)),
     )
-    vertical = cv2.morphologyEx(
-        ink,
-        cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (2, max(20, ink.shape[0] // 2))),
-    )
-    ink = cv2.subtract(ink, cv2.bitwise_or(horizontal, vertical))
+    # Date text has no vertical separators: long vertical ink belongs to
+    # digits/characters and must also survive in this internal OCR input.
+    ink = cv2.subtract(ink, horizontal)
     gray = cv2.bitwise_not(ink)
     target_width = 1500
     scale = target_width / max(1, gray.shape[1])

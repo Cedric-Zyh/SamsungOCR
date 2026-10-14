@@ -34,11 +34,15 @@ def test_create_task_defaults_to_local_seal_mode(tmp_path, monkeypatch):
     assert response.get_json()["seal_recognition_mode"] == "local"
 
 
-def test_create_task_persists_qingtong_mode_and_rejects_unknown(
+def test_create_task_uses_saved_plan_instead_of_legacy_seal_mode(
     tmp_path, monkeypatch
 ):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
+    settings = test_database.get_json_setting('recognition_defaults')
+    settings['recognition_config']['seal'] = ['qingtong']
+    test_database.set_json_setting('recognition_defaults', settings)
+    monkeypatch.setattr(app_module.analyzer.seal_api, 'api_key', 'test-key')
     monkeypatch.setattr(app_module, "database", test_database)
     client = app_module.app.test_client()
 
@@ -51,7 +55,7 @@ def test_create_task_persists_qingtong_mode_and_rejects_unknown(
             "seal_recognition_mode": "qingtong",
         },
     )
-    rejected = client.post(
+    stale = client.post(
         "/api/tasks",
         json={
             "name": "错误模式",
@@ -62,9 +66,9 @@ def test_create_task_persists_qingtong_mode_and_rejects_unknown(
     )
 
     assert response.status_code == 200
-    assert response.get_json()["seal_recognition_mode"] == "qingtong"
-    assert rejected.status_code == 400
-    assert "不支持的印章识别方式" in rejected.get_json()["error"]
+    assert json.loads(response.get_json()['recognition_config'])['seal'] == ['qingtong']
+    assert stale.status_code == 200
+    assert json.loads(stale.get_json()['recognition_config'])['seal'] == ['qingtong']
 
 
 def test_human_edits_recompute_date_and_seal():

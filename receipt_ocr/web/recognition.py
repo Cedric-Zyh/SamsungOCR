@@ -49,6 +49,7 @@ def analyze_upload(ctx: RecognitionDependencies):
         try:
             task = ctx.database.get_task(task_id)
             options = resolve_recognition_options(
+                settings=ctx.database.get_json_setting("recognition_defaults"),
                 recognition_config=task.get("recognition_config"),
                 ocr_backend=task.get("ocr_backend"),
                 seal_recognition_mode=task.get("seal_recognition_mode"),
@@ -61,6 +62,7 @@ def analyze_upload(ctx: RecognitionDependencies):
     else:
         try:
             options = resolve_recognition_options(
+                settings=ctx.database.get_json_setting("recognition_defaults"),
                 recognition_config=request.form.get("recognition_config", "null"),
                 ocr_backend=request.form.get("ocr_backend", "auto"),
                 seal_recognition_mode=request.form.get("seal_recognition_mode"),

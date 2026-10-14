@@ -131,6 +131,17 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
         "error": error,
     }
 
+def _select_four_way_candidate(candidates):
+    best = max(candidates, key=lambda item: (item["rank"], -item["angle"]))
+    # Equivalent readable rows should not favour a nearly quarter-turn fine
+    # correction just because interpolation nudged the OCR confidence upward.
+    equivalent = [item for item in candidates
+                  if not item["error"] and item["band_text"] == best["band_text"]
+                  and item["rank"][:2] == best["rank"][:2]
+                  and item["band_confidence"] >= best["band_confidence"] - 0.03]
+    return min(equivalent, key=lambda item: (abs(item["fine_rotation"]), item["angle"])) if equivalent else best
+
+
 def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
     """Coarse-rotate a round stamp to all four right angles, then fine-tune.
 
@@ -203,7 +214,7 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         }
         # Prefer the unrotated view when two angles read equally well; a
         # needless quarter-turn changes the secondary read image for no gain.
-        best = max(candidates, key=lambda item: (item["rank"], -item["angle"]))
+        best = _select_four_way_candidate(candidates)
         decision["four_way_candidates"] = {
             str(int(item["angle"])): {
                 "text": item["band_text"],

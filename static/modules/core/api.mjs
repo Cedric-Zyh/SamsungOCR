@@ -51,6 +51,7 @@ export function createApiClients(api) {
       manage: (ids, action) => api('/api/jobs/manage', {method: 'POST', json: {ids, action}}),
       start: ids => api('/api/jobs/start', {method: 'POST', json: {ids}}),
       cancel: ids => api('/api/jobs/cancel', {method: 'POST', json: {ids}}),
+      remove: ids => api('/api/jobs/delete', {method: 'POST', json: {ids}}),
       cancelOne: id => api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {method: 'POST'}),
       retry: id => api(`/api/jobs/${encodeURIComponent(id)}/retry`, {method: 'POST'}),
       upload: (id, body) => api(`/api/jobs/${encodeURIComponent(id)}/upload`, {method: 'POST', body}),

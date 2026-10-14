@@ -56,7 +56,11 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const ringInputLabel = hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
-    const unwrapCardLabel = hasMaskedTypeRow
+    const unwrapCardLabel = item.ring_geometry === 'ellipse_observed_border'
+      ? `${unwrapLabel}（沿检测到的边框环展开）`
+      : item.ring_geometry === 'ellipse_direct_normals'
+      ? `${unwrapLabel}（保持椭圆原比例直接展开）`
+      : hasMaskedTypeRow
       ? `${unwrapLabel}（由白底覆盖整图展开）`
       : `${unwrapLabel}（由整章图展开）`;
     const cards = [
@@ -65,6 +69,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifactCard(ringInputLabel, item.ring_input_url),
       artifactCard('环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || ''),
+      item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
     ].join('');
     const box = hasMaskedTypeRow
       ? ` · 覆盖框 ${item.ring_input_box.map(value => Math.round(Number(value))).join(', ')}`

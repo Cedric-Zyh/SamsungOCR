@@ -94,3 +94,30 @@ def test_ellipse_detector_box_is_mapped_into_normalized_coordinates(tmp_path):
     assert 0 <= box[0] < box[2] <= output.shape[1]
     assert 0 <= box[1] < box[3] <= output.shape[0]
     assert box != [70, 40, 130, 60]
+
+
+def test_ellipse_pipeline_keeps_original_aspect_through_ring_input(tmp_path, monkeypatch):
+    from receipt_ocr.imaging.contracts import SealRegion
+    from receipt_ocr.recognition.seal.preprocess import inputs
+    source = tmp_path / 'oval.png'
+    image = np.full((400, 800, 3), 255, dtype=np.uint8)
+    cv2.ellipse(image, (400, 200), (340, 150), 0, 0, 360, (50, 50, 220), 8)
+    cv2.putText(image, 'COMPANY', (250, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (50, 50, 220), 3)
+    cv2.imwrite(str(source), image)
+    monkeypatch.setattr(inputs, 'classify_shape', lambda *_: 'ellipse')
+    artifact, jobs = inputs.prepare_inputs(
+        source, SealRegion(0, 0, 1, 1, 'red', '客户章', 0), 0,
+        tmp_path / 'artifacts', '/files/test', 'paddle_v6', 'none',
+    )
+    assert not artifact['errors']
+    assert artifact['ring_geometry'] == 'ellipse_observed_border'
+    assert artifact['ring_border_detection']['supported_fraction'] > .85
+    assert artifact['ring_border_url'].endswith('seal-0-ring-border.png')
+    assert 'ellipse_normalized_url' not in artifact
+    assert all(item['name'] != 'normalized' for item in artifact['inputs'])
+    color = cv2.imread(str(tmp_path / 'artifacts/seal-0-color.png'))
+    ring_input = cv2.imread(str(tmp_path / 'artifacts/seal-0-ring-input.png'))
+    assert ring_input.shape == color.shape
+    assert ring_input.shape[1] == ring_input.shape[0] * 2
+    assert np.array_equal(color, ring_input)
+    assert [item['channel'] for item, _ in jobs] == ['ring']

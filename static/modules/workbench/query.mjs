@@ -66,10 +66,7 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       if (control.paused) counts.status = control.status === 'pausing' ? '暂停中' : '已暂停';
       $('#task-section').classList.remove('hidden');
       renderTask(counts);
-      // Keep visible receipts in place when a polling response adds newer jobs.
-      const key = item => item.id ? `record:${item.id}` : `job:${item.job?.id}`;
-      const ranks = new Map((newDay ? [] : progressState.workItems || []).map((item, index) => [key(item), index]));
-      progressState.workItems = items.sort((a, b) => (ranks.get(key(a)) ?? Infinity) - (ranks.get(key(b)) ?? Infinity));
+      progressState.workItems = items;
       progressState.queueDay = day;
       progressState.dailyReady = true;
       renderWorkbenchRows();

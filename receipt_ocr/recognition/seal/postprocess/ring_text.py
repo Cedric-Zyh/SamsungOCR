@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from difflib import SequenceMatcher
+
+from receipt_ocr.domain.parsing.parsing_seals import normalize_seal_text_strict
 
 
 _TEXT_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff]")
@@ -57,15 +60,16 @@ def _candidate_score(text: str, requirement_company: str) -> tuple[float, float,
 
 
 def reorder_ring_text(raw_text: str, requirement: str = "", alternatives: list[str] | None = None) -> dict:
-    """Choose a cyclic rotation that keeps a company suffix intact.
+    """Align a complete ring reading, then fall back to company-suffix ordering.
 
-    The OCR result remains untouched in ``raw_text``.  This function only
-    chooses among observed characters; it never inserts a missing glyph from
-    the requirement.  The requirement supplies a soft ranking signal, while
-    company-suffix structure handles the common ``公司……有限`` seam case.
+    Preserve the original order in ``raw_text`` after the same typography
+    normalization used by strict seal comparison.  An exact requirement match
+    must preserve every character and its count, and only move the circular
+    seam.  Never insert a missing glyph or arbitrarily permute characters.
+    Company-suffix structure remains a fallback for incomplete requirements.
     """
-    raw = _clean(raw_text)
-    sources = [raw, *(_clean(value) for value in alternatives or [])]
+    raw = normalize_seal_text_strict(str(raw_text or ""))
+    sources = [raw, *(normalize_seal_text_strict(str(value or "")) for value in alternatives or [])]
     sources = list(dict.fromkeys(value for value in sources if value))
     requirement_company = _requirement_company(requirement)
     if not raw:
@@ -79,6 +83,28 @@ def reorder_ring_text(raw_text: str, requirement: str = "", alternatives: list[s
             "score": 0.0,
             "reason": "empty",
         }
+
+    expected = normalize_seal_text_strict(str(requirement or ""))
+    if expected:
+        expected_counts = Counter(expected)
+        for source in sources:
+            if len(source) != len(expected) or Counter(source) != expected_counts:
+                continue
+            offset = (source + source).find(expected)
+            if not 0 <= offset < len(source):
+                continue
+            selected = source[offset:] + source[:offset]
+            return {
+                "raw_text": raw,
+                "text": selected,
+                "changed": selected != raw,
+                "seam_offset": offset,
+                "source": source,
+                "requirement_company": requirement_company,
+                "score": 1.0,
+                "raw_score": round(SequenceMatcher(None, raw, expected).ratio(), 4),
+                "reason": "exact_requirement_cyclic_reorder" if selected != raw else "kept_raw_order",
+            }
 
     candidates = []
     for source_index, source in enumerate(sources):

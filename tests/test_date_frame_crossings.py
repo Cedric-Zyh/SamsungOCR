@@ -51,3 +51,19 @@ def test_distant_marks_do_not_protect_a_bare_rule(tmp_path):
     draw.line((150, 23, 150, 35), fill='black', width=3)
     result = clean(tmp_path, image)
     assert (result[17:20, 90:160] == 255).all()
+
+
+def test_edge_day_character_and_digit_are_not_vertical_frames(tmp_path):
+    image = Image.new('RGB', (450, 110), 'white')
+    draw = ImageDraw.Draw(image)
+    for y in (15, 85):
+        draw.line((0, y, 449, y), fill='black', width=3)
+    # A digit in the left edge band and 日 in the right edge band.
+    draw.line((12, 30, 12, 70), fill='black', width=3)
+    draw.rectangle((423, 30, 443, 70), outline='black', width=3)
+    draw.line((423, 50, 443, 50), fill='black', width=3)
+    original = np.asarray(image)
+    result = clean(tmp_path, image)
+    assert np.array_equal(result[30:71], original[30:71])
+    for y in (15, 85):
+        assert (result[y-1:y+2, 50:400] == 255).all()

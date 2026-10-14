@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from ..domain import RecognitionOptions
+from ..domain.recognition import options_with_current_settings
 from ..providers.catalog import resolve_backend
 from .plans import validate_config
 from receipt_ocr.recognition.seal.api import resolve_seal_recognition_mode
@@ -20,9 +21,15 @@ def _decode_config(value: Any) -> Any:
 def resolve_recognition_options(*, recognition_config: Any = None,
                                 ocr_backend: Any = None,
                                 seal_recognition_mode: Any = None,
-                                api_enabled: bool = True) -> RecognitionOptions:
+                                api_enabled: bool = True,
+                                settings: dict | None = None) -> RecognitionOptions:
     """Return one validated option object for HTTP, queue, and retry flows."""
 
+    if settings is not None:
+        current = options_with_current_settings({}, settings)
+        recognition_config = current['recognition_config']
+        ocr_backend = current['ocr_backend']
+        seal_recognition_mode = current['seal_recognition_mode']
     return RecognitionOptions(
         ocr_backend=resolve_backend(str(ocr_backend or "auto")),
         seal_recognition_mode=resolve_seal_recognition_mode(seal_recognition_mode),

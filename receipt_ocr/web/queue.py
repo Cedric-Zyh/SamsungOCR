@@ -28,6 +28,7 @@ def create_task(ctx: QueueDependencies):
         return jsonify({"error": "批量任务数量必须在 1 至 5000 之间"}), 400
     try:
         options = resolve_recognition_options(
+            settings=ctx.database.get_json_setting("recognition_defaults"),
             recognition_config=payload.get("recognition_config"),
             ocr_backend=payload.get("ocr_backend"),
             seal_recognition_mode=payload.get("seal_recognition_mode"),
@@ -96,7 +97,7 @@ def upload_job(ctx: QueueDependencies, job_id, wake=None):
     except KeyError:
         abort(404)
     if job["status"] != "awaiting_upload":
-        return jsonify(ctx.job_store.public(job)), 200
+        return jsonify(ctx.job_store.public(job, ctx.database.get_json_setting("recognition_defaults"))), 200
     upload = request.files.get("file")
     sample = request.form.get("sample", "")
     saved_path = None
@@ -136,7 +137,7 @@ def upload_job(ctx: QueueDependencies, job_id, wake=None):
         saved_path.unlink(missing_ok=True)
     if job["start_requested"]:
         (wake or (lambda: _wake_jobs(ctx)))()
-    return jsonify(ctx.job_store.public(job)), 202
+    return jsonify(ctx.job_store.public(job, ctx.database.get_json_setting("recognition_defaults"))), 202
 
 
 def start_jobs(ctx: QueueDependencies, wake=None):
@@ -163,7 +164,7 @@ def retry_job(ctx: QueueDependencies, job_id, wake=None):
     except ValueError as exc:
         return jsonify(error=str(exc)), 409
     (wake or (lambda: _wake_jobs(ctx)))()
-    return jsonify(ctx.job_store.public(job)), 202
+    return jsonify(ctx.job_store.public(job, ctx.database.get_json_setting("recognition_defaults"))), 202
 
 
 def _cleanup_cancelled_upload(ctx: QueueDependencies, job):
@@ -183,11 +184,11 @@ def cancel_job(ctx: QueueDependencies, job_id):
     return jsonify(deleted=True, job_id=job_id), 200
 
 
-def cancel_jobs(ctx: QueueDependencies):
+def cancel_jobs(ctx: QueueDependencies, *, inactive_only=False):
     payload = request.get_json(silent=True) or {}
     ids = payload.get("ids") if isinstance(payload, dict) else None
     try:
-        result = ctx.job_store.delete_jobs(ids)
+        result = ctx.job_store.delete_jobs(ids, inactive_only=inactive_only)
     except KeyError:
         return jsonify(error="所选待处理回单中有任务已不存在，请刷新后重试"), 404
     except ValueError as exc:
@@ -195,7 +196,9 @@ def cancel_jobs(ctx: QueueDependencies):
     for job in result["deleted"]:
         _cleanup_cancelled_upload(ctx, job)
     return jsonify(deleted=True, deleted_ids=[job["id"] for job in result["deleted"]],
-                   kept_ids=[job["id"] for job in result["kept"]]), 200
+                   kept_ids=[job["id"] for job in result["kept"]],
+                   result_ids=sorted({job['result_id'] or job['target_result_id']
+                       for job in result['deleted'] if job['result_id'] or job['target_result_id']})), 200
 
 
 def process_history(ctx: QueueDependencies):

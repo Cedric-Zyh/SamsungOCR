@@ -134,6 +134,57 @@ def test_delete_jobs_removes_all_unfinished_items_atomically(store):
     assert store.task(task['id'])['total'] == 0
 
 
+def test_workbench_delete_keeps_running_and_returns_finished_record_ids(web_queue):
+    store = web_queue.job_store
+    task = batch(store, total=4)
+    ids = [item['id'] for item in task['items']]
+    for job_id in ids:
+        store.accept_upload(job_id, job_id + '.jpg')
+    store.start_jobs(ids)
+    completed, failed, running = store.claim(), store.claim(), store.claim()
+    store.finish(completed, result())
+    store.finish(failed, error='recognition failed')
+    record_ids = {store.get(job['id'])['result_id'] for job in (completed, failed)}
+    response = web_queue.app.test_client().post('/api/jobs/delete', json={'ids': ids})
+    assert response.status_code == 200
+    data = response.get_json()
+    assert set(data['deleted_ids']) == set(ids) - {running['id']}
+    assert data['kept_ids'] == [running['id']]
+    assert set(data['result_ids']) == record_ids
+    assert store.get(running['id'])['status'] == 'running'
+    assert store.task(task['id'])['total'] == 1
+    # The second step uses the established record deletion rules.
+    response = web_queue.app.test_client().post('/api/results/delete', json={'ids': list(record_ids)})
+    assert response.status_code == 200
+    assert store.database.list_results() == []
+    assert store.finish(running, result()) is True
+
+
+def test_workbench_delete_validates_all_ids_before_deleting_or_cleaning_files(web_queue):
+    store = web_queue.job_store
+    task = batch(store)
+    job_id = task['items'][0]['id']
+    (web_queue.UPLOAD_DIR / 'saved.jpg').write_bytes(b'image')
+    store.accept_upload(job_id, 'saved.jpg')
+    client = web_queue.app.test_client()
+    assert client.post('/api/jobs/delete', json={'ids': [job_id, 'missing']}).status_code == 404
+    assert store.get(job_id)['status'] == 'queued'
+    assert (web_queue.UPLOAD_DIR / 'saved.jpg').exists()
+    assert client.post('/api/jobs/delete', json={'ids': [job_id]}).status_code == 200
+    assert not (web_queue.UPLOAD_DIR / 'saved.jpg').exists()
+
+
+def test_daily_queue_returns_newest_import_first_regardless_of_status(store):
+    older = queued(store, task_id='older')
+    running = store.claim()
+    newer = batch(store, task_id='newer')['items'][0]
+    day = now_iso()[:10]
+    with store.database.connect() as con:
+        con.execute('UPDATE recognition_jobs SET created_at=? WHERE id=?', (day + 'T09:00:00', older['id']))
+        con.execute('UPDATE recognition_jobs SET created_at=? WHERE id=?', (day + 'T10:00:00', newer['id']))
+    assert [job['id'] for job in store.daily(day)] == [newer['id'], running['id']]
+
+
 def test_import_waits_for_explicit_start_after_reload_recovery_and_resume(store):
     task = batch(store, total=2)
     assert all(item['start_requested'] is False for item in task['items'])
@@ -741,3 +792,117 @@ def test_remove_waiting_job_rejects_claim_race_and_preserves_results(web_queue, 
     before = store.database.get_result(record_id)
     assert client.post('/api/jobs/manage', json={'ids': [retry['id']], 'action': 'remove'}).status_code == 200
     assert store.database.get_result(record_id) == before
+
+
+def shared_settings(method='paddle_v6', orientation='polygon'):
+    from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
+    settings = deepcopy(DEFAULT_RECOGNITION_SETTINGS)
+    settings['recognition_config'] = {stage: [] for stage in ('fields', 'products', 'handwriting', 'date', 'seal')}
+    settings['recognition_config'].update(fields=[method], seal_orientation=orientation)
+    return settings
+
+
+def test_queued_jobs_snapshot_latest_settings_only_when_claimed(store, tmp_path):
+    first = queued(store, 'first')
+    second = queued(store, 'second')
+    settings = shared_settings('danzhengtong', 'none')
+    settings['acceptance_policy']['date_match_mode'] = 'all'
+    store.database.set_json_setting('recognition_defaults', settings)
+    claimed = store.claim()
+    assert claimed['id'] == first['id']
+    snapshot = json.loads(claimed['payload_json'])
+    assert snapshot['recognition_config']['fields'] == ['danzhengtong']
+    assert snapshot['recognition_config']['seal_orientation'] == 'none'
+    assert snapshot['recognition_config']['acceptance']['date_match_mode'] == 'all'
+    assert json.loads(store.get(first['id'])['payload_json']) == snapshot
+
+    updated = shared_settings('paddle_v6', 'doc_ori')
+    store.database.set_json_setting('recognition_defaults', updated)
+    # A running item keeps its snapshot; the next queued item sees the change.
+    assert json.loads(store.get(first['id'])['payload_json']) == snapshot
+    next_job = store.claim()
+    assert next_job['id'] == second['id']
+    assert json.loads(next_job['payload_json'])['recognition_config']['seal_orientation'] == 'doc_ori'
+    (tmp_path / 'saved.jpg').write_bytes(b'test image')
+    calls = []
+    def analyze(*args, **kwargs):
+        calls.append(kwargs)
+        return result()
+    service = ReceiptJobService(analyze, data_dir=tmp_path, upload_dir=tmp_path,
+                                preview_dir=tmp_path, artifact_dir=tmp_path)
+    service(claimed)
+    assert calls[0]['recognition_config'] == snapshot['recognition_config']
+
+
+def test_failed_retry_uses_new_plan_and_preserves_source_context(store):
+    job = queued(store)
+    claimed = store.claim()
+    store.finish(claimed, error='old provider failed')
+    record_id = store.get(job['id'])['result_id']
+    settings = shared_settings('danzhengtong')
+    settings['recognition_config']['seal'] = ['qingtong']
+    store.database.set_json_setting('recognition_defaults', settings)
+    store.retry_failed(job['id'])
+    retried = store.claim()
+    options = json.loads(retried['payload_json'])
+    assert options['recognition_config']['seal'] == ['qingtong']
+    assert options['recognition_config']['fields'] == ['danzhengtong']
+    assert options['previous_fields'] == {}
+    assert retried['target_result_id'] == record_id
+    assert retried['stored_name'] == claimed['stored_name']
+    # The previous failed result still describes its actual, older plan.
+    assert store.database.get_result(record_id)['recognition_config']['fields'] == ['paddle_v6']
+
+
+def test_pending_remote_indicator_tracks_shared_settings(store):
+    job = queued(store)
+    day = job['created_at'][:10]
+    assert store.daily(day)[0]['uses_remote'] is False
+    settings = shared_settings('danzhengtong')
+    store.database.set_json_setting('recognition_defaults', settings)
+    assert store.daily(day)[0]['uses_remote'] is True
+    claimed = store.claim()
+    store.database.set_json_setting('recognition_defaults', shared_settings())
+    assert store.daily(day)[0]['uses_remote'] is True  # running snapshot
+    store.finish(claimed, error='test failure')
+    assert store.daily(day)[0]['uses_remote'] is False  # retry will use latest
+
+
+def test_http_import_ignores_stale_client_plan(web_queue):
+    settings = shared_settings('danzhengtong')
+    web_queue.database.set_json_setting('recognition_defaults', settings)
+    response = web_queue.app.test_client().post('/api/tasks', json={
+        'background': True, 'total': 1, 'items': [{'filename': 'new.jpg'}],
+        'ocr_backend': 'retired_backend', 'recognition_config': {'fields': ['retired_backend']},
+    })
+    assert response.status_code == 201
+    job = web_queue.job_store.get(response.get_json()['items'][0]['id'])
+    assert json.loads(job['payload_json'])['recognition_config']['fields'] == ['danzhengtong']
+
+
+@pytest.mark.parametrize('background', [False, True])
+def test_result_retry_uses_shared_settings_over_historical_plan(web_queue, monkeypatch, background):
+    store = web_queue.job_store
+    queued(store)
+    first = store.claim()
+    store.finish(first, result())
+    record_id = store.get(first['id'])['result_id']
+    (web_queue.UPLOAD_DIR / 'saved.jpg').write_bytes(b'image')
+    store.database.set_json_setting('recognition_defaults', shared_settings('danzhengtong'))
+    calls = []
+    def recognize(*args, **kwargs):
+        calls.append(kwargs)
+        output = result()
+        output['recognition_config'] = kwargs['recognition_config']
+        return output, 'preview.jpg'
+    monkeypatch.setattr(web_queue, '_document_service', lambda: SimpleNamespace(recognize=recognize))
+    response = web_queue.app.test_client().post(f'/api/results/{record_id}/retry', json={
+        'background': background, 'ocr_backend': 'retired_backend',
+        'recognition_config': {'fields': ['retired_backend']},
+    })
+    assert response.status_code == (202 if background else 200)
+    if background:
+        actual = json.loads(store.claim()['payload_json'])['recognition_config']
+    else:
+        actual = calls[0]['recognition_config']
+    assert actual['fields'] == ['danzhengtong']

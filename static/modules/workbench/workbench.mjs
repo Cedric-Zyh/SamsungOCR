@@ -14,7 +14,7 @@ import {WORK_FILTERS, matchesOverview, workFilterValues, selectionKey, overviewS
 export function createProgress({
   environment, ui, importsState, progressState, recordsState, reportState, resultsState,
   api, services = createApiClients(api), ReceiptWorkbench, ReceiptQueue, retryOne, startReviewScope,
-  openProcessHistory = () => {}, openResultPreview = () => {}
+  openProcessHistory = () => {}, openResultPreview = () => {}, flushSettings = async () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, localStorage, FormData} = environment;
@@ -49,7 +49,7 @@ export function createProgress({
   function reviewable(item) { return Number.isSafeInteger(item.id) && item.id > 0 && overviewStatus(item, ReceiptWorkbench) === 'completed'; }
   function selectable(item) {
     if (importsState.uploadingJobs?.has(item.job?.id) || progressState.workPendingJobs?.has(item.job?.id)) return false;
-    return reviewable(item) || !!item.job?.id && ['ready', 'queued'].includes(item.status);
+    return !['running', 'cancelled'].includes(item.status) && !!(item.id || item.job?.id);
   }
   function syncSelection() {
     const current = viewState.shownItems.filter(selectable), all = $('#workbench-select-all');
@@ -61,6 +61,11 @@ export function createProgress({
     const chosen = current.filter(item => selected.has(selectionKey(item)));
     $('#queue-selection')?.classList.toggle('hidden', !chosen.length);
     if ($('#queue-selection-count')) $('#queue-selection-count').textContent = `已选 ${chosen.length} 张`;
+    const deleteButton = $('#queue-selected-delete');
+    if (deleteButton) {
+      deleteButton.textContent = `删除所选（${chosen.length}）`;
+      deleteButton.disabled = !chosen.length || queueActionSaving || !progressState.dailyReady || !!progressState.queueStartSaving;
+    }
     for (const [selector, status, label] of [['#queue-selected-start', 'ready', '开始所选'], ['#queue-selected-withdraw', 'queued', '取消所选排队']]) {
       const button = $(selector), count = chosen.filter(item => item.status === status).length;
       if (button) { button.textContent = `${label}（${count}）`; button.classList.toggle('hidden', count === 0); button.disabled = !count || queueActionSaving || !progressState.dailyReady || !!progressState.queueStartSaving; }
@@ -75,6 +80,33 @@ export function createProgress({
       input.checked = selected.has(input.dataset.workSelect);
       input.disabled = queueActionSaving || !progressState.dailyReady || !current.some(item => selectionKey(item) === input.dataset.workSelect);
     });
+  }
+
+  async function deleteItems(items) {
+    if (queueActionSaving || progressState.queueStartSaving || !progressState.dailyReady || progressState.queueDay !== $('#progress-date').value) return;
+    const chosen = items.filter(selectable);
+    if (!chosen.length) return;
+    const label = chosen.length === 1 ? `“${chosen[0].filename}”` : `所选 ${chosen.length} 张回单`;
+    if (!window.confirm(`确定删除${label}？已有识别记录及其当天同名记录、关联页也会删除，未识别图片将移出队列。此操作无法撤销。`)) return;
+    queueActionSaving = true;
+    progressState.dailyRequest = (progressState.dailyRequest || 0) + 1;
+    renderWorkbenchRows();
+    try {
+      const jobs = chosen.filter(item => item.job?.id);
+      const removed = jobs.length ? await services.queue.remove(jobs.map(item => item.job.id)) : {deleted_ids: [], kept_ids: [], result_ids: []};
+      const ids = [...new Set([...(removed.result_ids || []), ...chosen.filter(item => !item.job?.id && item.id).map(item => item.id)])];
+      if (ids.length) await services.records.remove(ids);
+      selected.clear();
+      toast(removed.kept_ids?.length ? `已删除可删除的任务；${removed.kept_ids.length} 张已开始识别，暂时保留。` : '已删除所选回单。', 'success');
+    } catch (error) { toast(`删除未全部完成：${error.message}，请刷新后重试。`, 'danger'); }
+    finally {
+      queueActionSaving = false;
+      recordsState.recordsStale = reportState.reportStale = true;
+      resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
+      // Force a fresh record query; a cached result would reappear without its job.
+      await loadDailyResults().catch(error => toast(error.message, 'danger'));
+      renderWorkbenchRows();
+    }
   }
 
   async function manageQueued(ids, action) {
@@ -171,6 +203,7 @@ export function createProgress({
     progressState.dailyRequest = (progressState.dailyRequest || 0) + 1;
     syncStartRecognition(); syncSelection(); renderQueueControl();
     try {
+      await flushSettings();
       for (let offset = 0; offset < ids.length; offset += START_BATCH_SIZE) {
         const group = ids.slice(offset, offset + START_BATCH_SIZE);
       const result = await (services.queue.start(group));
@@ -224,6 +257,7 @@ export function createProgress({
 
   function initialize() {
     $('#queue-selection-clear')?.addEventListener('click', () => { selected.clear(); renderWorkbenchRows(); });
+    $('#queue-selected-delete')?.addEventListener('click', () => deleteItems(viewState.shownItems.filter(item => selected.has(selectionKey(item)))));
     $('#queue-selected-review')?.addEventListener('click', async () => {
       if (reviewOpening || queueActionSaving || !progressState.dailyReady || progressState.queueDay !== $('#progress-date').value) return;
       const chosen = viewState.shownItems.filter(item => reviewable(item) && selected.has(selectionKey(item)));
@@ -312,11 +346,10 @@ export function createProgress({
         return;
       }
       if (!progressState.dailyReady || progressState.queueDay !== $('#progress-date').value || queueActionSaving) return;
-      const remove = event.target.closest('[data-job-remove]');
-      if (remove) {
-        const job = progressState.queueJobs?.get(remove.dataset.jobRemove);
-        if (remove.disabled || !job || job.status !== 'ready') return;
-        if (window.confirm(`将“${job.filename}”移出队列，并清理这次导入的临时文件？已有回单记录会保留。`)) await manageQueued([job.id], 'remove');
+      const deleteButton = event.target.closest('[data-work-delete]');
+      if (deleteButton) {
+        const item = viewState.shownItems.find(item => selectionKey(item) === deleteButton.dataset.workDelete);
+        if (item && !deleteButton.disabled) await deleteItems([item]);
         return;
       }
       const adjustment = event.target.closest('[data-job-withdraw], [data-job-prioritize]');
@@ -331,6 +364,7 @@ export function createProgress({
         if (!job || start.disabled || progressState.workPendingJobs?.has(id)) return;
         progressState.workPendingJobs ||= new Set(); progressState.workPendingJobs.add(id); start.disabled = true;
         try {
+          await flushSettings();
           await (services.queue.start([id]));
           setWorkFilter('processing'); progressState.workVisibleLimit = WORK_PAGE_SIZE;
           await loadDailyResults({refreshRecords: false});
@@ -363,6 +397,7 @@ export function createProgress({
         progressState.workPendingJobs ||= new Set(); progressState.workPendingJobs.add(id);
         button.disabled = true;
         try {
+          await flushSettings();
           await (services.queue.retry(id));
           setWorkFilter('processing'); progressState.workVisibleLimit = WORK_PAGE_SIZE;
           await loadDailyResults();

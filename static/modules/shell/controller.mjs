@@ -61,6 +61,7 @@ export function createApplication(environment, options = {}) {
     services,
     ReceiptImport,
     readRecognitionPlan: (...args) => recognition_plan.readRecognitionPlan(...args),
+    flushSettings: () => recognition_plan.flushSettings(),
     readAcceptancePolicy: (...args) => recognition_plan.readAcceptancePolicy(...args),
     usesRemotePlan: (...args) => recognition_plan.usesRemotePlan(...args),
     updateRecognitionPlan: (...args) => recognition_plan.updateRecognitionPlan(...args),
@@ -138,6 +139,7 @@ export function createApplication(environment, options = {}) {
     ReceiptWorkbench,
     ReceiptQueue,
     openResultPreview: (...args) => result_preview.open(...args),
+    flushSettings: () => recognition_plan.flushSettings(),
     retryOne: (...args) => imports.retryOne(...args),
     startReviewScope: (...args) => review_queue.startReviewScope(...args),
     openProcessHistory: (...args) => process_history.open(...args)

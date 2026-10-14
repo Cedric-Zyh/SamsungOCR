@@ -32,6 +32,7 @@ def register_routes(app, handlers, *, before_request) -> None:
         ("/api/jobs/<job_id>/retry", "retry_job", ("POST",)),
         ("/api/jobs/<job_id>/cancel", "cancel_job", ("POST",)),
         ("/api/jobs/cancel", "cancel_jobs", ("POST",)),
+        ("/api/jobs/delete", "delete_queue_jobs", ("POST",)),
         ("/api/process-history", "process_history", ("GET",)),
         ("/api/analyze", "analyze_upload", ("POST",)),
         ("/api/daily-results", "daily_results", ("GET",)),

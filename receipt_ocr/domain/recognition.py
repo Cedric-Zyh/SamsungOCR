@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any
+
+
+def options_with_current_settings(options: dict, settings: dict) -> dict:
+    """Snapshot the shared plan while retaining job-specific source context."""
+    plan = deepcopy(settings['recognition_config'])
+    plan['acceptance'] = deepcopy(settings['acceptance_policy'])
+    return {**options, 'recognition_config': plan,
+            'ocr_backend': 'auto', 'seal_recognition_mode': 'local'}
 
 
 @dataclass(frozen=True)

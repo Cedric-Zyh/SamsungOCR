@@ -6,14 +6,11 @@ def _save_positioned_outer_frame_clean(
     source: str | Path,
     destination: str | Path,
 ) -> None:
-    """Remove only the date-row frame, leaving interior digit strokes intact.
+    """Remove horizontal date-row rules while preserving character strokes.
 
-    The existing table-line view is deliberately conservative and can leave
-    the row's outer rules visible.  This audit-only view uses the geometry of
-    the date line: long horizontal rules in the upper/lower bands and long
-    vertical rules at the image edges are treated as frame pixels.  Interior
-    vertical strokes (notably a handwritten ``1`` before ``日``) are not
-    removed merely because they are vertical.
+    The date line has no vertical separators to remove. Even at the crop
+    edges, vertical ink may belong to a handwritten digit or the printed
+    ``日``. Only long horizontal rules in the upper/lower bands are removed.
     """
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -72,23 +69,8 @@ def _save_positioned_outer_frame_clean(
                     band_mask[first:last, left:right] = 255
                     protected[first:last, crossing] = 255
 
-        # Remove a vertical frame only when it is at the extreme left/right
-        # edge.  The common interior vertical stroke before ``日`` is kept.
-        vertical_kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT, (1, max(12, height // 5))
-        )
-        vertical = cv2.morphologyEx(ink, cv2.MORPH_OPEN, vertical_kernel)
-        edge_mask = np.zeros_like(vertical)
-        # The printed ``日`` cell can leave its right border several pixels
-        # inside the crop edge.  A wider right-only band removes that border
-        # while leaving the handwritten day and the separator before ``日``.
-        edge_width = max(2, round(width * 0.08))
-        edge_mask[:, :edge_width] = vertical[:, :edge_width]
-        edge_start = max(0, width - edge_width)
-        edge_mask[:, edge_start:] = vertical[:, edge_start:]
-
         mask = cv2.dilate(
-            cv2.bitwise_or(band_mask, edge_mask),
+            band_mask,
             cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)),
         )
         # Apply protection last, so mask dilation cannot eat the crossings.
@@ -97,8 +79,7 @@ def _save_positioned_outer_frame_clean(
         cleaned[mask > 0] = 255
         Image.fromarray(cleaned).save(destination)
     except Exception:
-        # The extra view is for visual audit only; preserve the pipeline if
-        # optional image tooling is unavailable.
+        # Preserve the input if optional image tooling is unavailable.
         with Image.open(source) as opened:
             opened.convert("RGB").save(destination)
 

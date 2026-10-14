@@ -14,6 +14,7 @@ export function createRecognitionPlan({environment, ui, importsState, services =
   let initialSaveStatus = '';
   let initialSaveState = 'ready';
   let serverSave = Promise.resolve();
+  let settingsRevision = 0;
 
   const stageMethods = stage => $$(`[data-stage="${stage}"]`);
   const available = (stage, method) => stageMethods(stage).some(el => el.dataset.method === method && el.dataset.available === 'true');
@@ -114,11 +115,22 @@ export function createRecognitionPlan({environment, ui, importsState, services =
     let plan;
     try { plan = readRecognitionPlan(); } catch (_) { return; }
     const payload = {recognition_config: {...plan}};
+    const revision = ++settingsRevision;
     delete payload.recognition_config.acceptance;
     payload.acceptance_policy = plan.acceptance;
-    serverSave = serverSave.then(() => services.settings.updateRecognition(payload)).catch(() => {
-      // Browser storage remains available as a fallback when the local server
-      // is restarting; the next change retries the durable save.
+    setText('#plan-save-status', '正在保存到本地服务…');
+    $('#plan-save-status')?.setAttribute('data-state', 'saving');
+    serverSave = serverSave.catch(() => {}).then(() => services.settings.updateRecognition(payload));
+    serverSave.then(() => {
+      if (revision !== settingsRevision) return;
+      initialSaveStatus = '已保存，任务开始时统一使用最新配置';
+      initialSaveState = 'saved';
+      updateRecognitionPlan({persist:false});
+    }).catch(() => {
+      if (revision !== settingsRevision) return;
+      initialSaveStatus = '配置保存失败，请重新修改并保存后再开始识别';
+      initialSaveState = 'error';
+      updateRecognitionPlan({persist:false});
     });
   }
   function presetPlan(name) {
@@ -217,6 +229,9 @@ export function createRecognitionPlan({environment, ui, importsState, services =
         saveStatus = '当前选择可用，但未能保存到浏览器'; saveState = 'error';
       }
       queueServerSave();
+      if (services?.settings?.updateRecognition) {
+        saveStatus = '正在保存到本地服务…'; saveState = 'saving';
+      }
     }
     setText('#plan-save-status', saveStatus);
     $('#plan-save-status')?.setAttribute('data-state', saveState);
@@ -264,10 +279,12 @@ export function createRecognitionPlan({environment, ui, importsState, services =
     // synchronous browser-cache paint so the settings page remains responsive
     // even while PyCharm is starting the Flask process.
     if (services?.settings?.recognition) {
+      const revision = settingsRevision;
       // Defer the call itself as well as its response handling.  API clients
       // begin their fetch synchronously, and initialization must remain a
       // side-effect-free paint step for embedded callers and tests.
       Promise.resolve().then(() => services.settings.recognition()).then(settings => {
+        if (revision !== settingsRevision) return;
         if (!settings?.recognition_config) return;
         applyAcceptancePolicy(settings.acceptance_policy);
         applyPlan(settings.recognition_config, {persist:false});
@@ -285,5 +302,12 @@ export function createRecognitionPlan({environment, ui, importsState, services =
     }
   }
 
-  return {initialize, readRecognitionPlan, readAcceptancePolicy, usesRemotePlan, applyPlan, defaultPlan, updateRecognitionPlan};
+  async function flushSettings() {
+    try {
+      let pending;
+      do { pending = serverSave; await pending; } while (pending !== serverSave);
+    }
+    catch (_) { throw new Error('最新配置尚未保存，请回到设置页重新保存后再开始识别'); }
+  }
+  return {initialize, readRecognitionPlan, readAcceptancePolicy, usesRemotePlan, applyPlan, defaultPlan, updateRecognitionPlan, flushSettings};
 }

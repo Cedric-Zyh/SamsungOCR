@@ -49,6 +49,13 @@ def _ocr_color_mask(crop: np.ndarray, color: str) -> np.ndarray:
         & (saturation >= 45)
         & (value >= 50)
     ).astype(np.uint8) * 255
+    if color == "red":
+        b, g, r = (channel.astype(np.int16) for channel in cv2.split(crop))
+        # Pale red lettering still has chromatic evidence even when its HSV
+        # saturation falls below 45. Keep bright red-biased pixels; neutral
+        # gray/black print has no such channel separation.
+        pale_red = (r >= 180) & (r - np.maximum(g, b) >= 5) & hue_match
+        mask[pale_red] = 255
 
     if mask.size:
         # Detect only neutral dark lines.  The long horizontal opening avoids
