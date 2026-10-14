@@ -72,6 +72,17 @@ jobs:
               } catch { }
             }
             if (-not $ready) { throw "打包后的识别服务未能在 120 秒内提供首页。" }
+            $staticRoot = (Resolve-Path static).Path
+            $scripts = @(Get-ChildItem $staticRoot -Recurse -File | Where-Object { $_.Extension -in '.js', '.mjs' })
+            if ($scripts.Count -eq 0) { throw "没有找到待验证的页面脚本。" }
+            foreach ($script in $scripts) {
+              $relative = [System.IO.Path]::GetRelativePath($staticRoot, $script.FullName).Replace('\', '/')
+              $asset = Invoke-WebRequest -Uri "http://127.0.0.1:5002/static/$relative" -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10
+              $contentType = [string]($asset.Headers['Content-Type'] -join ',')
+              if ($asset.StatusCode -ne 200 -or $contentType -notmatch '^text/javascript(?:;|$)') {
+                throw "页面脚本无法加载：$relative（HTTP $($asset.StatusCode)，Content-Type: $contentType）"
+              }
+            }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
