@@ -120,3 +120,16 @@ test('observed ellipse border is inspectable beside the actual unwrapped input',
   assert.match(html, /绿色实测，黄色补全/);
   assert.match(html, /\/files\/artifacts\/test\/border.png/);
 });
+
+test('company-only ring input is distinguished from the complete number band', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '圆形',
+    original_url: '/files/test/original.png', ring_input_url: '/files/test/ring-input.png',
+    unwrapped_url: '/files/test/ring-company.png', unwrapped_full_url: '/files/test/ring.png',
+    ring_company_selection: {method: 'small_outer_number_band'},
+  }]);
+  assert.match(html, /公司名称输入，已排除小字号段/);
+  assert.match(html, /完整环形展开图（含小字号段，仅供核对）/);
+  assert.match(html, /环形 OCR 读取已排除小字号段的公司名称展开图/);
+  assert.doesNotMatch(html, /环形 OCR 直接读取旋正后的整章图/);
+});

@@ -10,6 +10,7 @@ from receipt_ocr.imaging.bands import save_round_seal_type_band, round_seal_type
 
 from receipt_ocr.imaging.unwrap import save_ring_text_band_preview, save_unwrapped_seal
 from receipt_ocr.imaging.ring_border import trace_ellipse_border, save_ring_border_overlay
+from receipt_ocr.imaging.ring_company import save_company_ring_input
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
 from .round import prepare_round_stamp
@@ -117,7 +118,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
     artifact["original_url"] = add("original", original, "印章原图 · 仅供核对")
     color = path("color")
     save_color_isolated_seal(source, color, region)
-    artifact["color_isolated_url"] = add("color", color, "保留章色图")
+    artifact["color_isolated_url"] = add("color", color, "章色分离增强图")
     shape = classify_shape(source, region)
     artifact["shape"] = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}[shape]
     artifact["shape_code"] = shape
@@ -288,6 +289,15 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
                                 elliptical=True, normalized=True, single_line=True,
                                 direct_ellipse=shape == "ellipse", ring_guide=ring_guide)
+            if shape == "round":
+                company_ring = path("ring-company")
+                selection = save_company_ring_input(ring, company_ring)
+                if selection:
+                    artifact["unwrapped_full_url"] = add(
+                        "ring-full", ring, "完整环形展开图（含小字号段，仅供核对）"
+                    )
+                    artifact["ring_company_selection"] = selection
+                    ring = company_ring
             ring_url = add("ring", ring, "圆环公司文字", "ring")
             jobs.append((inputs[-1], ring))
             artifact.update(unwrapped_url=ring_url, unwrapped_text="", unwrap_texts=[])

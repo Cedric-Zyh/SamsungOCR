@@ -5,6 +5,54 @@ import cv2
 import numpy as np
 
 
+def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
+    """Separate red evidence from neutral darkness before resizing a crop.
+
+    Keeping the original RGB of red-biased pixels also keeps dark JPEG rule
+    fringes. Reconstruct only the red component on white instead. Reliable
+    chroma retains dark red strokes; weak chroma contributes continuously so
+    pale ink is not removed by the old saturation/value thresholds.
+    """
+    b, g, r = (channel.astype(np.float32) for channel in cv2.split(crop))
+    neutral = np.maximum(g, b)
+    difference = np.maximum(0, r - neutral)
+    hue = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 0]
+    valid = (difference >= 5) & ((hue <= 16) | (hue >= 164))
+
+    # Strong red evidence can use the stroke's darkness. For weak evidence,
+    # taper that contribution smoothly rather than importing the black ink.
+    weight = np.clip((difference - 3) / 22, 0, 1)
+    weight = weight * weight * (3 - 2 * weight)
+    strength = np.maximum(difference * 1.6, (255 - neutral) * weight)
+    strength = np.clip(strength, 0, 235)
+    strength[~valid] = 0
+
+    # Find long dark rules in either direction. Chroma-biased JPEG fragments
+    # may evade an HSV-neutral mask. Only remove weakly chromatic dark pixels
+    # on these rules; protect pale red and saturated dark-red crossings.
+    dark = (r < 155).astype(np.uint8) * 255
+    lines = np.zeros_like(dark)
+    for kernel_size in ((max(35, crop.shape[1] // 4), 1),
+                        (1, max(35, crop.shape[0] // 4))):
+        lines |= cv2.morphologyEx(
+            dark, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size),
+        )
+    lines = cv2.dilate(lines, np.ones((3, 3), dtype=np.uint8))
+    rule_ink = ((lines > 0) & (r < 180) & (difference < 30)
+                & (difference / np.maximum(r, 1) < .35))
+    strength[rule_ink] = 0
+    return strength
+
+
+def _isolate_red_ink(crop: np.ndarray) -> np.ndarray:
+    """Render the measured red component on white, without neutral darkness."""
+    strength = _red_ink_strength(crop)
+    result = np.full_like(crop, 255)
+    result[:, :, 0] = result[:, :, 1] = np.rint(255 - strength).astype(np.uint8)
+    return result
+
+
 def _color_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     red_a = cv2.inRange(hsv, (0, 55, 70), (16, 255, 255))

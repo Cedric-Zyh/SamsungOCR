@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
-from .colors import _color_masks, _ocr_color_mask
+from .colors import _color_masks, _ocr_color_mask, _isolate_red_ink
 
 
 def save_isolated_seal(
@@ -42,13 +42,14 @@ def save_color_isolated_seal(
     destination: str | Path,
     region: SealRegion,
 ) -> None:
-    """Keep colored stamp ink on white with a modest red contrast gain.
+    """Separate stamp ink onto white before enlarging it for OCR.
 
     Binary isolation is useful for faint contours, but it removes the local
     intensity variation that OCR detectors sometimes need to separate curved
-    Chinese glyphs.  This variant retains red/blue intensity variations and
-    removes every neutral printed form pixel, so it is safe matching evidence
-    even when the stamp overlaps the printed signature requirement.
+    Chinese glyphs. Red uses a continuous chroma-weighted reconstruction to
+    suppress neutral text/rule contamination while retaining faint strokes.
+    Blue retains its existing color-mask treatment. Fully obscured ink cannot
+    be recovered from this image alone.
     """
     image = _read_image(source)
     height, width = image.shape[:2]
@@ -56,13 +57,12 @@ def save_color_isolated_seal(
     x2 = int((region.x + region.width) * width)
     y2 = int((region.y + region.height) * height)
     crop = image[y1:y2, x1:x2]
-    mask = _ocr_color_mask(crop, region.color)
-    canvas = np.full_like(crop, 255)
-    canvas[mask > 0] = crop[mask > 0]
     if region.color == "red":
-        # Modest contrast gain on retained ink only; keep white paper white.
-        ink = canvas[mask > 0].astype(np.float32)
-        canvas[mask > 0] = np.clip(255.0 - (255.0 - ink) * 1.20, 0, 255).astype(np.uint8)
+        canvas = _isolate_red_ink(crop)
+    else:
+        mask = _ocr_color_mask(crop, region.color)
+        canvas = np.full_like(crop, 255)
+        canvas[mask > 0] = crop[mask > 0]
     target_width = max(1000, canvas.shape[1])
     scale = target_width / max(1, canvas.shape[1])
     canvas = cv2.resize(canvas, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)

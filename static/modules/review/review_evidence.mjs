@@ -53,10 +53,14 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
   function modernSealInputChain(item, typeBandLabel, unwrapLabel) {
     const oriented = item.color_isolated_oriented_url || item.color_isolated_url;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const ringInputLabel = hasMaskedTypeRow
+    const ringInputLabel = item.ring_company_selection
+      ? '旋正章色图（环形展开来源）'
+      : hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
-    const unwrapCardLabel = item.ring_geometry === 'ellipse_observed_border'
+    const unwrapCardLabel = item.ring_company_selection
+      ? `${unwrapLabel}（公司名称输入，已排除小字号段）`
+      : item.ring_geometry === 'ellipse_observed_border'
       ? `${unwrapLabel}（沿检测到的边框环展开）`
       : item.ring_geometry === 'ellipse_direct_normals'
       ? `${unwrapLabel}（保持椭圆原比例直接展开）`
@@ -69,6 +73,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifactCard(ringInputLabel, item.ring_input_url),
       artifactCard('环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || ''),
+      item.unwrapped_full_url ? artifactCard('完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url) : '',
       item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
     ].join('');
     const box = hasMaskedTypeRow
@@ -76,6 +81,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : '';
     const missing = !item.ring_input_url
       ? '<small class="low-note">当前记录缺少环形 OCR 实际输入图，请重新识别生成新版证据。</small>'
+      : item.ring_company_selection
+        ? '<small>环形 OCR 读取已排除小字号段的公司名称展开图；完整展开图保留供核对。</small>'
       : hasMaskedTypeRow
         ? `<small>环形 OCR 实际读取的是第 3 张图；只将 OCR dt_polys 合并出的检测框填白，旋正后的章色图保持原样${escapeHtml(box)}</small>`
         : '<small>未检测到横向文字，环形 OCR 直接读取旋正后的整章图。</small>';
