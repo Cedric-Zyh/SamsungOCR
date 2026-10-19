@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 
 from receipt_ocr.runtime.execution import timed
 from .preprocess.inputs import prepare_inputs
+from .preprocess.number import merge_number_read
 from .ocr.interface import OcrReader
 from .postprocess.ring_text import reorder_ring_text
 
@@ -226,6 +227,9 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 except Exception as exc:
                     input_image.update(status="failed", error=str(exc))
                     artifact["errors"].append({"step": input_image["channel"], "message": str(exc)})
+            merge_number_read(artifact)
+            if artifact.get("stamp_number_status") == "merged":
+                texts.append(artifact["round_type_band_text"])
             if artifact.get("shape_code") == "rectangle":
                 body_parts = _rectangular_body_text_parts(
                     body_observations,

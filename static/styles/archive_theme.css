@@ -1,5 +1,6 @@
-/* Shared visual foundation for workspace pages and receipt review. */
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) {
+/* Default palette and shared UI foundation, including initial render and new pages.
+ * Keep palette tokens here; feature styles may customize their own components. */
+:root {
   --archive-stage:#e8e5e1;
   --archive-paper:#f2efe9;
   --archive-ink:#161812;
@@ -17,65 +18,72 @@ body:is([data-active-page="progress"], [data-active-page="records"], [data-activ
   --paper:var(--archive-paper);
   --line:var(--archive-line);
   --brand:#4f5744;
+  --brand-dark:#414735;
   --green:var(--archive-success);
   --amber:var(--archive-warning);
   --red:var(--archive-danger);
+  --shadow:0 4px 20px rgba(38,43,39,.06);
+}
+
+/* Preserve the specificity of the former page selectors without route gating. */
+:root body {
   background:var(--archive-stage);
   color:var(--archive-ink);
   accent-color:#626f4f;
 }
 
 /* :where keeps page-specific controls free to define their own emphasis. */
-:where(body[data-active-page="progress"], body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.primary-button,.secondary-button,.mini-button,.sample-button,.icon-button) {
+:where(body) :is(.primary-button,.secondary-button,.mini-button,.sample-button,.icon-button) {
   border-radius:2px;
   box-shadow:none;
   font-weight:500;
 }
-:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.secondary-button,.mini-button,.sample-button,.icon-button) {
+:where(body) :is(.secondary-button,.mini-button,.sample-button,.icon-button) {
   border-color:var(--archive-line);
   background:var(--archive-paper);
   color:var(--archive-text);
 }
-:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) :is(.secondary-button,.mini-button,.sample-button,.icon-button):hover:not(:disabled) {
+:where(body) :is(.secondary-button,.mini-button,.sample-button,.icon-button):hover:not(:disabled) {
   border-color:#b5a17f;
   background:var(--archive-accent-wash);
   color:var(--archive-ink);
 }
-:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) .primary-button {
+:where(body) .primary-button {
   background:#282d23;
   border:1px solid #282d23;
   color:var(--archive-paper);
 }
-:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) .text-button { color:var(--archive-text); font-size:12px; }
-:where(body[data-active-page="records"], body[data-active-page="quality"], body[data-active-page="settings"], body[data-active-page="review"]) button:disabled { cursor:not-allowed; }
+:where(body) .text-button { color:var(--archive-text); font-size:12px; }
+:where(body) button:disabled { cursor:not-allowed; }
 
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { margin-left:176px; padding:32px 36px 28px; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar { width:176px; background:var(--archive-stage); border-right:1px solid var(--archive-line); }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-brand { color:var(--archive-ink); }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-brand>span { background:#282d23; color:var(--archive-paper); box-shadow:none; border-radius:2px; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) :is(.app-brand small,.sidebar-note,.sidebar-note small,.nav-caption) { color:var(--archive-muted); }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .sidebar-note { border-color:var(--archive-line); }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .sidebar-dot { background:var(--archive-accent); box-shadow:none; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a { color:var(--archive-text); font-weight:500; border-radius:2px; transition:background-color .16s ease,color .16s ease; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a.active { color:var(--archive-ink); background:#ded9d0; box-shadow:inset 2px 0 var(--archive-accent); font-weight:650; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a:hover { color:var(--archive-ink); background:#e1dcd3; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero { padding-bottom:26px; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero h1 { color:var(--archive-ink); font-size:28px; font-weight:650; letter-spacing:1px; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero .subtitle { color:var(--archive-muted); font-size:13px; margin-top:8px; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero :is(.primary-button,.secondary-button) { height:36px; border:1px solid #a7a89a; border-radius:2px; padding:8px 14px; background:transparent; color:#34392e; font-size:13px; font-weight:500; box-shadow:none; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .hero :is(.primary-button,.secondary-button):hover { background:var(--archive-paper); border-color:#777d6a; }
-body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) :is(a,button,input,select,textarea,summary,[tabindex]):focus-visible { outline:2px solid #947343; outline-offset:3px; }
+:root body .app-shell { margin-left:176px; padding:32px 36px 28px; }
+:root body .app-sidebar { width:176px; background:var(--archive-stage); border-right:1px solid var(--archive-line); }
+:root body .app-brand { color:var(--archive-ink); }
+:root body .app-brand>span { background:#282d23; color:var(--archive-paper); box-shadow:none; border-radius:2px; }
+:root body :is(.app-brand small,.sidebar-note,.sidebar-note small,.nav-caption) { color:var(--archive-muted); }
+:root body .sidebar-note { border-color:var(--archive-line); }
+:root body .sidebar-dot { background:var(--archive-accent); box-shadow:none; }
+:root body .app-sidebar nav a { color:var(--archive-text); font-weight:500; border-radius:2px; transition:background-color .16s ease,color .16s ease; }
+:root body .app-sidebar nav a.active { color:var(--archive-ink); background:#ded9d0; box-shadow:inset 2px 0 var(--archive-accent); font-weight:650; }
+:root body .app-sidebar nav a:hover { color:var(--archive-ink); background:#e1dcd3; }
+:root body .hero { padding-bottom:26px; box-shadow:none; border-radius:0; }
+:root body .hero .eyebrow { display:none; }
+:root body .hero h1 { color:var(--archive-ink); font-size:28px; font-weight:650; letter-spacing:1px; }
+:root body .hero .subtitle { color:var(--archive-muted); font-size:13px; margin-top:8px; }
+:root body .hero :is(.primary-button,.secondary-button) { height:36px; border:1px solid #a7a89a; border-radius:2px; padding:8px 14px; background:transparent; color:#34392e; font-size:13px; font-weight:500; box-shadow:none; }
+:root body .hero :is(.primary-button,.secondary-button):hover { background:var(--archive-paper); border-color:#777d6a; }
+:root body :is(a,button,input,select,textarea,summary,[tabindex]):focus-visible { outline:2px solid #947343; outline-offset:3px; }
 
 @media(max-width:1080px) {
-  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { padding:28px 26px; }
+  :root body .app-shell { padding:28px 26px; }
 }
 /* Preserve the existing small-screen fallback. Desktop is the design target. */
 @media(max-width:760px) {
-  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-shell { margin:0; padding:24px 18px 28px; }
-  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar { width:auto; border-right:0; border-bottom:1px solid var(--archive-line); }
+  :root body .app-shell { margin:0; padding:24px 18px 28px; }
+  :root body .app-sidebar { width:auto; border-right:0; border-bottom:1px solid var(--archive-line); }
 }
 @media(prefers-reduced-motion:reduce) {
-  body:is([data-active-page="progress"], [data-active-page="records"], [data-active-page="quality"], [data-active-page="settings"], [data-active-page="review"]) .app-sidebar nav a { transition:none; }
+  :root body .app-sidebar nav a { transition:none; }
 }
 
 /* The import dialog keeps the archive palette regardless of its opening page. */

@@ -41,12 +41,17 @@ function query(path, params = {}) {
 /** Endpoint and transport details live here; features supply domain inputs. */
 export function createApiClients(api) {
   return {
+    sealStandards: {
+      list: search => api(query('/api/seal-standards', {search})),
+      sources: id => api(`/api/seal-standards/${encodeURIComponent(id)}/sources`),
+      save: (id, payload) => api(`/api/results/${encodeURIComponent(id)}/seal-standard`, {method:'POST', json:payload}),
+    },
     imports: {
       dates: month => api(query('/api/import-dates', {month})),
       createTask: payload => api('/api/tasks', {method: 'POST', json: payload}),
     },
     queue: {
-      list: (importDate, options) => api(query('/api/queue', {import_date: importDate}), options),
+      list: (importDate, options) => api(query('/api/queue', {import_date: importDate, include_related: 1}), options),
       control: options => api('/api/queue/control', options),
       manage: (ids, action) => api('/api/jobs/manage', {method: 'POST', json: {ids, action}}),
       start: ids => api('/api/jobs/start', {method: 'POST', json: {ids}}),

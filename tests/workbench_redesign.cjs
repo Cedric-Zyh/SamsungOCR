@@ -44,8 +44,8 @@ function harness() {
     if (url.startsWith('/api/daily-results?')) return h.data;
     throw Error(url);
   };
-  const environment = {document: {body: {dataset: {activePage: 'progress'}}, createElement() { const input = node(); files.push(input); return input; }},
-    window: {confirm: () => h.confirm}, location: {}, localStorage: {getItem: () => '2026-09-10', setItem() {}},
+  const environment = {document: {...node(), body: {dataset: {activePage: 'progress'}}, createElement() { const input = node(); files.push(input); return input; }},
+    window: {...node(), confirm: () => h.confirm}, location: {}, localStorage: {getItem: () => '2026-09-10', setItem() {}},
     FormData: class { append() {} },
   };
   const controller = createProgress({environment, ui: {$, $$: selector => selector === '[data-work-filter]' ? filters : selector === '[data-work-count]' ? counts : [], toast: message => notices.push(message)},
@@ -55,6 +55,7 @@ function harness() {
     openResultPreview: async (...args) => { h.preview = args; },
     startReviewScope: async (...args) => { scopes.push(args); return h.openReview?.(); },
   });
+  $('#import-date').value = '2026-09-10';
   controller.initialize();
   return Object.assign(h, {$, state, filters, counts, requests, notices, scopes, files, environment, controller});
 }
@@ -69,30 +70,13 @@ test('view result opens the selected preview without navigating to review', asyn
   assert.equal(h.preview, null);
 });
 
-test('workbench shows active jobs, hides completed and offers review through records', async () => {
-  const h = harness();
-  h.data = [row(1), row(2, {review_status: '已复核', final_result: '通过'})];
+test('task drawer excludes completed receipts while keeping active jobs', async () => {
+  const h = harness(); h.data = [row(1), row(2, {final_result: '通过'})];
   h.jobs = [{id: 'cancelled', filename: 'cancelled.jpg', status: 'cancelled'}, {id: 'waiting', filename: 'waiting.jpg', status: 'queued'}];
-  assert.equal(h.state.progress.workFilter, 'all');
   await h.controller.loadDailyResults();
   assert.match(h.$('#queue').innerHTML, /waiting.jpg/);
   assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1|receipt-2|cancelled.jpg/);
-  h.$('#workbench-needs-review').checked = true;
-  await h.$('#workbench-needs-review').dispatch('change');
-  assert.match(h.$('#queue').innerHTML, /receipt-1.jpg/);
-  assert.match(h.$('#queue').innerHTML, /data-work-view="1"/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-review/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-2.jpg|waiting.jpg/);
-  assert.equal(h.$('#workbench-visible-count').textContent, '待复核 1 张');
-  await h.filters[0].dispatch('click');
-  assert.equal(h.$('#workbench-needs-review').checked, false);
-  assert.match(h.$('#queue').innerHTML, /receipt-2.jpg/);
-  h.$('#workbench-needs-review').checked = true;
-  await h.$('#workbench-needs-review').dispatch('change');
-  h.$('#workbench-needs-review').checked = false;
-  await h.$('#workbench-needs-review').dispatch('change');
-  assert.match(h.$('#queue').innerHTML, /waiting.jpg/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1.jpg|receipt-2.jpg/);
+  assert.equal(h.$('#task-strip-counts').textContent, '待开始 0 · 排队 1 · 识别中 0');
 });
 
 test('workbench polling updates provider progress while the record result remains cached', async () => {
@@ -139,32 +123,25 @@ test('both mismatches remain visible and take priority over less serious review 
   assert.equal(attention({...both, date_check: {status: '未识别', reliable: false}}).primary, '印章仅部分匹配，请确认');
 });
 
-test('filenames, customers, errors, review text and job IDs remain escaped', async () => {
+test('task filenames, errors and job IDs remain escaped', async () => {
   const h = harness(), unsafe = '"><img src=x onerror=alert(1)>';
-  h.state.progress.workNeedsReview = true;
-  h.data = [row(1, {filename: unsafe, fields: {客户名称: unsafe}, date_check: {status: '匹配', reliable: true}, seal_check: {status: '匹配', reliable: true}, review_reasons: [unsafe]})];
+  h.jobs = [{id: unsafe, filename: unsafe, status: 'failed', error_message: unsafe}];
   await h.controller.loadDailyResults();
-  assert.doesNotMatch(h.$('#queue').innerHTML, /<img|<script/);
-  assert.match(h.$('#queue').innerHTML, /&quot;&gt;&lt;img/);
-  h.jobs = [{id: unsafe, filename: 'failed.jpg', status: 'failed', error_message: unsafe}];
-  await h.controller.loadDailyResults(); await h.filters[2].dispatch('click');
   assert.match(h.$('#queue').innerHTML, /data-job-retry="&quot;&gt;&lt;img/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /<img/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /<img|<script/);
 });
 
 test('new imports appear first after polling while expanded list size is preserved', async () => {
-  const h = harness(); h.state.progress.workNeedsReview = true; h.data = Array.from({length: 120}, (_, index) => row(index + 1));
+  const h = harness(); h.data = [];
+  h.jobs = Array.from({length: 120}, (_, index) => readyJob(`job-${index}`));
   await h.controller.loadDailyResults();
-  assert.equal((h.$('#queue').innerHTML.match(/data-work-view=/g) || []).length, 50);
+  assert.equal((h.$('#queue').innerHTML.match(/data-job-start=/g) || []).length, 50);
   await h.$('#workbench-more').dispatch('click');
   assert.equal(h.$('#workbench-page-note').textContent, '已显示 100 / 120 张');
-  h.data = [row(121), ...h.data.slice().reverse()];
+  h.jobs.unshift(readyJob('newest', {created_at:'2026-09-10T18:00:00'}));
   await h.controller.loadDailyResults();
   assert.equal(h.$('#workbench-page-note').textContent, '已显示 100 / 121 张');
-  assert.equal(h.$('#queue').innerHTML.match(/data-work-view="(\d+)"/)[1], '121');
-  await h.filters[1].dispatch('click'); await h.filters[0].dispatch('click');
-  assert.equal(h.$('#workbench-page-note').textContent, '已显示 50 / 121 张');
-  await h.$('#workbench-more').dispatch('click');
+  assert.equal(h.$('#queue').innerHTML.match(/data-job-start="([^"]+)"/)[1], 'newest');
   h.$('#progress-date').value = '2026-09-09'; await h.controller.loadDailyResults();
   assert.equal(h.$('#workbench-page-note').textContent, '已显示 50 / 121 张');
 });
@@ -245,59 +222,40 @@ test('withdrawing a queued task keeps it available for explicit restart', async 
   assert.match(h.$('#queue').innerHTML, /data-job-start="queue-1"/);
 });
 
-test('completed receipts support select-all, indeterminate state, clear and scoped review', async () => {
-  const h = harness(); h.state.progress.workNeedsReview = true;
-  h.data = [row(1), row(2), row(3, {review_status: '确认通过', final_result: '通过'})];
+test('task select-all excludes running and completed records, preserves indeterminate state', async () => {
+  const h = harness(); h.jobs = [readyJob('one'), readyJob('two'), readyJob('running', {status:'running'})];
   await h.controller.loadDailyResults();
-  const all = h.$('#workbench-select-all');
-  assert.equal(all.disabled, false);
-  all.checked = true; await all.dispatch('change');
-  assert.equal(all.checked, true); assert.equal(all.indeterminate, false);
+  const all = h.$('#workbench-select-all'); all.checked = true; await all.dispatch('change');
   assert.equal(h.$('#queue-selection-count').textContent, '已选 2 张');
-  assert.equal(h.$('#queue-selected-review').textContent, '复核所选（2）');
-  assert.equal(h.$('#queue-selected-start').classList.contains('hidden'), true);
-  const input = node({workSelect: 'record:1'}); input.checked = false;
-  await h.$('#queue').dispatch('change', input);
-  assert.equal(all.checked, false); assert.equal(all.indeterminate, true);
+  const input = node({workSelect:'job:one'}); input.checked = false;
+  await h.$('#queue').dispatch('change',input);
+  assert.equal(all.indeterminate, true);
   await h.controller.loadDailyResults();
   assert.equal(h.$('#queue-selection-count').textContent, '已选 1 张');
-  await h.$('#queue-selected-review').dispatch('click');
-  assert.deepEqual(h.scopes[0], [{kind: 'selected', ids: [2], label: '工作台所选（1 张）'}, {recordId: 2}]);
-  assert.equal(h.requests.some(request => request.options?.method), false);
   await h.$('#queue-selection-clear').dispatch('click');
-  assert.equal(all.checked, false); assert.equal(all.indeterminate, false);
-  assert.equal(h.$('#queue-selection').classList.contains('hidden'), true);
-  all.checked = true; await all.dispatch('change');
-  all.checked = false; await all.dispatch('change');
   assert.equal(h.$('#queue-selection').classList.contains('hidden'), true);
 });
 
-test('review selection is limited to displayed rows and resets with search and day changes', async () => {
-  const h = harness(); h.state.progress.workNeedsReview = true;
-  h.data = Array.from({length: 55}, (_, index) => row(index + 1));
+test('task selection is limited to displayed rows and resets with search and day changes', async () => {
+  const h = harness(); h.jobs = Array.from({length:55}, (_, i) => readyJob(`task-${i}`));
   await h.controller.loadDailyResults();
   const all = h.$('#workbench-select-all'); all.checked = true; await all.dispatch('change');
   assert.equal(h.$('#queue-selection-count').textContent, '已选 50 张');
-  await h.$('#queue-selected-review').dispatch('click');
-  assert.equal(h.scopes[0][0].ids.length, 50);
-  h.$('#workbench-search').value = 'receipt-1.jpg'; await h.$('#workbench-search').dispatch('input');
+  h.$('#workbench-search').value = 'task-1.jpg'; await h.$('#workbench-search').dispatch('input');
   assert.equal(all.checked, false);
   all.checked = true; await all.dispatch('change');
   h.$('#progress-date').value = '2026-09-09'; await h.controller.loadDailyResults();
   assert.equal(all.checked, false);
 });
 
-test('mixed selection separates record review from queued-job actions', async () => {
-  const h = harness(); h.state.progress.workFilters = ['ready', 'queued', 'running', 'completed'];
-  h.jobs = [readyJob('ready-1'), readyJob('queued-1', {status: 'queued'}), readyJob('running-1', {status: 'running'})];
+test('task batch scope isolates task list without narrowing the main day start action', async () => {
+  const h = harness();
+  h.jobs = [readyJob('a', {task_id:'first'}), readyJob('b', {task_id:'second'})];
+  h.state.progress.taskBatch = 'first';
   await h.controller.loadDailyResults();
-  const all = h.$('#workbench-select-all'); all.checked = true; await all.dispatch('change');
-  assert.equal(h.$('#queue-selection-count').textContent, '已选 3 张');
-  assert.equal(h.$('#queue-selected-start').textContent, '开始所选（1）');
-  assert.equal(h.$('#queue-selected-withdraw').textContent, '取消所选排队（1）');
-  assert.equal(h.$('#queue-selected-review').textContent, '复核所选（1）');
-  await h.$('#queue-selected-review').dispatch('click');
-  assert.deepEqual(h.scopes[0][0].ids, [1]);
+  assert.match(h.$('#queue').innerHTML, /a.jpg/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /b.jpg|receipt-1.jpg/);
+  assert.equal(h.$('#queue-start').textContent, '开始识别');
 });
 
 test('batch actions only act on selected eligible jobs, not saved records', async () => {
@@ -344,7 +302,7 @@ test('uploaded ready receipts stay pending and do not count as processed', async
   assert.equal(ReceiptWorkbench.category({status: 'ready'}), 'processing');
   assert.match(h.$('#task-summary').textContent, /已处理 0 \/ 1 张 · 1 张待开始/);
   assert.match(h.$('#queue').innerHTML, /待开始/);
-  assert.equal(h.$('#queue-start').textContent, '开始全部待开始（1）');
+  assert.equal(h.$('#queue-start').textContent, '开始识别');
   assert.equal(h.$('#queue-start').disabled, false);
   assert.equal(h.$('#queue-start-remote-note').classList.contains('hidden'), false);
   assert.equal(h.requests.some(request => request.options?.method), false);
@@ -379,7 +337,7 @@ test('start captures all ready jobs in the loaded day beyond visible rows withou
   const ids = writes[0].options.json.ids;
   assert.deepEqual(ids, Array.from({length: 61}, (_, index) => `ready-${index}`));
   pending.resolve(releaseJobs(h, ids)); await starting;
-  assert.equal(h.$('#queue-start').textContent, '开始全部待开始（0）');
+  assert.equal(h.$('#queue-start').textContent, '开始识别');
   assert.equal(h.$('#queue-start').disabled, true);
 });
 
@@ -413,7 +371,7 @@ test('a day change during start never adds the newly displayed day to the captur
   assert.equal(h.state.progress.queueDay, '2026-09-09');
   assert.equal(h.state.progress.queueJobs.get('new-day').status, 'ready');
   assert.equal(h.state.progress.queueJobs.has('old-day'), false);
-  assert.equal(h.$('#queue-start').textContent, '开始全部待开始（1）');
+  assert.equal(h.$('#queue-start').textContent, '开始识别');
 });
 
 test('start batches more than 5000 captured IDs and preserves completed batches after a later failure', async () => {
@@ -429,7 +387,7 @@ test('start batches more than 5000 captured IDs and preserves completed batches 
   const writes = h.requests.filter(request => request.url === '/api/jobs/start');
   assert.deepEqual(writes.map(request => request.options.json.ids.length), [5000, 1]);
   assert.equal(writes[1].options.json.ids[0], 'ready-5000');
-  assert.equal(h.$('#queue-start').textContent, '开始全部待开始（1）');
+  assert.equal(h.$('#queue-start').textContent, '开始识别');
   assert.match(h.notices.at(-1), /已提交 5000 张回单，剩余 1 张/);
   h.api = async (url, options) => url === '/api/jobs/start' ? releaseJobs(h, options.json.ids) : read(url, options);
   await h.$('#queue-start').dispatch('click');
@@ -499,29 +457,21 @@ test('queue display sorts imports newest first across statuses and polling updat
   ];
   await h.controller.loadDailyResults();
   const order = () => [...h.$('#queue').innerHTML.matchAll(/data-work-select="job:([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(order(), ['recent-done', 'middle-queued', 'old-running']);
+  assert.deepEqual(order(), ['middle-queued', 'old-running']);
   h.jobs.push(readyJob('new-import', {created_at: '2026-09-10T13:00:00'}));
   await h.controller.loadDailyResults({refreshRecords: false});
-  assert.deepEqual(order(), ['new-import', 'recent-done', 'middle-queued', 'old-running']);
+  assert.deepEqual(order(), ['new-import', 'middle-queued', 'old-running']);
 });
 
-test('completed record can be deleted singly and cancellation makes no write', async () => {
-  const h = harness(); h.state.progress.workFilters = ['completed'];
+test('completed receipts cannot be deleted from task drawer', async () => {
+  const h = harness(); h.confirm = true;
   await h.controller.loadDailyResults();
-  assert.match(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
-  await h.$('#queue').dispatch('click', node({workDelete: 'record:1'}));
+  assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
+  await h.$('#queue').dispatch('click', node({workDelete:'record:1'}));
   assert.equal(h.requests.some(r => r.options?.method), false);
-  const read = h.api; h.confirm = true;
-  h.api = async (url, options) => {
-    if (url === '/api/results/delete') { assert.deepEqual(options.json.ids, [1]); h.data = []; return {ids: [1]}; }
-    return read(url, options);
-  };
-  await h.$('#queue').dispatch('click', node({workDelete: 'record:1'}));
-  assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1.jpg/);
-  assert.equal(h.state.records.recordsStale, true);
 });
 
-test('bulk deletion includes failed and completed rows, but preserves a job claimed meanwhile', async () => {
+test('bulk task deletion excludes completed rows and preserves a job claimed meanwhile', async () => {
   const h = harness(); h.confirm = true;
   h.state.progress.workFilters = ['ready', 'queued', 'running', 'completed', 'failed'];
   h.jobs = [readyJob('done', {status: 'succeeded', result_id: 1}), readyJob('failure', {status: 'failed'}),
@@ -530,14 +480,14 @@ test('bulk deletion includes failed and completed rows, but preserves a job clai
   await h.controller.loadDailyResults();
   assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-delete="job:running"/);
   const all = h.$('#workbench-select-all'); all.checked = true; await all.dispatch('change');
-  assert.equal(h.$('#queue-selected-delete').textContent, '删除所选（3）');
+  assert.equal(h.$('#queue-selected-delete').textContent, '删除所选（2）');
   const read = h.api;
   h.api = async (url, options) => {
     if (url === '/api/jobs/delete') {
-      assert.deepEqual(new Set(options.json.ids), new Set(['done', 'failure', 'pending']));
+      assert.deepEqual(new Set(options.json.ids), new Set(['failure', 'pending']));
       h.jobs = h.jobs.filter(job => ['pending', 'running'].includes(job.id));
       h.jobs[0].status = 'running';
-      return {deleted_ids: ['done', 'failure'], kept_ids: ['pending'], result_ids: [1]};
+      return {deleted_ids: ['failure'], kept_ids: ['pending'], result_ids: []};
     }
     if (url === '/api/results/delete') { assert.deepEqual(options.json.ids, [1]); h.data = [row(2)]; return {ids: [1]}; }
     return read(url, options);
@@ -549,8 +499,8 @@ test('bulk deletion includes failed and completed rows, but preserves a job clai
 });
 
 test('deletion locks duplicate clicks and refreshes records even after partial failure', async () => {
-  const h = harness(); h.confirm = true; h.state.progress.workFilters = ['completed'];
-  h.jobs = [readyJob('done', {status: 'succeeded', result_id: 1})];
+  const h = harness(); h.confirm = true; h.state.progress.workFilters = ['failed'];
+  h.jobs = [readyJob('done', {status: 'failed', result_id: 1})];
   await h.controller.loadDailyResults();
   const read = h.api, pending = deferred();
   h.api = async (url, options) => {
@@ -563,6 +513,6 @@ test('deletion locks duplicate clicks and refreshes records even after partial f
   assert.equal(h.requests.filter(r => r.url === '/api/jobs/delete').length, 1);
   pending.resolve(); await saving;
   assert.match(h.notices.at(-1), /删除未全部完成/);
-  assert.match(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
   assert.equal(h.state.records.recordsStale, true);
 });

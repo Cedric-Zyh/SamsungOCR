@@ -13,6 +13,7 @@ files in cascade order:
 - `records_archive.css`: record list and filters
 - `workbench_tasks.css`: daily workbench and queue
 - `process_history.css`: process timeline dialog
+- `receipt_management.css`: unified receipt page, compact task strip, and task drawer (last feature layer)
 
 The order is intentional during the migration: later feature layers can refine
 shared primitives without adding another stylesheet link or relying on a

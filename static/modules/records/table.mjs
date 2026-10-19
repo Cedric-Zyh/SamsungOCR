@@ -16,7 +16,7 @@ export function createRecordTable({environment, ui, recordsState, currentFilters
     const action = failed ? '<button type="button" class="secondary-button" data-record-retry>重新加载</button>'
       : hasConditions ? '<button type="button" class="secondary-button" data-clear-record-filters>清除附加筛选</button>'
       : `${filters.task_id ? '' : '<a href="#import" class="primary-button">导入回单</a>'}<button type="button" class="secondary-button" data-record-date>选择其他日期</button>`;
-    $('#records-body').innerHTML = `<tr><td colspan="8" class="empty-state"><div class="records-empty"><img class="records-empty-illustration" src="/static/images/records-empty.svg" width="136" height="104" alt=""><strong>${title}</strong><p>${escapeHtml(detail)}</p><div class="records-empty-actions">${action}</div></div></td></tr>`;
+    $('#records-body').innerHTML = `<tr><td colspan="7" class="empty-state"><div class="records-empty"><img class="records-empty-illustration" src="/static/images/records-empty.svg" width="136" height="104" alt=""><strong>${title}</strong><p>${escapeHtml(detail)}</p><div class="records-empty-actions">${action}</div></div></td></tr>`;
   }
 
   function renderRecords({background, scrollToTable}) {

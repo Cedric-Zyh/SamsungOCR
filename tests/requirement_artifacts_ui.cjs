@@ -23,6 +23,26 @@ test('requirement input images appear in their own tab and escape OCR text', () 
   assert.doesNotMatch(html, /没有保存/);
 });
 
+test('evidence images load eagerly and open inside the review window', () => {
+  const html = render([{index: 0, color: 'red', original_url: '/files/stamp.png'}]);
+  assert.match(html, /data-artifact-open/);
+  assert.match(html, /loading="eager"/);
+  assert.match(html, /data-image-retry/);
+  assert.doesNotMatch(html, /target="_blank"|loading="lazy"/);
+});
+
+test('only unwrapped evidence requests an RGB display copy, including the enlarged link', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '椭圆',
+    original_url: '/files/artifacts/test/original.png',
+    unwrapped_url: '/files/artifacts/test/ring.png',
+    unwrapped_text: '上海凝鹏通讯科技有限公司',
+  }]);
+  assert.match(html, /href="\/files\/artifacts\/test\/ring.png\?preview=rgb"/);
+  assert.match(html, /src="\/files\/artifacts\/test\/ring.png\?preview=rgb"/);
+  assert.match(html, /src="\/files\/artifacts\/test\/original.png"/);
+});
+
 test('seal tab does not include requirement images', () => {
   for (const seal of [{index: 0, color: 'red'}, {index: 0, seal_model_backend: 'test'}]) {
     const html = render([seal]);
@@ -80,6 +100,21 @@ test('modern round seal UI supports direct ring input without a horizontal type 
   assert.match(html, /环形 OCR 直接读取旋正后的整章图/);
 });
 
+test('number stroke repair distinguishes the final seal from unchanged ring evidence', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '圆形',
+    color_isolated_oriented_url: '/files/restored.png',
+    stamp_number_url: '/files/number.png', stamp_number_text: '(1)', stamp_number_status: 'merged',
+    ring_input_url: '/files/ring-input.png', ring_input_box: [10, 20, 30, 40],
+    stamp_number_recovery: {status: 'restored', original_number_url: '/files/number-original.png'},
+  }]);
+  assert.match(html, /旋正后的章色图（已保留编号笔画）/);
+  assert.match(html, /环形输入仍使用编号修复前的章色图/);
+  assert.match(html, /编号原图笔画核对/);
+  assert.match(html, /\/files\/number-original.png/);
+  assert.match(html, /识别：(.*?)\(1\)/s);
+});
+
 test('seal evidence shows raw ring OCR and its cyclic seam reorder separately', () => {
   const html = render([{
     schema_version: 2,
@@ -132,4 +167,39 @@ test('company-only ring input is distinguished from the complete number band', (
   assert.match(html, /完整环形展开图（含小字号段，仅供核对）/);
   assert.match(html, /环形 OCR 读取已排除小字号段的公司名称展开图/);
   assert.doesNotMatch(html, /环形 OCR 直接读取旋正后的整章图/);
+});
+
+test('number evidence shows its own crop and raw text without attributing it to the type-only image', () => {
+  const item = {
+    schema_version: 2, index: 0, color: 'red', shape: '圆形',
+    original_url: '/files/original.png', round_type_band_url: '/files/center.png',
+    round_type_row_text: '收货专用章', round_type_band_text: '收货专用章(1',
+    stamp_number_url: '/files/number.png', stamp_number_text: '(1', stamp_number_status: 'merged',
+    reads: [{channel: 'number', provider: 'paddle_v6', text: '(1', confidence: .91}],
+  };
+  const html = render([item]);
+  const figures = [...html.matchAll(/<figure\b[^>]*>[\s\S]*?<\/figure>/g)].map(m => m[0]);
+  const center = figures.find(f => f.includes('/files/center.png'));
+  const number = figures.find(f => f.includes('/files/number.png'));
+  assert.match(center, /识别：收货专用章<\/p>/);
+  assert.doesNotMatch(center, /\(1/);
+  assert.match(number, /章内编号（已并入章型文字）/);
+  assert.match(number, /识别：\(1<\/p>/);
+  assert.match(html, /章内编号 · paddle_v6/);
+  assert.match(render([{...item, stamp_number_status: 'unverified'}]), /章内编号（待核对，未合并）/);
+});
+
+test('tight text mask explains the actual fill before ring OCR even with company selection', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '圆形',
+    color_isolated_oriented_url: '/files/oriented.png', round_type_band_url: '/files/center.png',
+    ring_input_url: '/files/ring-input.png', ring_input_box: [40, 60, 90, 80],
+    ring_input_mask_method: 'contained_text_ink', ring_company_selection: {selected: true},
+    unwrapped_url: '/files/ring.png',
+  }]);
+  assert.match(html, /仅填白文字框内的独立笔画/);
+  assert.match(html, /保留跨边界的外圈和相邻文字/);
+  assert.match(html, /再从第 3 张图展开读取环字/);
+  assert.match(html, /文字定位范围/);
+  assert.doesNotMatch(html, /dt_polys 合并/);
 });

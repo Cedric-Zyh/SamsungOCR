@@ -6,6 +6,7 @@
 @import url('./styles/workspace.css');
 @import url('./styles/ui_refinements.css');
 @import url('./styles/ui_round2.css');
+/* Global default theme, loaded after legacy structural rules. */
 @import url('./styles/archive_theme.css');
 @import url('./styles/report_refinements.css');
 @import url('./styles/review_feedback.css');
@@ -14,3 +15,7 @@
 @import url('./styles/workbench_tasks.css');
 @import url('./styles/process_history.css');
 @import url('./styles/result_preview.css');
+@import url('./styles/artifact_images.css');
+@import url('./styles/seal_center.css');
+
+@import url("./styles/receipt_management.css");

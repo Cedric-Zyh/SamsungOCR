@@ -5,7 +5,7 @@ import {dateAuditText, sealEvidenceMarkup} from './review_provider_evidence.mjs'
 export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor,
   renderProductTable, setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation,
   applyReviewMode, focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-  renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness}) {
+  renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness, renderStandard}) {
   const {$, $$} = ui;
   return function renderReview(item, id, mode) {
     $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
@@ -34,7 +34,9 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     for (const key of ['date', 'seal', 'signature']) {
       const status = ReceiptWorkbench.checkStatus(item, key);
       const card = $(`[data-check-card="${key}"]`, content);
-      const blocking = ['date', 'seal'].includes(key) && status !== '匹配';
+      const needsStandard = key === 'seal' && item.seal_standard_check?.requirement
+        && item.seal_standard_check.status !== 'matched' && item.seal_check?.human_confirmed_match !== true;
+      const blocking = ['date', 'seal'].includes(key) && (status !== '匹配' || needsStandard);
       card.open = blocking;
       card.classList.toggle('check-attention', blocking);
       $(`[data-check-badge="${key}"]`, content).innerHTML = statusPill(status);
@@ -48,6 +50,7 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     }
     $('[data-date-audit-content]', content).textContent = dateAuditText(item);
     setupSealConfirmation(item, content);
+    renderStandard?.(item, content, mode);
     setupSignatureConfirmation(item, content);
     $('[name=human_note]', content).value = item.human_note || '';
     $('[name=error_type]', content).value = item.error_type || '';

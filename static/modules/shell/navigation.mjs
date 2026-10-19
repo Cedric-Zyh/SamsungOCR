@@ -1,13 +1,14 @@
 import {localToday} from '../core/ui.mjs';
 export function createNavigation({
   environment, ui, navigationState, recordsState, reportState, reviewState, canLeaveReview, dismissReview,
-  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadReport
+  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadReport, loadSealCenter
 }) {
   const {document, window, location, history} = environment;
   const {$, $$, toast} = ui;
 
   const pageInfo = {
-    records: ['回单记录', '查询与核验回单，让每一张单据都有据可查。'],
+    'seal-center': ['印章中心', '按签章要求维护标准章，核对每一枚客户印章。'],
+    records: ['回单管理', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
     quality: ['质量统计', '查看识别准确率、错误分布与样单评测结果。'],
     settings: ['设置', '选择识别内容与方式，让每次测试更有针对性。'],
@@ -77,7 +78,11 @@ export function createNavigation({
     }
   }
   function routePage() {
-    const route = location.hash.slice(1) || 'progress';
+    let route = location.hash.slice(1) || 'records';
+    if (route === 'progress') {
+      route = 'records';
+      history.replaceState(null, '', '#records');
+    }
     if (reviewState.current && !/^(review|view)\/\d+$/.test(route) && !canLeaveReview()) { history.replaceState(null, '', `#${reviewState.reviewMode || 'review'}/${reviewState.current.id}`); return; }
     if (route === 'import') { showPage('records'); showImportDialog(); return; }
     if (/^(review|view)\/\d+$/.test(route)) {
@@ -99,7 +104,11 @@ export function createNavigation({
         toast(error.message, 'danger');
       });
       if (route === 'progress') loadDailyResults().catch(error => toast(error.message, 'danger'));
-      if (route === 'records') loadRecords({background: !!recordsState.recordsLoaded}).catch(error => toast(error.message, 'danger'));
+      if (route === 'records') {
+        loadRecords({background: !!recordsState.recordsLoaded}).catch(error => toast(error.message, 'danger'));
+        loadDailyResults({refreshRecords: false}).catch(error => toast(error.message, 'danger'));
+      }
+      if (route === 'seal-center' && loadSealCenter) loadSealCenter().catch(error => toast(error.message, 'danger'));
       if (route === 'quality' && (reportState.reportStale || !reportState.reportLoadedAt || Date.now() - reportState.reportLoadedAt >= 30000)) loadReport().catch(error => toast(error.message, 'danger'));
     }
   }

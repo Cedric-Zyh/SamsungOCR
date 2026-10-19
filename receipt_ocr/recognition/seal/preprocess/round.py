@@ -13,6 +13,7 @@ def prepare_round_stamp(source, destination, *, model_variant="v6"):
     boxes = detect_boxes(source, model_variant=model_variant)
     decision = choose_round_stamp_angle(boxes)
     decision["mode"] = "polygon"
+    decision["rotation_steps"] = []
     decision["model_variant"] = model_variant
     decision["detected_boxes"] = boxes
     decision["type_row_texts"] = _round_stamp_type_texts(boxes, decision)
@@ -41,6 +42,7 @@ def prepare_round_stamp(source, destination, *, model_variant="v6"):
     oriented = rotate_stamp_image(
         source, destination, decision["applied_rotation"]
     )
+    decision["rotation_steps"] = [decision["applied_rotation"]]
     with Image.open(oriented) as image:
         oriented_width, oriented_height = image.size
     with Image.open(source) as image:

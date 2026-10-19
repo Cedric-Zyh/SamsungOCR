@@ -61,7 +61,7 @@ function harness(names = []) {
     renderProductTable:()=>{},setupDateConfirmation:()=>{},setupSealConfirmation:()=>{},setReviewImage:()=>{},focusReviewImage:()=>{},renderArtifacts:()=>{},
     renderHistory:async()=>{},renderGroundTruth:async()=>{},loadReviewQueue:async()=>{},continueReview:async()=>{},refreshVisibleResults:async()=>{},
     startReviewScope:async()=>{},getReviewScope:()=>({kind:'day',filters:{}}),
-    ensureReviewScope:()=>{},
+    ensureReviewScope:()=>{},onQueueChanged:()=>{},onDateChanged:()=>{},openManagedRecords:()=>{},
     markReviewSaved:(id,status)=>{if(status==='待复核')bags.review.reviewDeferred.add(id);else bags.review.reviewDeferred.delete(id);},
     showPage:page=>{context.document.body.dataset.activePage=page;},
   };
@@ -230,7 +230,7 @@ if (process.argv.includes('--render-samples')) {
     assert.equal(metric.attributes['aria-pressed'],'true');
     assert.equal(filter.attributes['aria-pressed'],'false');
     assert.equal(scroll,1);
-    assert.match(h.$('#workbench-visible-count').textContent,/已完成 1 张/);
+    assert.match(h.$('#workbench-visible-count').textContent,/已完成 0 张/);
   });
 
   test('API writes invalidate cached results only after success and preserve conflict details', async () => {
@@ -326,7 +326,7 @@ if (process.argv.includes('--render-samples')) {
     assert.deepEqual(opened.scope.ids,[2]);
     assert.deepEqual(opened.scope.filters,{});
     await h.context.startRecordsReview('day');
-    assert.deepEqual(opened.scope.filters,{import_date:'2026-09-10'});
+    assert.deepEqual(opened.scope.filters,{import_date:'2026-09-10',include_processing:'1'});
   });
 
   test('filter chips escape values and removing one leaves the other filters intact', async () => {
@@ -513,7 +513,7 @@ if (process.argv.includes('--render-samples')) {
     for(const activePage of ['settings','review','records','records','quality','quality','progress','progress']) {
       h.context.document.body.dataset.activePage=activePage;await h.context.pollQueue();
     }
-    assert.deepEqual(calls,['records','quality','progress']);
+    assert.deepEqual(calls,['progress','records','quality']);
     h.context.document.hidden=true;h.state.dailyAttemptAt=0;await h.context.pollQueue();
     assert.equal(calls.length,3);assert.equal(h.timers.at(-1).delay,5000);
   });

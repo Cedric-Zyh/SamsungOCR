@@ -15,6 +15,7 @@ import {createProcessHistory} from '../records/process_history.mjs';
 import {createRetentionSettings} from '../imports/retention_settings.mjs';
 import {createRemoteSettings} from '../imports/remote_settings.mjs';
 import {createPolling} from '../core/polling.mjs';
+import {createSealCenter} from '../seals/center.mjs';
 
 /** Composition root: controllers communicate through explicit callbacks.
  * Constructing an application performs no requests or event registration. */
@@ -29,6 +30,7 @@ export function createApplication(environment, options = {}) {
   const {ReceiptImport, ReceiptQueue, ReceiptWorkbench} = {...environment, ...options};
   const api = options.api || createApi({fetch: environment.fetch, onResultsChanged: invalidateResultViews});
   const services = options.services || createApiClients(api);
+  const seal_center = createSealCenter({ui, services});
   const process_history = createProcessHistory({
     environment,
     ui,
@@ -49,6 +51,11 @@ export function createApplication(environment, options = {}) {
     retryOne: (...args) => imports.retryOne(...args),
     openProcessHistory: (...args) => process_history.open(...args),
     refreshVisibleResults,
+    onDateChanged: day => {
+      $('#progress-date').value = day;
+      progressState.taskBatch = '';
+      progress.loadDailyResults().catch(error => ui.toast(error.message, 'danger'));
+    },
     setBatchStep: (...args) => imports.setBatchStep(...args)
   });
   const imports = createImports({
@@ -67,6 +74,7 @@ export function createApplication(environment, options = {}) {
     updateRecognitionPlan: (...args) => recognition_plan.updateRecognitionPlan(...args),
     loadDailyResults: (...args) => progress.loadDailyResults(...args),
     syncStartRecognition: (...args) => progress.syncStartRecognition?.(...args),
+    openManagedRecords,
     showQueuedRetry: (...args) => progress.showQueuedRetry(...args),
     closeModal: (...args) => review.closeModal(...args)
   });
@@ -139,6 +147,11 @@ export function createApplication(environment, options = {}) {
     ReceiptWorkbench,
     ReceiptQueue,
     openResultPreview: (...args) => result_preview.open(...args),
+    openManagedRecords,
+    onQueueChanged: () => {
+      recordsState.recordsStale = true;
+      if (document.body.dataset.activePage === 'records') records.loadRecords({background: true}).catch(error => ui.toast(error.message, 'danger'));
+    },
     flushSettings: () => recognition_plan.flushSettings(),
     retryOne: (...args) => imports.retryOne(...args),
     startReviewScope: (...args) => review_queue.startReviewScope(...args),
@@ -167,8 +180,20 @@ export function createApplication(environment, options = {}) {
     loadReviewQueue: (...args) => review_queue.loadReviewQueue(...args),
     loadDailyResults: (...args) => progress.loadDailyResults(...args),
     loadRecords: (...args) => records.loadRecords(...args),
-    loadReport: (...args) => report.loadReport(...args)
+    loadReport: (...args) => report.loadReport(...args),
+    loadSealCenter: (...args) => seal_center.load(...args)
   });
+
+  function openManagedRecords(day, taskId = '', batchLabel = '当前导入批次') {
+    records.openDayRecords(day);
+    recordsState.batchFilter = taskId;
+    recordsState.batchLabel = batchLabel;
+    if (taskId) {
+      $('#batch-scope').classList.remove('hidden');
+      $('#batch-scope span').textContent = batchLabel;
+    }
+    records.loadRecords().catch(error => ui.toast(error.message, 'danger'));
+  }
 
   function invalidateResultViews() {
     if (state.store) {
@@ -184,7 +209,10 @@ export function createApplication(environment, options = {}) {
   }
   async function refreshVisibleResults() {
     if (document.hidden) return;
-    if (document.body.dataset.activePage === 'records') await records.loadRecords({background: true});
+    if (document.body.dataset.activePage === 'records') {
+      await records.loadRecords({background: true});
+      await progress.loadDailyResults();
+    }
     else if (document.body.dataset.activePage === 'quality') await report.loadReport();
   }
 
@@ -192,8 +220,8 @@ export function createApplication(environment, options = {}) {
     if (document.hidden) return;
     try {
       const page = document.body.dataset.activePage;
-      if (page === 'progress' && Date.now() - (progressState.dailyAttemptAt || 0) >= 2000) await progress.loadDailyResults({refreshRecords:false});
-      else if (page === 'records' && Date.now() - (recordsState.recordAttemptAt || 0) >= 10000) await records.loadRecords({background:!!recordsState.recordsLoaded});
+      if (['progress', 'records'].includes(page) && Date.now() - (progressState.dailyAttemptAt || 0) >= 2000) await progress.loadDailyResults({refreshRecords:false});
+      if (page === 'records' && (recordsState.recordsStale || Date.now() - (recordsState.recordAttemptAt || 0) >= 10000)) await records.loadRecords({background:!!recordsState.recordsLoaded});
       else if (page === 'quality' && Date.now() - (reportState.reportAttemptAt || 0) >= 30000) await report.loadReport();
     } catch (_) {
       if (document.body.dataset.activePage === 'progress') $('#progress-note').textContent = '进度连接暂时中断，恢复连接后会重新查询。';
@@ -228,6 +256,7 @@ export function createApplication(environment, options = {}) {
     review_queue.initialize();
     progress.initialize();
     report.initialize();
+    seal_center.initialize();
     navigation.initialize();
     document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQueue(); });
 
@@ -239,7 +268,7 @@ export function createApplication(environment, options = {}) {
 
   return {initialize, state, pollQueue, polling, invalidateResultViews, refreshVisibleResults,
     records, imports, recognition_plan, review, review_evidence, review_queue, progress, report, navigation, process_history,
-    retention_settings};
+    retention_settings, seal_center};
 }
 
 export function browserEnvironment(window, libraries) {

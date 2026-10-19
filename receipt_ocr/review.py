@@ -16,6 +16,10 @@ def confirmation_error(result, review_status, final_result):
     seal = result.get("seal_check") or {}
     acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
     missing = []
+    standard_check = result.get("seal_standard_check") or {}
+    if (acceptance.get("seal_match_mode") != "none" and standard_check.get("requirement")
+            and standard_check.get("status") != "matched" and seal.get("human_confirmed_match") is not True):
+        missing.append("印章形状尚无标准章参照或未匹配，请加入标准章或完成人工核对")
     if acceptance.get("date_match_mode") != "none" and not (
             date.get("actual") and date.get("status") == "匹配" and date.get("reliable") is True):
         missing.append("实际收货日期尚未可靠识别或与要求到货日期不一致")

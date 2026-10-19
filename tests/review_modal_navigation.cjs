@@ -124,7 +124,7 @@ test('review opens above the records page, keeps the records navigation selected
   assert.equal(h.$('[data-page="review"]').classList.contains('hidden'), false);
   assert.equal(h.$('[data-page="progress"]').classList.contains('hidden'), true);
   assert.equal(h.$('[data-nav="records"]').getAttribute('aria-current'), 'page');
-  assert.equal(h.$('#page-title').textContent, '回单记录');
+  assert.equal(h.$('#page-title').textContent, '回单管理');
   assert.equal(h.$('#toast').parentElement, h.dialog);
   assert.equal(h.document.body.classList.contains('review-dialog-open'), true);
   h.$('#review-close').focus(); h.table.scrollTop = 0;

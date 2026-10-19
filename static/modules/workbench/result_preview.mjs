@@ -21,14 +21,14 @@ export function resultPreviewModel(record, workbench) {
 
 export function renderResultPreview(model) {
   const {rows, attention} = model;
-  const summary = attention.length ? `${attention.length} 项需要确认` : '核验结果已加载';
+  const summary = attention.length ? `${attention.length} 项待确认` : '核验结果已加载';
   const detail = attention.length ? attention.map(row => `${row.label} · ${row.status}`).join('；')
     : rows.some(row => row.status === '未执行') ? '部分项目未执行，请按需要进入复核。' : '日期、印章、签名均匹配。';
-  return `<div class="result-preview-summary" data-tone="${attention.length ? 'warning' : 'neutral'}"><strong>${summary}</strong><span>${escapeHtml(detail)}</span></div>
+  return `<div class="result-preview-summary" data-tone="${attention.length ? 'warning' : 'neutral'}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16v1"/></svg><strong>${summary}</strong><span>${escapeHtml(detail)}</span></div>
     <div class="result-preview-table-wrap"><table class="result-preview-table"><colgroup><col class="preview-label-col"><col><col><col class="preview-status-col"></colgroup>
     <thead><tr><th scope="col">核验项目</th><th scope="col">要求值</th><th scope="col">识别值</th><th scope="col">结果</th></tr></thead>
     <tbody>${rows.map(row => `<tr data-tone="${row.tone}"><th scope="row">${row.label}</th><td>${escapeHtml(row.expected)}</td><td>${escapeHtml(row.actual)}</td><td><span class="result-preview-badge" data-tone="${row.tone}">${escapeHtml(row.status)}</span></td></tr>`).join('')}</tbody></table></div>
-    <p class="result-preview-note">${attention.length ? '需要核对或修改以上内容时，请进入复核。' : '此处展示已保存的结果，可进入复核查看详情或修改。'}</p>`;
+    <p class="result-preview-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg>${attention.length ? '核对或修改识别内容，请进入复核。' : '此处展示已保存的结果，可进入复核查看详情或修改。'}</p>`;
 }
 
 export function createResultPreview({environment, ui, services, ReceiptWorkbench, enterReview}) {

@@ -14,12 +14,13 @@
       {
         "label": "main",
         "title": "三星回单核验台",
-        "width": 1480,
-        "height": 920,
+        "width": 1414,
+        "height": 882,
         "minWidth": 1100,
         "minHeight": 700,
         "center": true,
-        "resizable": true,
+        "resizable": false,
+        "maximizable": false,
         "dragDropEnabled": false
       }
     ],

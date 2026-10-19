@@ -28,7 +28,12 @@ def test_frontend_request_selection_confirmation_and_pagination_behaviors():
 
 
 def test_review_readiness_keyboard_and_image_interactions():
-    run_node("--test", "tests/review_ui_behaviors.cjs", "tests/review_modal_navigation.cjs")
+    run_node("--test", "tests/review_ui_behaviors.cjs", "tests/review_modal_navigation.cjs",
+             "tests/artifact_images.cjs", "tests/requirement_artifacts_ui.cjs")
+
+
+def test_standard_seal_selection_registration_replacement_and_review_guards():
+    run_node("--test", "tests/seal_standards_ui.cjs")
 
 
 def test_second_round_ui_recovery_and_feedback_behaviors():

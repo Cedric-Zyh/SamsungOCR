@@ -43,6 +43,7 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
     recordsState.recordFilterKey = filterKey;
     params.set('page', String(page || 1)); params.set('page_size', String(recordsState.recordPageSize));
     params.set('include_status_counts', '1');
+    params.set('include_processing', '1');
 
     closeMoreMenu();
     const requestId = recordsState.recordRequest = (recordsState.recordRequest || 0) + 1;
@@ -60,7 +61,7 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
       if (result.page > lastPage) { recordsState.recordLoading = false; return await loadRecords({background, page:lastPage, scrollToTable}); }
       recordsState.records = result.items; recordsState.recordPage = result.page; recordsState.recordTotal = result.total;
       recordsState.recordsLoaded = true; recordsState.recordsStale = false;
-      const visibleIds = new Set(recordsState.records.map(record => Number(record.id)));
+      const visibleIds = new Set(recordsState.records.filter(record => record.id && !record.processing_status).map(record => Number(record.id)));
       recordsState.selected = new Set([...recordsState.selected].filter(id => visibleIds.has(id)));
       $('#record-count').textContent = `共 ${result.total} 张`;
       renderStatusCounts(result.status_counts);

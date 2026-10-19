@@ -27,12 +27,15 @@ export function reviewReadiness(item, draft) {
   const sealChanged = sealText !== String(seal.recognized || '').trim()
     || sealRequirement !== String(fields['签章要求'] || '').trim();
   const decision = draft.sealConfirmed;
+  const standard = item.seal_standard_check;
+  const standardReady = !standard?.requirement || standard.status === 'matched' || seal.human_confirmed_match === true;
   const sealReady = !!sealText && (decision === true
-    || (decision == null && !sealChanged && seal.status === '匹配' && seal.reliable === true));
+    || (decision == null && standardReady && !sealChanged && seal.status === '匹配' && seal.reliable === true));
   const sealMismatch = decision === false || (decision == null && !sealChanged && seal.status === '不匹配');
   const sealPartial = decision == null && !sealChanged && seal.status === '部分匹配';
   const sealIssue = sealReady ? '' : sealMismatch ? '印章与要求不匹配'
-    : !sealText ? '印章内容尚未填写' : sealPartial ? '印章文字部分匹配，需人工核对' : '印章尚未确认';
+    : !sealText ? '印章内容尚未填写' : !standardReady && standard?.status === 'missing' ? '尚无标准章，请选择加入或完成人工核对'
+    : sealPartial ? '印章文字部分匹配，需人工核对' : '印章尚未确认';
   const issues = [dateIssue && {target: 'date', message: dateIssue}, sealIssue && {target: 'seal', message: sealIssue}].filter(Boolean);
   return {ready: dateReady && sealReady, dateReady, sealReady, issues,
     dateStatus: dateReady ? '匹配' : actual && required && !dateMatched ? '不匹配' : '待确认',

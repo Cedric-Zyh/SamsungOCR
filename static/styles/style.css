@@ -1,10 +1,6 @@
-:root {
-  --ink: #162126; --muted: #6f7b80; --paper: #fbfaf6; --line: #dce0dc;
-  --brand: #e44e2e; --brand-dark: #bc361c; --green: #207a5b; --amber: #ae6f0d; --red: #b83c36;
-  --shadow: 0 24px 70px rgba(38, 43, 39, .09);
-}
+/* Palette tokens and default theme live in archive_theme.css. */
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: #eceeea; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { margin: 0; color: var(--ink); background: var(--archive-stage); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .28; background-image: radial-gradient(#aeb5ad 0.65px, transparent 0.65px); background-size: 9px 9px; }
 .shell { width: min(1440px, calc(100% - 48px)); margin: 24px auto; position: relative; }
 .hero, .workspace, .queue-section, .results-section { background: var(--paper); border: 1px solid rgba(22,33,38,.1); }
@@ -81,8 +77,7 @@ footer { display: flex; justify-content: space-between; color: #748078; font: 11
 @media (max-width: 700px) { .truth-controls { grid-template-columns: 1fr; } }
 
 /* Navigation and focused workspaces */
-:root { --brand:#2563eb; --brand-dark:#1d4ed8; --paper:#fff; --line:#e2e7ee; --ink:#1e293b; --muted:#718096; --shadow:0 4px 20px rgba(25,45,80,.035); }
-body { background:#f5f7fa; } body::before { display:none; }
+body::before { display:none; }
 a { color:var(--brand); text-decoration:none; }
 .hidden,.tab-hidden { display:none!important; }
 .app-sidebar { position:fixed; inset:0 auto 0 0; width:210px; background:#fff; border-right:1px solid var(--line); padding:30px 18px; display:flex; flex-direction:column; z-index:20; }

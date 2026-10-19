@@ -9,11 +9,13 @@ from .constants import DEFAULT_RECOGNITION_SETTINGS, DEFAULT_RETENTION_DAYS
 from .database_clock import now_iso
 from .read_model import initialize_read_model
 from .issue_migration import migrate_saved_issues
+from .seal_standards import initialize_seal_standards
 
 
 def initialize_database(database) -> None:
         database.path.parent.mkdir(parents=True, exist_ok=True)
         with database.connect() as connection:
+            initialize_seal_standards(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS results (

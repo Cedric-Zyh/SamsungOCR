@@ -62,7 +62,9 @@ export function createReviewEditors({ReceiptWorkbench, $, $$, statusPill, escape
     const input = $('[name=seal_text]', content), decision = $('[name=seal_confirmed_match]', content);
     input.value = item.seal_check?.recognized || '';
     const humanConfirmed = item.seal_check?.human_confirmed_match;
-    let autoConfirmed = item.seal_check?.status === '匹配' && item.seal_check?.reliable === true;
+    const standard = item.seal_standard_check;
+    let autoConfirmed = item.seal_check?.status === '匹配' && item.seal_check?.reliable === true
+      && (!standard?.requirement || standard.status === 'matched' || humanConfirmed === true);
     let confirmed = autoConfirmed ? undefined : humanConfirmed;
     let edited = false, editingText = false;
     function render() {

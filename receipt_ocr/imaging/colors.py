@@ -6,21 +6,22 @@ import numpy as np
 
 
 def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
-    """Separate red evidence from neutral darkness before resizing a crop.
+    """Retain observed grey-red strokes while suppressing neutral black ink.
 
-    Keeping the original RGB of red-biased pixels also keeps dark JPEG rule
-    fringes. Reconstruct only the red component on white instead. Reliable
-    chroma retains dark red strokes; weak chroma contributes continuously so
-    pale ink is not removed by the old saturation/value thresholds.
+    Colour establishes stroke membership, not its darkness: faint chroma can
+    belong to a dark stamp glyph. Work at native resolution so neighbouring
+    support and black-edge rejection do not grow with OCR upscaling.
     """
     b, g, r = (channel.astype(np.float32) for channel in cv2.split(crop))
     neutral = np.maximum(g, b)
-    difference = np.maximum(0, r - neutral)
+    signed_difference = r - neutral
+    difference = np.maximum(0, signed_difference)
+    darkness = 255 - neutral
     hue = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 0]
     valid = (difference >= 5) & ((hue <= 16) | (hue >= 164))
 
-    # Strong red evidence can use the stroke's darkness. For weak evidence,
-    # taper that contribution smoothly rather than importing the black ink.
+    # Keep a continuous chroma baseline for sparse red pixels. The connected
+    # stroke pass below additionally preserves their observed darkness.
     weight = np.clip((difference - 3) / 22, 0, 1)
     weight = weight * weight * (3 - 2 * weight)
     strength = np.maximum(difference * 1.6, (255 - neutral) * weight)
@@ -42,11 +43,43 @@ def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
     rule_ink = ((lines > 0) & (r < 180) & (difference < 30)
                 & (difference / np.maximum(r, 1) < .35))
     strength[rule_ink] = 0
+
+    red_hue = (hue <= 20) | (hue >= 160)
+    seed = (signed_difference >= 4) & red_hue & ~rule_ink
+    support = ((signed_difference >= 2) & red_hue
+               & (darkness >= 8) & ~rule_ink)
+    nearby = cv2.distanceTransform(
+        (~seed).astype(np.uint8), cv2.DIST_L2, 5
+    ) <= 1.5
+    support |= (nearby & (signed_difference >= 0)
+                & (darkness >= 16) & ~rule_ink)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        support.astype(np.uint8), 8
+    )
+    seed_counts = np.bincount(labels[seed], minlength=count)
+    accepted_labels = (stats[:, cv2.CC_STAT_AREA] >= 2) & (seed_counts > 0)
+    accepted_labels[0] = False
+    accepted = accepted_labels[labels]
+    # Preserve existing intensity with a modest gain. This does not draw new
+    # strokes or fill pixels covered by opaque handwriting.
+    strength[accepted] = np.maximum(
+        strength[accepted], np.clip(darkness[accepted] * 1.2, 0, 225)
+    )
+
+    # A tiny red bias on dark form text must not turn its black core into a
+    # red glyph. Reject the core and only weakly coloured neighbouring edges;
+    # stronger red crossings and lighter grey-red lettering remain eligible.
+    red_fraction = signed_difference / np.maximum(darkness, 1)
+    black_core = (r < 115) & (red_fraction < .03)
+    near_black = cv2.distanceTransform(
+        (~black_core).astype(np.uint8), cv2.DIST_L2, 5
+    ) <= 1.5
+    strength[black_core | (near_black & (red_fraction < .08))] = 0
     return strength
 
 
 def _isolate_red_ink(crop: np.ndarray) -> np.ndarray:
-    """Render the measured red component on white, without neutral darkness."""
+    """Render supported stamp strokes as red on a white canvas."""
     strength = _red_ink_strength(crop)
     result = np.full_like(crop, 255)
     result[:, :, 0] = result[:, :, 1] = np.rint(255 - strength).astype(np.uint8)

@@ -165,12 +165,11 @@ body:is([data-active-page="records"],[data-active-page="review"]) .record-more-m
 [data-page="records"] #selection-readiness[data-tone="warning"] { color:var(--archive-warning); }
 [data-page="records"] .selection-toolbar #bulk-delete { border:0; background:transparent; }
 [data-page="records"] .record-filter-table { max-height:calc(100dvh - 340px); min-height:230px; scroll-padding-top:44px; }
-[data-page="records"] .records-table { min-width:1018px; }
+[data-page="records"] .records-table { min-width:1040px; }
 [data-page="records"] .records-table th { padding:12px 10px; height:42px; font-weight:500; }
 [data-page="records"] .records-table td { padding:10px; line-height:1.55; }
 [data-page="records"] .records-table td small { margin-top:3px; }
-/* Column widths are declared once in workspace.css (px-based, content-driven) so
-   the chip columns stay narrow and the comparison columns keep their room. */
+/* Fixed status/action widths leave the remaining room for receipt identity and checks. */
 [data-page="records"] .records-table .signature-cell { overflow:hidden; }
 [data-page="records"] .records-table .signature-cell { position:relative; min-height:34px; display:flex; align-items:center; }
 [data-page="records"] .records-table .signature-cell > div { width:100%; min-width:0; }
@@ -185,7 +184,8 @@ body:is([data-active-page="records"],[data-active-page="review"]) .record-more-m
 [data-page="records"] .record-file-link strong { white-space:nowrap; font-weight:550; }
 [data-page="records"] .record-file-link:hover { color:#806138; }
 [data-page="records"] .records-table .record-file-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-[data-page="records"] .records-table .customer-cell>span { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+[data-page="records"] .records-table .record-customer { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+[data-page="records"] .records-table .verdict-cell>.pill { display:inline-block; width:auto; max-width:100%; }
 [data-page="records"] .records-table .check-status.success { color:var(--archive-success); }
 [data-page="records"] .records-table .check-status.warning { color:var(--archive-warning); }
 [data-page="records"] .records-table .check-status.danger { color:var(--archive-danger); }
@@ -205,7 +205,7 @@ body:is([data-active-page="records"],[data-active-page="review"]) .record-more-m
 [data-page="records"] .records-filter-footer>span { margin-right:auto; color:var(--archive-muted); font-size:12px; }
 [data-page="records"] .records-filter-footer button { font-size:12px; }
 /* Records header and workspace keep one clear import entry and quiet review action. */
-.records-breadcrumb,.hero .records-header-review { display:none; }
+.records-breadcrumb,.hero .records-header-review,.hero .records-header-start { display:none; }
 body[data-active-page="records"] .hero { max-width:1600px; align-items:center; padding-bottom:26px; }
 body[data-active-page="records"] .hero .eyebrow { display:none; }
 body[data-active-page="records"] .records-breadcrumb { display:block; margin:0 0 10px; color:var(--archive-muted); font-size:11px; letter-spacing:.4px; }
@@ -213,8 +213,8 @@ body[data-active-page="records"] .records-breadcrumb { display:block; margin:0 0
 body[data-active-page="records"] .hero .toolbar-actions { gap:10px; }
 body[data-active-page="records"] .hero .primary-button { height:38px; padding:0 18px; border:1px solid #4f5b43; border-radius:6px; background:#4f5b43; color:#faf9f5; text-decoration:none; }
 body[data-active-page="records"] .hero .primary-button:hover { background:#3e4834; }
-body[data-active-page="records"] .hero #review-filtered-records { display:inline-flex; height:38px; padding:0 16px; border:1px solid var(--archive-line); border-radius:6px; color:var(--archive-text); background:transparent; }
-body[data-active-page="records"] .hero #review-filtered-records:disabled { opacity:.5; cursor:not-allowed; }
+body[data-active-page="records"] .hero :is(#review-filtered-records,#queue-start) { display:inline-flex; height:38px; padding:0 16px; border:1px solid var(--archive-line); border-radius:6px; color:var(--archive-text); background:transparent; }
+body[data-active-page="records"] .hero :is(#review-filtered-records,#queue-start):disabled { opacity:.5; cursor:not-allowed; }
 [data-page="records"] .record-tab-count { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:19px; padding:0 6px; border-radius:9px; background:#eeece6; color:#7b7f72; font-size:11px; line-height:1; font-variant-numeric:tabular-nums; font-weight:500; }
 [data-page="records"] .active>.record-tab-count { background:#e6eadf; color:#4f5b43; }
 [data-page="records"] #calendar-toggle { gap:10px; border-radius:6px; background:transparent; padding:8px 12px; font-weight:500; }

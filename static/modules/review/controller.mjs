@@ -7,6 +7,7 @@ import {reviewReadiness, reviewKeyboardAction} from './review_readiness.mjs';
 import {providerErrorIssues} from '../core/provider_errors.mjs';
 import {createReviewEditors} from './editors.mjs';
 import {createReviewSubmission} from './submission.mjs';
+import {createReviewStandard} from '../seals/review_standard.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -87,11 +88,18 @@ export function createReview({
   const {setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation} = createReviewEditors({
     ReceiptWorkbench, $, $$, statusPill, escapeHtml, setReviewDirty
   });
+  const renderStandard = createReviewStandard({ui, reviewState, services, syncReviewReadiness, onSaved: item => {
+    reviewState.current = item;
+    renderReview(item, item.id, reviewState.reviewMode);
+    $('[data-check-card="seal"]', $('#review-content')).open = true;
+    $('[data-seal-standard]', $('#review-content')).scrollIntoView({block: 'nearest'});
+    Promise.allSettled([renderHistory(), refreshVisibleResults()]);
+  }});
   const renderReview = createReviewView({
     ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor, renderProductTable,
     setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation, applyReviewMode,
     focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-    renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness
+    renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness, renderStandard
   });
   function showReviewEmpty({loading = false, error = ''} = {}) {
     reviewPreview.cancel();
@@ -104,7 +112,7 @@ export function createReview({
     $('#review-empty').classList.toggle('has-error', !!error);
     $('#review-empty').setAttribute('aria-busy', String(loading));
     $('#review-empty h2').textContent = loading ? '正在加载回单…' : error ? '回单暂时无法加载' : deferred ? '本轮复核已结束' : '当前范围没有待复核回单';
-    $('#review-empty p').textContent = loading ? '正在准备当前范围的复核内容。' : error || (deferred ? `${deferred} 张已保存，留待稍后处理。` : '可以关闭窗口返回回单记录，选择其他回单继续复核。');
+    $('#review-empty p').textContent = loading ? '正在准备当前范围的复核内容。' : error || (deferred ? `${deferred} 张已保存，留待稍后处理。` : '可以关闭窗口返回回单管理，选择其他回单继续复核。');
     $('#review-revisit').classList.toggle('hidden', loading || !!error || !deferred);
   }
   function setReviewImage(index, note = '', options = {}) {

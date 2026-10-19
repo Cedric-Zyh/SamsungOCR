@@ -181,7 +181,7 @@ test('record rows use internal order IDs, escape metadata, and consolidate match
   const markup = h.controller.recordRow(item);
   assert.match(markup, /<strong>&lt;ORDER-7&gt;<\/strong>/);
   assert.doesNotMatch(markup, /title="1.jpg"|<strong>1.jpg<\/strong>|record-file-meta/);
-  assert.match(h.controller.recordRow(row(1)), /<strong>订单号未识别<\/strong>/);
+  assert.match(h.controller.recordRow(row(1)), /<strong>1.jpg<\/strong>/);
   assert.match(h.controller.recordRow({...item, fields: {'客户订单号': '73623001'}}), /<strong>73623001<\/strong>/);
   assert.match(markup, /class="record-file-link" data-open-review="1"/);
   assert.match(markup, /class="pill success">已通过<\/span>/);

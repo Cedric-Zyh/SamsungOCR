@@ -1,11 +1,13 @@
 import {createApiClients} from '../core/api.mjs';
 import {percent, escapeHtml} from '../core/ui.mjs';
+import {createArtifactImages} from './artifact_images.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {history} = environment;
   const {$} = ui;
   let activeArtifactItem = null;
+  const artifactImages = createArtifactImages(environment);
 
   function fieldEditor(name, value, meta = {}) {
     const confidence = Number(meta.confidence ?? 0);
@@ -52,9 +54,11 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function modernSealInputChain(item, typeBandLabel, unwrapLabel) {
     const oriented = item.color_isolated_oriented_url || item.color_isolated_url;
+    const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const ringInputLabel = item.ring_company_selection
-      ? '旋正章色图（环形展开来源）'
+    const tightMask = item.ring_input_mask_method === 'contained_text_ink';
+    const ringInputLabel = tightMask
+      ? '旋正章色图 · 仅横排文字笔画填白（环形展开来源）'
       : hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
@@ -67,31 +71,40 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : hasMaskedTypeRow
       ? `${unwrapLabel}（由白底覆盖整图展开）`
       : `${unwrapLabel}（由整章图展开）`;
+    const numberLabel = item.stamp_number_status === 'merged'
+      ? '章内编号（已并入章型文字）'
+      : item.stamp_number_status === 'already_in_type_row'
+      ? '章内编号（章型行已包含）'
+      : '章内编号（待核对，未合并）';
     const cards = [
-      artifactCard('旋正后的章色图（未覆盖）', oriented),
-      artifactCard('检测到的横向文字区域（仅定位/章型 OCR）', item.round_type_band_url, item.round_type_band_text || ''),
+      artifactCard(numberRecovery ? '旋正后的章色图（已保留编号笔画）' : '旋正后的章色图（未覆盖）', oriented),
+      artifactCard('检测到的横向文字区域（仅定位/章型 OCR）', item.round_type_band_url, item.round_type_row_text || item.round_type_band_text || ''),
       artifactCard(ringInputLabel, item.ring_input_url),
       artifactCard('环形文字带（展开前）', item.ring_text_band_url),
-      artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || ''),
-      item.unwrapped_full_url ? artifactCard('完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url) : '',
+      artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || '', true),
+      item.unwrapped_full_url ? artifactCard('完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
       item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
+      item.stamp_number_url ? artifactCard(numberLabel, item.stamp_number_url, item.stamp_number_text || '') : '',
+      numberRecovery?.original_number_url ? artifactCard('编号原图笔画核对', numberRecovery.original_number_url) : '',
     ].join('');
     const box = hasMaskedTypeRow
-      ? ` · 覆盖框 ${item.ring_input_box.map(value => Math.round(Number(value))).join(', ')}`
+      ? ` · ${tightMask ? '文字定位范围' : '覆盖框'} ${item.ring_input_box.map(value => Math.round(Number(value))).join(', ')}`
       : '';
     const missing = !item.ring_input_url
       ? '<small class="low-note">当前记录缺少环形 OCR 实际输入图，请重新识别生成新版证据。</small>'
+      : tightMask
+        ? `<small>先识别横排文字，仅填白文字框内的独立笔画，保留跨边界的外圈和相邻文字；再从第 3 张图展开读取环字。${numberRecovery ? '环形输入仍使用编号修复前的章色图。' : ''}${item.ring_company_selection ? '已排除小字号段，完整展开图保留供核对。' : ''}${escapeHtml(box)}</small>`
       : item.ring_company_selection
         ? '<small>环形 OCR 读取已排除小字号段的公司名称展开图；完整展开图保留供核对。</small>'
       : hasMaskedTypeRow
-        ? `<small>环形 OCR 实际读取的是第 3 张图；只将 OCR dt_polys 合并出的检测框填白，旋正后的章色图保持原样${escapeHtml(box)}</small>`
+        ? `<small>环形 OCR 实际读取的是第 3 张图；只将 OCR dt_polys 合并出的检测框填白，${numberRecovery ? '环形输入仍使用编号修复前的章色图' : '旋正后的章色图保持原样'}${escapeHtml(box)}</small>`
         : '<small>未检测到横向文字，环形 OCR 直接读取旋正后的整章图。</small>';
     return `<section class="seal-input-chain"><h5>印章 OCR 输入链路</h5>${missing}<div class="artifact-grid">${cards}</div></section>`;
   }
 
   function modernSealReads(item) {
     const rows = (item.reads || []).filter(row => row?.text).map(row => {
-      const channel = row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel || 'OCR';
+      const channel = row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel || 'OCR';
       const confidence = row.confidence == null ? '' : ` · ${percent(row.confidence)}`;
       return `<div class="seal-source-row"><b>${escapeHtml(channel)} · ${escapeHtml(row.provider || 'OCR')}</b><span>${escapeHtml(row.text)}${confidence}</span></div>`;
     });
@@ -118,6 +131,11 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
   }
 
   function renderArtifacts() {
+    renderArtifactMarkup();
+    artifactImages.attach($('[data-artifacts]', $('#review-content')));
+  }
+
+  function renderArtifactMarkup() {
     const target = $('[data-artifacts]', $('#review-content'));
     let artifacts = reviewState.current?.processing_artifacts?.[reviewState.artifactTab] || [];
     // There is one date location now. Prefer the current date-region artifact;
@@ -303,8 +321,12 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     }
   }
 
-  function artifactCard(label, url, recognizedText = '') {
+  function artifactCard(label, url, recognizedText = '', rgbPreview = false) {
     if (typeof url !== 'string' || !url.startsWith('/files/')) return '';
+    if (rgbPreview && url.startsWith('/files/artifacts/')) {
+      const [path, fragment] = url.split('#', 2);
+      url = `${path}${path.includes('?') ? '&' : '?'}preview=rgb${fragment ? `#${fragment}` : ''}`;
+    }
     const item = activeArtifactItem || {};
     const variantsText = (variants, labels) => (variants || [])
       .filter(row => !labels || labels.includes(row.preprocessing))
@@ -335,7 +357,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     );
     const text = String(inferredText || '').trim();
     const ocr = text ? `<p class="artifact-ocr-text">识别：${escapeHtml(text)}</p>` : '';
-    return `<figure><a href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="${escapeHtml(label)}" loading="lazy"></a><figcaption>${escapeHtml(label)}</figcaption>${ocr}</figure>`;
+    return `<figure data-artifact-image><a href="${escapeHtml(url)}" data-artifact-open title="点击放大查看"><img src="${escapeHtml(url)}" alt="${escapeHtml(label)}" loading="eager"><span class="artifact-image-affordance" aria-hidden="true">放大 ↗</span></a><span data-image-message role="status" hidden></span><button type="button" data-image-retry hidden>重新加载</button><figcaption>${escapeHtml(label)}</figcaption>${ocr}</figure>`;
   }
 
   async function renderHistory() {

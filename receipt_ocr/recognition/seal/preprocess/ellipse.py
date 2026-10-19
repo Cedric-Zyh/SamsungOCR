@@ -6,7 +6,7 @@ import tempfile
 import numpy as np
 from PIL import Image
 from receipt_ocr.recognition.seal.preprocess.orientation_angles import _round_stamp_type_texts, choose_round_stamp_angle
-from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_box, _oriented_type_row_exact_box, _refine_ellipse_axis, rotate_stamp_image
+from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _refine_ellipse_axis, rotate_stamp_image
 from receipt_ocr.recognition.seal.preprocess.round import prepare_round_stamp
 
 
@@ -39,6 +39,7 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             fine_rotation = float(fine_decision.get("angle") or 0.0)
             if abs(fine_rotation) > 2.0:
                 oriented = rotate_stamp_image(base, destination, fine_rotation)
+                decision["rotation_steps"].append(fine_rotation)
                 decision["fine_rotation"] = round(fine_rotation, 3)
                 decision["status"] = (
                     f"{decision.get('status', '已按印章文字检测框旋正')}，"
@@ -51,6 +52,7 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             )
             if abs(geometry_rotation) > 2.0:
                 oriented = geometry_path
+                decision["rotation_steps"].append(geometry_rotation)
                 decision["geometry_rotation"] = round(geometry_rotation, 3)
                 decision["oriented_path"] = str(oriented)
                 decision["status"] = (
@@ -76,6 +78,9 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
                 final_boxes, final_decision, identity, final_width, final_height
             )
             if final_focus and final_exact:
+                decision["oriented_type_row_polygons"] = _oriented_type_row_polygons(
+                    final_boxes, final_decision, identity,
+                )
                 decision["detected_boxes"] = final_boxes
                 decision["anchor_points"] = final_decision.get("anchor_points", [])
                 decision["type_row_texts"] = _round_stamp_type_texts(
@@ -157,6 +162,7 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             if best_angle
             else Path(source)
         )
+        decision["rotation_steps"] = [float(best_angle)] if best_angle else []
         fine_rotation = 0.0
         # A right-angle choice fixes a vertical oval, but camera perspective
         # can leave the centre row tilted by another few degrees. Detect the
@@ -172,6 +178,7 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             fine_rotation = float(fine_decision.get("angle") or 0.0)
             if abs(fine_rotation) > 2.0:
                 oriented = rotate_stamp_image(oriented, destination, fine_rotation)
+                decision["rotation_steps"].append(fine_rotation)
         except Exception:
             fine_rotation = 0.0
         try:
@@ -180,6 +187,7 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             )
             if abs(geometry_rotation) > 2.0:
                 oriented = geometry_path
+                decision["rotation_steps"].append(geometry_rotation)
                 decision["geometry_rotation"] = round(geometry_rotation, 3)
                 decision["status"] = (
                     f"{decision.get('status', '按椭圆中心单行旋正')}，"

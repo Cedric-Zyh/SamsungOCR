@@ -6,7 +6,7 @@ export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBu
   }
 
   function selectCurrentPage(checked) {
-    recordsState.records.forEach(record => checked
+    recordsState.records.filter(record => record.id && !record.processing_status).forEach(record => checked
       ? recordsState.selected.add(Number(record.id))
       : recordsState.selected.delete(Number(record.id)));
     $$('.record-select').forEach(input => { input.checked = checked; });
@@ -30,7 +30,9 @@ export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBu
     $('#review-selected-records').textContent = `复核选中（${recordsState.selected.size}）`;
     $('#review-selected-records').disabled = !recordsState.selected.size || busy;
     $('#review-filtered-records').disabled = busy || !recordsState.recordsLoaded || !recordsState.recordTotal;
-    $('#select-all').checked = !!recordsState.records.length && recordsState.records.every(record => recordsState.selected.has(Number(record.id)));
+    const eligible = recordsState.records.filter(record => record.id && !record.processing_status);
+    $('#select-all').disabled = busy || !eligible.length;
+    $('#select-all').checked = !!eligible.length && eligible.every(record => recordsState.selected.has(Number(record.id)));
     $('#select-all').indeterminate = recordsState.selected.size > 0 && !$('#select-all').checked;
   }
 

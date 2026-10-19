@@ -5,7 +5,6 @@ import numpy as np
 
 from receipt_ocr.imaging.ellipse import map_ellipse_box_to_normalized, save_ellipse_normalized_seal
 from receipt_ocr.recognition.seal.preprocess.inputs import (
-    _symmetric_type_geometry,
     _white_detected_type_region,
 )
 from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_exact_box
@@ -36,22 +35,6 @@ def test_mask_box_uses_the_ocr_polygon_without_padding():
         100,
     )
     assert box == [10, 20, 50, 40]
-
-
-def test_symmetric_type_geometry_mirrors_after_rotation_frame(tmp_path):
-    source = tmp_path / "oriented.png"
-    cv2.imwrite(str(source), np.full((100, 100, 3), 255, dtype=np.uint8))
-    geometry = _symmetric_type_geometry(
-        source,
-        {
-            "oriented_type_row_polygons": [
-                [[10, 20], [30, 20], [30, 40], [10, 40]]
-            ]
-        },
-    )
-    assert geometry["center_x"] == 50.0
-    assert geometry["focus_box"] == [10, 20, 90, 40]
-    assert geometry["mask_polygons"][1] == [[90, 20], [70, 20], [70, 40], [90, 40]]
 
 
 def test_polygon_mask_keeps_unrelated_ring_pixels(tmp_path):
@@ -121,3 +104,106 @@ def test_ellipse_pipeline_keeps_original_aspect_through_ring_input(tmp_path, mon
     assert ring_input.shape[1] == ring_input.shape[0] * 2
     assert np.array_equal(color, ring_input)
     assert [item['channel'] for item, _ in jobs] == ['ring']
+
+
+def test_center_and_number_use_final_coordinates_without_a_public_artifact_url(tmp_path, monkeypatch):
+    from PIL import Image
+    from receipt_ocr.imaging.contracts import SealRegion
+    from receipt_ocr.recognition.seal.preprocess import inputs
+
+    source = tmp_path / 'stamp.png'
+    Image.new('RGB', (400, 400), 'white').save(source)
+    monkeypatch.setattr(inputs, 'save_region_crop', lambda source, target, region: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'save_color_isolated_seal', lambda source, target, region: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'classify_shape', lambda *_: 'round')
+    final_box = [100, 150, 300, 200]
+
+    def orient(source, target, **kwargs):
+        Image.open(source).save(target)
+        return target, {'oriented_type_row_exact_box': final_box, 'type_row_exact_box': [0, 0, 10, 10]}
+
+    def number(source, destination, focus, **kwargs):
+        assert focus == final_box
+        Image.new('RGB', (60, 50), 'white').save(destination)
+        return {'status': 'detected', 'text': '(1', 'confidence': .95}
+
+    monkeypatch.setattr(inputs, 'prepare_round_stamp_combined', orient)
+    monkeypatch.setattr(inputs, 'prepare_number_input', number)
+    monkeypatch.setattr(inputs, 'save_unwrapped_seal', lambda source, target, *a, **kw: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'save_ring_text_band_preview', lambda source, target, **kw: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'save_company_ring_input', lambda *a: None)
+    artifact, jobs = inputs.prepare_inputs(
+        source, SealRegion(0, 0, 1, 1, 'red', '客户章', 0), 0,
+        tmp_path / 'artifacts', '', 'paddle_v6', 'combined',
+    )
+    assert artifact['errors'] == []
+    assert artifact['ring_input_box'] == final_box
+    assert [item['channel'] for item, _ in jobs] == ['center', 'number', 'ring']
+    with Image.open(jobs[0][1]) as center:
+        assert center.size == (200, 50)
+
+
+def test_text_mask_preserves_crossing_border_and_adjacent_faint_ink(tmp_path):
+    source, target = tmp_path / 'source.png', tmp_path / 'ring.png'
+    mask_path = tmp_path / 'mask.png'
+    image = np.full((120, 140, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (70, 60), 50, (10, 10, 245), 3)
+    image[70:80, 55:65] = (252, 252, 255)  # faint type ink inside the polygon
+    image[70:80, 95:100] = (252, 252, 255)  # neighbour immediately outside
+    image[45:55, 60:70] = (10, 10, 245)  # separate number/star outside
+    cv2.imwrite(str(source), image)
+    polygon = [[40, 65], [94, 65], [94, 115], [40, 115]]  # overlaps lower rim
+    _white_detected_type_region(source, target, polygons=[polygon], mask_destination=mask_path)
+    actual = cv2.imread(str(target))
+    expected = image.copy()
+    expected[70:80, 55:65] = 255
+    assert np.array_equal(actual, expected)
+    mask = cv2.imread(str(mask_path), 0)
+    assert np.array_equal(mask > 0, np.any(expected != image, axis=2))
+
+
+def test_partial_type_polygon_never_masks_its_mirror(tmp_path, monkeypatch):
+    from receipt_ocr.imaging.contracts import SealRegion
+    from receipt_ocr.recognition.seal.preprocess import inputs
+    from PIL import Image
+    source = tmp_path / 'source.png'
+    image = np.full((120, 160, 3), 255, dtype=np.uint8)
+    image[50:65, 30:55] = (20, 20, 240)
+    image[50:65, 105:130] = (20, 20, 240)
+    cv2.imwrite(str(source), image)
+    monkeypatch.setattr(inputs, 'save_region_crop', lambda source, target, region: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'save_color_isolated_seal', lambda source, target, region: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'classify_shape', lambda *_: 'round')
+    monkeypatch.setattr(inputs, 'prepare_round_stamp_combined', lambda *a, **k: (None, {
+        'partial_anchor': True, 'oriented_type_row_exact_box': [25, 45, 60, 70],
+        'oriented_type_row_polygons': [[[25, 45], [60, 45], [60, 70], [25, 70]]],
+    }))
+    monkeypatch.setattr(inputs, 'prepare_number_input', lambda *a, **k: {'status': 'not_detected'})
+    monkeypatch.setattr(inputs, 'recover_number_punctuation', lambda *a, **k: ({}, {'status': 'not_needed'}))
+    observed = []
+    def unwrap(path, target, *a, **kw):
+        observed.append(cv2.imread(str(path)))
+        Image.open(path).save(target)
+    monkeypatch.setattr(inputs, 'save_unwrapped_seal', unwrap)
+    monkeypatch.setattr(inputs, 'save_ring_text_band_preview', lambda source, target, **kw: Image.open(source).save(target))
+    monkeypatch.setattr(inputs, 'save_company_ring_input', lambda *a: None)
+    artifact, jobs = inputs.prepare_inputs(source, SealRegion(0, 0, 1, 1, 'red', '客户章', 0), 0,
+                                          tmp_path / 'out', '/files', 'paddle_v6', 'combined')
+    assert not artifact['errors']
+    expected = image.copy(); expected[50:65, 30:55] = 255
+    assert len(observed) == 1 and np.array_equal(observed[0], expected)
+    assert artifact['ring_input_mask_method'] == 'contained_text_ink'
+    assert [i['channel'] for i, _ in jobs] == ['center', 'ring']
+
+
+def test_pale_interpolation_bridge_does_not_keep_the_entire_type_row(tmp_path):
+    source, target = tmp_path / 'source.png', tmp_path / 'ring.png'
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    image[30:40, 25:50] = (20, 20, 240)
+    image[30:40, 90:105] = (20, 20, 240)
+    image[35, 50:90] = (253, 253, 255)  # pale bridge to a neighbouring glyph
+    cv2.imwrite(str(source), image)
+    _white_detected_type_region(source, target, polygons=[[[20, 25], [55, 25], [55, 45], [20, 45]]])
+    result = cv2.imread(str(target))
+    assert np.all(result[30:40, 25:50] == 255)
+    assert np.array_equal(result[:, 56:], image[:, 56:])

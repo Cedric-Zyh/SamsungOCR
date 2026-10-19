@@ -12,6 +12,7 @@ from .results import ResultOperationsMixin, _matches_filters
 from .reviews import ReviewOperationsMixin
 from .statistics import StatisticsMixin
 from .settings import SettingsMixin
+from .seal_standards import SealStandardOperationsMixin
 from .schema import initialize_database
 from .constants import (
     DEFAULT_RECOGNITION_SETTINGS,
@@ -23,7 +24,7 @@ from .constants import (
 from .database_clock import now_iso
 
 
-class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin, StatisticsMixin, SettingsMixin):
+class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin, StatisticsMixin, SettingsMixin, SealStandardOperationsMixin):
     def initialize(self) -> None:
         initialize_database(self)
 

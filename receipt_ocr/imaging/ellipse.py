@@ -260,8 +260,11 @@ def _trim_ring_whitespace(image):
     height, width = image.shape
     _, _, stats, _ = cv2.connectedComponentsWithStats((image < 225).astype(np.uint8))
     components = [s for s in stats[1:]
-                  if s[cv2.CC_STAT_AREA] >= 10 and s[cv2.CC_STAT_HEIGHT] >= height * .20
-                  and s[cv2.CC_STAT_TOP] > height * .08]
+                  if s[cv2.CC_STAT_AREA] >= 10 and s[cv2.CC_STAT_HEIGHT] >= height * .20]
+    # Letters on the outer arc can touch the sampled strip's top edge.
+    # Position alone cannot distinguish them from border ink (long border
+    # strokes are already removed before trimming). Rejecting that edge
+    # used to crop away the beginning of a company name on tilted ovals.
     if len(components) < 3:
         return image
     left = min(s[0] for s in components)

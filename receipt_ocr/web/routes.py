@@ -8,6 +8,9 @@ def register_routes(app, handlers, *, before_request) -> None:
     app.before_request(before_request)
 
     routes = [
+        ("/api/seal-standards", "list_seal_standards", ("GET",)),
+        ("/api/seal-standards/<int:standard_id>/sources", "seal_standard_sources", ("GET",)),
+        ("/api/results/<int:result_id>/seal-standard", "register_seal_standard", ("POST",)),
         ("/", "index", ("GET",)),
         ("/api/ocr-backends", "ocr_backends", ("GET",)),
         ("/api/settings", "get_settings", ("GET",)),

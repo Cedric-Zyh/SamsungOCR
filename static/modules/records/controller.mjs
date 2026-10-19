@@ -11,7 +11,7 @@ const FIXED_RECORD_PAGE_SIZE = 25;
 
 export function createRecords({
   environment, ui, ReceiptWorkbench, recordsState, api, services = createApiClients(api), startReviewScope, retryOne,
-  refreshVisibleResults, setBatchStep, openProcessHistory = () => {}
+  refreshVisibleResults, setBatchStep, openProcessHistory = () => {}, onDateChanged = () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, FormData, URLSearchParams, AbortController, setTimeout, clearTimeout} = environment;
@@ -46,7 +46,10 @@ export function createRecords({
     return filters;
   }
   function getReviewScope(kind = 'filtered') {
-    return recordReviewScope(currentFilters(), kind, [...recordsState.selected]);
+    const scope = recordReviewScope(currentFilters(), kind, [...recordsState.selected]);
+    if (kind !== 'selected') scope.filters.include_processing = '1';
+    if (recordsState.batchFilter) scope.label = scope.label.replace(recordsState.batchFilter, recordsState.batchLabel || '当前导入批次');
+    return scope;
   }
   async function startRecordsReview(kind = 'filtered', recordId) {
     if (searchState.composing || recordsState.recordLoading || searchState.timer) {
@@ -61,7 +64,7 @@ export function createRecords({
     catch (error) { toast(error.message, 'danger'); }
   }
   function renderFilterChips() {
-    const entries = activeFilterEntries(currentFilters());
+    const entries = activeFilterEntries(currentFilters()).map(entry => entry.key === 'task_id' ? {...entry, value: recordsState.batchLabel || '当前导入批次'} : entry);
     const container = $('#active-filters');
     container.innerHTML = entries.map(({key, label, value}) =>
       `<button type="button" class="filter-chip" data-remove-filter="${key}" aria-label="移除${escapeHtml(label)}：${escapeHtml(value)}"><span>${escapeHtml(label)}：${escapeHtml(value)}</span><span aria-hidden="true">×</span></button>`).join('');
@@ -112,13 +115,14 @@ export function createRecords({
   function setImportDate(value) {
     $('#import-date').value = $('#import-date').defaultValue = value || localToday();
     calendar.sync();
+    onDateChanged($('#import-date').value);
   }
   function openDayRecords(day) {
     const match = typeof day === 'string' && day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     const [year, month, date] = match ? match.slice(1).map(Number) : [];
     const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     if (!match || year < 1 || month < 1 || month > 12 || date < 1 || date > days[month - 1]) {
-      toast('请先选择有效的工作台日期', 'warning');
+      toast('请先选择有效的导入日期', 'warning');
       return false;
     }
 
@@ -158,7 +162,7 @@ export function createRecords({
     $('#records-page-prev').disabled = $('#records-page-next').disabled = true;
     $('#record-filter-status').textContent = '正在加载当天全部回单…';
     const body = $('#records-body');
-    body.innerHTML = '<tr><td colspan="8" class="empty-state">正在加载当天全部回单…</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="empty-state">正在加载当天全部回单…</td></tr>';
     body.inert = true;
     body.setAttribute('aria-busy', 'true');
     location.hash = 'records';

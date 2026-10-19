@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 from receipt_ocr.recognition.seal.preprocess.orientation_settings import DOC_ORIENTATION_MIN_CONFIDENCE
 from receipt_ocr.recognition.seal.preprocess.orientation_angles import choose_round_stamp_angle
-from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_box, _oriented_type_row_exact_box, _rotation_geometry, _transform_box, rotate_stamp_image
+from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _oriented_type_row_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _rotation_geometry, _transform_box, rotate_stamp_image
 from receipt_ocr.providers.orientation import classify_doc_orientation
 
 
@@ -18,6 +18,7 @@ def prepare_round_stamp_doc_ori(source, destination):
         mode="doc_ori",
         applied_rotation=0.0,
         oriented_path="",
+        rotation_steps=[],
     )
     if angle is None:
         decision["status"] = "doc_ori 未返回有效方向，保留原方向"
@@ -35,6 +36,7 @@ def prepare_round_stamp_doc_ori(source, destination):
         decision["status"] = "doc_ori 判断为 0°，保留原方向"
         return None, decision
     oriented = rotate_stamp_image(source, destination, angle)
+    decision["rotation_steps"] = [float(angle)]
     decision["applied_rotation"] = float(angle)
     if not source_width or not source_height:
         decision["oriented_path"] = str(oriented)
@@ -60,6 +62,9 @@ def prepare_round_stamp_doc_ori(source, destination):
     except Exception:
         pass
     if oriented_box:
+        decision["oriented_type_row_polygons"] = _oriented_type_row_polygons(
+            boxes, row_decision, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        )
         decision["oriented_type_row_box"] = oriented_box
         decision["oriented_type_row_exact_box"] = _oriented_type_row_exact_box(
             boxes, row_decision, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),

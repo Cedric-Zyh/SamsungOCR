@@ -4,7 +4,7 @@ import {localToday} from '../core/ui.mjs';
 export function createDailyQuery({environment, ui, progressState, importsState, recordsState,
   reportState, resultsState, services, calendar, selected, viewState, pageSize,
   ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
-  renderQueueControl, renderTask, renderWorkbenchRows}) {
+  renderQueueControl, renderTask, renderWorkbenchRows, onQueueChanged = () => {}}) {
   const {document} = environment;
   const {$, $$} = ui;
   async function loadDailyResults({refreshRecords = true} = {}) {
@@ -24,6 +24,11 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
     const requestId = progressState.dailyRequest = (progressState.dailyRequest || 0) + 1;
     const previousDay = progressState.queueDay, newDay = previousDay !== day;
     if (newDay) {
+      progressState.workItems = [];
+      progressState.queueJobs = new Map();
+      progressState.queueMarkup = '';
+      if (previousDay) progressState.taskBatch = '';
+      if ($('#task-strip-counts')) $('#task-strip-counts').textContent = '正在获取任务…';
       selected.clear(); viewState.shownItems = [];
       if ($('#overview-completed')) $('#overview-completed').textContent = '—';
       if ($('#overview-total')) $('#overview-total').textContent = '—';
@@ -77,6 +82,11 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
         resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
       }
       progressState.queueDay = day; progressState.queueSignature = signature;
+      const viewSignature = jobs.map(job => `${job.id}:${job.status}:${job.result_id || ''}:${job.target_result_id || ''}`).join('|');
+      if (progressState.managementSignature !== `${day}:${viewSignature}`) {
+        progressState.managementSignature = `${day}:${viewSignature}`;
+        onQueueChanged();
+      }
     } catch (error) {
       if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
       progressState.dailyReady = false;

@@ -52,6 +52,21 @@ def _ellipse_display_texts(seal_texts, seal_artifacts):
     return ring + type_text + other or fallback
 
 
+def _round_stamp_candidates(seal_texts, seal_artifacts):
+    """Combine ring and centre readings only within the same physical stamp.
+
+    A faint duplicate can have only a partial centre reading. Pooling channels
+    across regions would pair that reading with another stamp's company name
+    and lose its complete centre text (or manufacture a cross-stamp match).
+    """
+    combined = []
+    for artifact in seal_artifacts:
+        ring, centre, _, _ = _ellipse_channels([], [artifact])
+        if ring and centre:
+            combined.append(ring[0] + centre[0])
+    return _dedupe([*combined, *seal_texts])
+
+
 def _settled_future(future):
     """The prefetched seal response, or ``None`` when it is unusable.
 
@@ -216,22 +231,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
             # character is a mismatch.  Keep the fuzzy comparator for routing
             # and audit planning, but do not let it turn a company-only local
             # reading into ``无法判断`` or silently accept a typo.
-            has_round_or_ellipse_artifact = any(
-                artifact.get("shape") in {"圆形", "椭圆"}
-                for artifact in seal_artifacts
-            )
-            if has_round_or_ellipse_artifact:
-                ring_texts, type_texts, _, _ = _ellipse_channels(
-                    seal_texts, seal_artifacts
-                )
-                # The ring and centre channels describe one round/oval stamp. Add their
-                # natural reading order as a single candidate so a requirement
-                # such as ``公司名收货章`` can reach an exact match while the
-                # individual OCR results remain available for audit.
-                if ring_texts and type_texts:
-                    seal_texts = _dedupe(
-                        [ring_texts[0] + type_texts[0], *seal_texts]
-                    )
+            seal_texts = _round_stamp_candidates(seal_texts, seal_artifacts)
             # Local single-model evidence must not let a short, correct stamp
             # type hide a conflicting company-name character from the same
             # seal.  Exact text still wins; otherwise any wrong/extra/reordered

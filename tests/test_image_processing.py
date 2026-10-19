@@ -19,6 +19,24 @@ from receipt_ocr.imaging.date import save_receipt_date_crop
 from receipt_ocr.imaging.shapes import seal_region_is_rectangular, seal_region_is_elliptical, seal_region_shape
 
 
+def test_ring_trim_keeps_letters_touching_top_and_faint_adjacent_strokes():
+    from receipt_ocr.imaging.ellipse import _trim_ring_whitespace
+
+    image = np.full((100, 420), 255, dtype=np.uint8)
+    # Prefix glyphs reach the strip edge; the suffix sits lower down.
+    for left, top in [(60, 0), (100, 3), (140, 7), (180, 24), (220, 28), (260, 30)]:
+        image[top:top + 50, left:left + 20] = 80
+    image[10:45, 53:57] = 240  # Faint stroke beside the first strong glyph.
+    image[2, 410] = 160  # Isolated noise must not determine the crop width.
+
+    result = _trim_ring_whitespace(image)
+
+    assert result.shape[1] < 350
+    assert np.count_nonzero(result == 80) == np.count_nonzero(image == 80)
+    assert np.count_nonzero(result == 240) == np.count_nonzero(image == 240)
+    assert np.any(result[0] == 80)
+
+
 def test_ellipse_annulus_unwrap_keeps_ring_ink_and_excludes_center(tmp_path):
     import cv2
 
@@ -63,7 +81,10 @@ def test_ellipse_annulus_can_estimate_missing_inner_border(tmp_path):
     )
     output = cv2.imread(str(destination), cv2.IMREAD_GRAYSCALE)
     assert output is not None
-    assert output.shape[1] >= 1000
+    # The short word may now be tightly cropped even when it touches the
+    # sampled strip edge; require visible lettering, not peripheral whitespace.
+    assert output.shape[0] > 20
+    assert (output < 180).sum() > 100
 
 
 def test_ellipse_normalized_stage_stretches_color_safe_crop_to_square(tmp_path):
@@ -536,6 +557,36 @@ def test_faint_red_strokes_are_retained_and_gently_darkened(tmp_path):
     assert output[60, 200, 2] > output[60, 200, 0]
     assert np.all(output[110, 200] == 255)
     assert np.all(output[0, 0] == 255)
+
+
+def test_grey_red_stamp_preserves_darkness_without_admitting_separate_neutral_text():
+    from receipt_ocr.imaging.colors import _isolate_red_ink
+    image = np.full((60, 120, 3), 255, np.uint8)
+    # Real grey-red ink from the failing Tianjin crop. The previous chroma
+    # weighting rendered these visible strokes almost white (255,247,247).
+    image[10:30, 10:20] = (184, 188, 193)
+    image[10:30, 30:40] = (179, 178, 187)
+    image[10:30, 80:90] = (180, 180, 180)
+    output = _isolate_red_ink(image)
+    assert np.max(output[10:30, 10:20, :2]) < 200
+    assert np.max(output[10:30, 30:40, :2]) < 200
+    assert np.all(output[10:30, 80:90] == 255)
+    assert np.all(output[40:] == 255)
+
+
+def test_red_isolation_removes_tinted_black_cores_and_edges_but_keeps_red_crossing():
+    from receipt_ocr.imaging.colors import _isolate_red_ink
+    image = np.full((50, 90, 3), 255, np.uint8)
+    # Short stroke: cannot be rejected merely as a long table rule. Even
+    # these black/grey pixels have enough red bias to fool a colour-only gate.
+    image[19:26, 35:49] = (152, 152, 159)
+    image[20:25, 36:48] = (55, 55, 59)
+    image[21:24, 41:44] = (40, 40, 190)
+    output = _isolate_red_ink(image)
+    assert np.all(output[20:25, 36:40] == 255)
+    assert np.all(output[19, 36:48] == 255)
+    assert np.max(output[21:24, 41:44, :2]) < 100
+    assert np.all(output[21:24, 41:44, 2] == 255)
 
 
 def test_ellipse_fit_rejects_extrapolated_border_and_offset_inner():

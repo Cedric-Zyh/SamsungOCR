@@ -68,7 +68,7 @@ def test_combined_keeps_original_when_no_angle_reads_a_stamp_type_row(monkeypatc
     assert '未找到章型文字' in decision['status']
     assert not (tmp_path / 'corrected.png').exists()
     # Every right angle is compared, not only the classifier's single guess.
-    assert set(decision['four_way_candidates']) == {'0', '90', '180', '270'}
+    assert set(decision['four_way_candidates']) == {'0', '90', '180', '270', '45', '135', '225', '315'}
 
 
 def test_combined_picks_the_angle_whose_type_row_reads(monkeypatch, tmp_path):
@@ -262,10 +262,101 @@ def test_four_way_equivalent_text_prefers_small_fine_correction():
         return dict(angle=angle, fine_rotation=fine, band_confidence=confidence,
                     band_text=text, rank=((1, 5, 3), 1, confidence), error='')
     original = candidate(0, -11.723, .965)
-    sideways = candidate(270, 78.254, .9865)
+    sideways = candidate(270, 18.254, .9865)
     select = combined_orientation._select_four_way_candidate
     assert select([original, sideways]) is original
-    stronger = candidate(270, 78.254, .999)
+    stronger = candidate(270, 18.254, .999)
     assert select([original, stronger]) is stronger
-    different = candidate(270, 78.254, .9865, '售后专用章')
+    different = candidate(270, 18.254, .9865, '收货验收专用章')
     assert select([original, different]) is different
+
+
+def test_four_way_rejects_good_anchor_when_final_row_is_unreadable():
+    original = dict(angle=0, fine_rotation=0., band_text='收诉专用章',
+                    band_confidence=.6178, anchor_text='', error='')
+    flipped = dict(angle=270, fine_rotation=-6., band_text='量',
+                   band_confidence=.99, anchor_text='收界专用章', error='')
+    selected = combined_orientation._select_four_way_candidate([original, flipped])
+    assert selected is original
+    assert original['post_rotation_verified']
+    assert not flipped['post_rotation_verified']
+    assert flipped['rejection_reason'] == '转正后未读到可靠章型行'
+
+
+@pytest.mark.parametrize('fine', [-86.179, 78.254])
+def test_four_way_rejects_quarter_turn_as_fine_correction(fine):
+    original = dict(angle=0, fine_rotation=3.1, band_text='收货专用章',
+                    band_confidence=.81, error='')
+    sideways = dict(angle=270, fine_rotation=fine, band_text='收货专用章',
+                    band_confidence=.9999, error='')
+    assert combined_orientation._select_four_way_candidate([original, sideways]) is original
+    assert sideways['rejection_reason'] == '微调角度超过 45°'
+
+
+@pytest.mark.parametrize('confidence', [.54, float('nan')])
+def test_combined_does_not_rotate_on_unverified_final_row(monkeypatch, tmp_path, confidence):
+    from pathlib import Path
+    from PIL import Image
+    from receipt_ocr.domain.ocr import TextObservation
+    source = tmp_path / 'stamp.png'
+    Image.new('RGB', (200, 200), 'white').save(source)
+    monkeypatch.setattr(
+        'receipt_ocr.recognition.seal.ocr.interface.detect_boxes',
+        lambda path, **kwargs: ([dict(text='收货专用章', confidence=.99, angle=0,
+            points=[[20, 90], [180, 90], [180, 110], [20, 110]])]
+            if Path(path).name.startswith('coarse-90') else []),
+    )
+    monkeypatch.setattr(
+        'receipt_ocr.recognition.seal.ocr.interface.read_line',
+        lambda *args, **kwargs: [TextObservation('收货专用章', confidence, 0, 0, 1, 1)],
+    )
+    target = tmp_path / 'oriented.png'
+    oriented, decision = seal_orientation.prepare_round_stamp_combined(source, target)
+    assert oriented is None
+    assert not target.exists()
+    assert decision['applied_rotation'] == 0
+    assert not any(c['post_rotation_verified'] for c in decision['four_way_candidates'].values())
+
+
+def test_no_fixed_center_crop_without_observed_horizontal_text(tmp_path, monkeypatch):
+    from PIL import Image
+    source = tmp_path / 'stamp.png'
+    Image.new('RGB', (400, 400), 'white').save(source)
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.read_line',
+                        lambda *a, **k: pytest.fail('no observed row, no OCR crop'))
+    assert combined_orientation._read_type_band_text(
+        source, tmp_path / 'row.png', model_variant='v6') == ('', 0.0)
+    assert not (tmp_path / 'row.png').exists()
+
+
+def test_diagonal_split_row_is_verified_and_mask_relocalized(tmp_path, monkeypatch):
+    from pathlib import Path
+    from PIL import Image
+    from receipt_ocr.domain.ocr import TextObservation
+    source = tmp_path / 'stamp.png'
+    Image.new('RGB', (1000, 998), 'white').save(source)
+    def detect(path, **kwargs):
+        name = Path(path).name
+        if name == 'coarse-315.png':
+            return [
+                {'text': '业务', 'confidence': .99, 'angle': 27.2949,
+                 'points': [[384, 793], [696, 954], [588, 1163], [276, 1002]]},
+                {'text': '用章', 'confidence': .99, 'angle': 20.4563,
+                 'points': [[741, 878], [993, 972], [932, 1136], [680, 1043]]},
+            ]
+        if 'coarse-315-group-' in name:
+            return [{'text': '业务专用章', 'confidence': .999, 'angle': 2.34,
+                     'points': [[120, 65], [731, 89], [720, 350], [109, 325]]}]
+        return []
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.detect_boxes', detect)
+    monkeypatch.setattr('receipt_ocr.recognition.seal.ocr.interface.read_line', lambda path, **kw: [
+        TextObservation('业务专用章' if 'group-' in Path(path).name else '专用章', .999, 0, 0, 1, 1)
+    ])
+    _, result = seal_orientation.prepare_round_stamp_combined(source, tmp_path / 'upright.png')
+    assert result['coarse_rotation'] == 315
+    assert result['fine_rotation'] == pytest.approx(4.770, abs=.001)
+    assert result['type_band_text'] == '业务专用章'
+    assert result['type_row_grouped'] and result['local_mask_verified']
+    assert len(result['oriented_type_row_polygons']) == 1
+    # The read crop may include whitespace. It must not become the fill box.
+    assert result['oriented_type_row_read_box'] != result['oriented_type_row_exact_box']

@@ -5,7 +5,7 @@ import {confirmInline} from '../core/inline_confirm.mjs';
 export function createImports({
   environment, ui, importsState, recordsState, progressState = {}, api, services = createApiClients(api), ReceiptImport, readRecognitionPlan, readAcceptancePolicy,
   usesRemotePlan, updateRecognitionPlan, loadDailyResults, showQueuedRetry, closeModal,
-  syncStartRecognition = () => {}, flushSettings = async () => {}
+  syncStartRecognition = () => {}, flushSettings = async () => {}, openManagedRecords = null
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, localStorage, FormData} = environment;
@@ -78,7 +78,8 @@ export function createImports({
         progressState.dailyReady = false;
         $('#import-dialog').close();
         $('#progress-date').value = importsState.taskImportDate;
-        location.hash = 'progress';
+        if (openManagedRecords) openManagedRecords(importsState.taskImportDate);
+        else location.hash = 'progress';
         setBatchStep(2);
         try { localStorage.setItem('receipt-progress-date', importsState.taskImportDate); } catch (_) {}
         await runPool(group.map((item, index) => async () => {

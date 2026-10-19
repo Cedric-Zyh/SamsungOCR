@@ -1,5 +1,5 @@
 const filterNames = new Set(['filename', 'order_id', 'customer', 'date', 'import_date', 'overall',
-  'review_status', 'text_match', 'search_prefix', 'search', 'date_status', 'seal_status', 'task_id', 'ocr_backend']);
+  'review_status', 'text_match', 'search_prefix', 'search', 'date_status', 'seal_status', 'task_id', 'ocr_backend', 'include_processing']);
 
 /** Snapshot a scope so subsequent edits to the records filters cannot change it. */
 export function normalizeReviewScope(scope) {

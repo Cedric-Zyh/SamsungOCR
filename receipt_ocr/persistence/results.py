@@ -174,6 +174,7 @@ class ResultOperationsMixin:
         self, *, filters: dict | None = None, latest_by_filename: bool = False,
         limit: int | None = None, offset: int = 0, ordering: str = "id",
         include_status_counts: bool = False,
+        summary_only: bool = False,
         _connection: sqlite3.Connection | None = None,
     ) -> dict:
         """Filter and paginate complete logical receipts, including all pages.
@@ -264,7 +265,7 @@ class ResultOperationsMixin:
                 )
                 filtered.sort(key=review_group)
             selected = filtered[offset:] if limit is None else filtered[offset:offset + limit]
-            return {"items": load_selected_receipts(
+            return {"items": selected if summary_only else load_selected_receipts(
                         connection, selected, self._row_to_result, merge_paginated_results
                     ), "total": len(filtered), **metadata}
 

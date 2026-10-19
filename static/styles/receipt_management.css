@@ -1,0 +1,83 @@
+/* One receipt table, with a compact task strip and an on-demand queue drawer. */
+[data-page="records"] {max-width:none}
+.receipt-task-strip {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 20px;padding:14px 18px;margin-bottom:16px;background:#f3f4ee;border:1px solid #dce0d4;border-radius:8px;flex:none}
+.task-strip-info,.task-strip-actions {display:flex;align-items:center;gap:12px}
+.task-strip-info {flex-wrap:wrap;color:#68715e;font-size:12px}
+.task-strip-info>strong {font-size:14px;color:#35402e}
+.task-strip-info .workbench-state-pill {padding:3px 7px;background:#e5ebdd;border-radius:4px;color:#526448;font-size:11px}
+.task-strip-actions button {min-height:32px;font-size:12px;padding:7px 12px;white-space:nowrap}
+.receipt-task-strip #progress-note,.receipt-task-strip #queue-start-remote-note {width:100%;margin:0;font-size:12px;color:#85724b}
+.receipt-task-strip #progress-note:empty {display:none}
+.receipt-task-strip #progress-note[data-tone="danger"] {color:#a45443}
+body.task-drawer-open {overflow:hidden}
+dialog.task-drawer {position:fixed;inset:0 0 0 auto;margin:0;width:min(570px,100vw);max-width:100vw;height:100dvh;max-height:100dvh;padding:0;border:0;border-left:1px solid #deddd5;border-radius:0;background:#fcfbf8;color:#333c2e;box-shadow:-14px 0 50px #28312224;font-family:inherit;overflow:hidden}
+dialog.task-drawer[open] {display:flex;flex-direction:column}
+dialog.task-drawer::backdrop {background:#252e292e}
+.task-drawer-header {display:flex;align-items:flex-start;justify-content:space-between;padding:24px 24px 18px;border-bottom:1px solid #e6e4dd;flex:none}
+.task-drawer-header h2 {font-size:21px;margin:0 0 6px;font-weight:650}
+.task-drawer-header p {margin:0;font-size:12px;color:#7c8073}
+.task-drawer-close {border:0;background:transparent;font-size:27px;color:#62695b;cursor:pointer;width:32px;height:32px}
+.task-drawer-content {padding:20px 24px;overflow-y:auto;overscroll-behavior:contain;flex:1;min-height:0;scrollbar-width:thin}
+.task-batch-field {display:flex;align-items:center;gap:12px;margin-bottom:16px;font-size:12px;color:#6d7663;flex-wrap:wrap}
+.task-batch-field select {flex:1;min-width:180px;height:34px;padding:6px 10px;border:1px solid #dcded5;border-radius:5px;background:#fffefa;color:#414c37;font:inherit}
+.task-batch-summary {border:1px solid #dcdfd4;border-radius:7px;padding:16px;background:#f6f7f1}
+.task-batch-heading,.task-summary-progress {display:flex;align-items:center;justify-content:space-between;gap:10px}
+.task-batch-heading strong {font-size:14px}
+.task-summary-progress {font-size:12px;color:#68745f;margin:14px 0 8px;font-variant-numeric:tabular-nums}
+.task-drawer .progress-track {height:6px;width:100%;background:#e3e6dd;overflow:hidden;border-radius:5px}
+.task-drawer .progress-track>span {display:block;height:100%;background:#718565;transition:width .2s}
+.task-batch-summary p {margin:10px 0 0;color:#77806f;font-size:11px;line-height:1.7}
+.task-global-controls {display:flex;align-items:center;gap:12px;margin:18px 0}
+.task-global-controls>span {font-size:11px;color:#828575}
+.task-drawer :is(.secondary-button,.mini-button) {background:transparent;color:#556749;border:1px solid #d7ddcf;border-radius:5px;font:inherit;font-size:12px;padding:6px 10px;cursor:pointer;min-height:30px;white-space:nowrap}
+.task-drawer :is(.secondary-button,.mini-button):hover:not(:disabled) {background:#edf0e6;border-color:#aebba3}
+.task-drawer .task-primary {background:#657855;color:#fff;border-color:#657855}
+.task-drawer .text-button {border:0;background:transparent;font:inherit;font-size:12px;color:#647855;padding:4px 0;cursor:pointer}
+.task-drawer button:disabled {opacity:.5;cursor:not-allowed}
+.task-drawer :is(button,summary,select,input):focus-visible {outline:2px solid #879a77;outline-offset:3px}
+.task-drawer .queue-pause-notice {font-size:12px;line-height:1.7;color:#8e7446;background:#f6f0e3;border:1px solid #eadfc9;border-radius:5px;padding:10px;margin:0 0 12px}
+.task-drawer-tabs {display:flex;gap:28px;border-bottom:1px solid #e1e4d9;margin:6px 0 16px}
+.task-drawer-tabs button {padding:10px 0;border:0;border-bottom:2px solid transparent;background:transparent;font:inherit;font-size:13px;color:#7a8071;cursor:pointer}
+.task-drawer-tabs button[aria-pressed="true"] {border-bottom-color:#667c56;color:#526c42;font-weight:600}
+.task-drawer-tabs b {margin-left:4px;font-weight:500;font-variant-numeric:tabular-nums}
+.task-queue-search {display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:11px;color:#7f8577}
+.task-queue-search input {flex:1;min-width:0;background:#fffefa;border:1px solid #dfe2d6;border-radius:5px;padding:8px 10px;font:inherit;font-size:12px}
+.task-queue-search>span {white-space:nowrap}
+.task-queue-select {display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#858a7b;margin-bottom:10px}
+.task-queue-select label {display:flex;align-items:center;gap:7px;color:#6f7963}
+.task-drawer input[type="checkbox"] {accent-color:#71845e;width:14px;height:14px}
+.task-drawer .queue-selection {display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#edf0e5;padding:10px;margin-bottom:12px;border-radius:5px;font-size:12px}
+.task-card-list {display:flex;flex-direction:column;gap:10px}
+.task-card {padding:14px;border:1px solid #dfe3d5;border-radius:7px;background:#fffefb}
+.task-card-heading {display:flex;align-items:center;gap:9px;font-size:13px}
+.task-card-heading strong {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+.task-status {font-size:11px;color:#71805f;background:#eef2e8;border-radius:4px;padding:2px 6px;white-space:nowrap}
+.task-card-failed .task-status {color:#a8783d;background:#faf0dd}
+.task-card-step {display:flex;align-items:center;gap:7px;margin:12px 0 6px 24px;font-size:12px;color:#59664e;line-height:1.6}
+.task-card-detail {font-size:11px;color:#858a7a;line-height:1.7;margin:4px 0 10px 24px;overflow-wrap:anywhere}
+.task-card-failed .task-card-detail {color:#9b744c}
+.task-card-actions {display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.task-card-more {position:relative;border:0}
+.task-card-more summary {padding:5px 8px;cursor:pointer;list-style:none;color:#737d64}
+.task-card-more[open]>button {position:absolute;right:0;top:30px;z-index:3;background:#fffdf8;box-shadow:0 4px 15px #3333}
+.task-queue-footer {display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#929584;margin:14px 0}
+.task-empty {padding:32px 12px;text-align:center;color:#7a8470;font-size:13px;line-height:1.8}
+.task-empty p {font-size:12px;color:#8a8f80}
+.task-failure-notice {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:18px;padding:12px;border:1px solid #e9d6ad;background:#fbf3e4;border-radius:6px;font-size:12px;color:#94703d}
+.task-drawer-footer {display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #e5e5db;padding:14px 24px;font-size:11px;color:#858b7a;flex:none;background:#fcfbf8}
+.processing-placeholder {color:#8b9182}
+.processing-row .file-cell>small {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.processing-row .row-primary {color:#536548;border-color:#ced8c3;background:#eef2e6;padding:5px 8px;border-radius:4px;font-size:12px}
+.processing-row .pill.pending {color:#6f7e5d;background:#edf0e6}
+@media (max-width:720px) {
+ .receipt-task-strip {padding:12px;margin-bottom:12px;gap:12px}
+ .task-strip-actions {width:100%;justify-content:space-between}
+ .task-drawer-header {padding:18px}
+ .task-drawer-content {padding:16px}
+ .task-drawer-footer {padding:12px 16px;flex-wrap:wrap}
+ .task-queue-search {flex-wrap:wrap}
+ .task-global-controls {gap:8px}
+ .task-queue-select>span {display:none}
+}
+@media (prefers-reduced-motion:reduce) {.task-drawer .progress-track>span {transition:none}}
+[data-page="records"] .records-table .signature-cell small > span:not(.check-status) {max-width:none;flex:0 1 auto;white-space:normal;overflow-wrap:anywhere}

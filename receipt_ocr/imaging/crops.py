@@ -37,6 +37,23 @@ def save_isolated_seal(
     encoded.tofile(str(destination))
 
 
+def _seal_source_crop(source, region):
+    image = _read_image(source)
+    height, width = image.shape[:2]
+    return image[int(region.y * height):int((region.y + region.height) * height),
+                 int(region.x * width):int((region.x + region.width) * width)]
+
+
+def _enlarge_seal(crop):
+    scale = max(1000, crop.shape[1]) / max(1, crop.shape[1])
+    return cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+
+def seal_source_reference(source, region):
+    """Original pixels in exactly the color-isolation frame, without JPEG re-encoding."""
+    return _enlarge_seal(_seal_source_crop(source, region))
+
+
 def save_color_isolated_seal(
     source: str | Path,
     destination: str | Path,
@@ -46,26 +63,19 @@ def save_color_isolated_seal(
 
     Binary isolation is useful for faint contours, but it removes the local
     intensity variation that OCR detectors sometimes need to separate curved
-    Chinese glyphs. Red uses a continuous chroma-weighted reconstruction to
-    suppress neutral text/rule contamination while retaining faint strokes.
+    Chinese glyphs. Red uses colour-supported stroke luminance and rejects
+    neutral black cores/rules while retaining faint grey-red strokes.
     Blue retains its existing color-mask treatment. Fully obscured ink cannot
     be recovered from this image alone.
     """
-    image = _read_image(source)
-    height, width = image.shape[:2]
-    x1, y1 = int(region.x * width), int(region.y * height)
-    x2 = int((region.x + region.width) * width)
-    y2 = int((region.y + region.height) * height)
-    crop = image[y1:y2, x1:x2]
+    crop = _seal_source_crop(source, region)
     if region.color == "red":
         canvas = _isolate_red_ink(crop)
     else:
         mask = _ocr_color_mask(crop, region.color)
         canvas = np.full_like(crop, 255)
         canvas[mask > 0] = crop[mask > 0]
-    target_width = max(1000, canvas.shape[1])
-    scale = target_width / max(1, canvas.shape[1])
-    canvas = cv2.resize(canvas, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    canvas = _enlarge_seal(canvas)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", canvas)

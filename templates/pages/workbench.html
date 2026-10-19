@@ -1,31 +1,31 @@
-<section data-page="progress" class="hidden workbench-page">
-  <section class="workbench-overview-card" aria-labelledby="workbench-overview-title">
-    <div class="workbench-overview-head">
-      <div class="workbench-overview-title"><span id="workbench-overview-title">识别任务</span><span class="workbench-state-pill" id="workbench-state-pill">加载中</span></div>
-      <div class="workbench-overview-actions"><a class="primary-button" href="#import"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></svg>导入回单</a><button id="queue-toggle" type="button" class="mini-button" disabled>暂停队列</button></div>
-    </div>
-    <div class="workbench-overview-progress">
-      <div class="overview-count">已结束 <strong><span id="overview-completed">—</span> / <span id="overview-total">—</span></strong> 张</div>
-      <div class="progress-track" role="progressbar" aria-label="当日处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress"></span></div><b id="overview-percent">—</b>
-      <small id="overview-remaining" class="sr-only">正在加载当天数据…</small><span id="task-summary" class="sr-only" role="status"></span>
-    </div>
-    <div class="workbench-filter-buttons workbench-state-cards" aria-label="筛选任务状态">
-      <button type="button" data-work-filter="ready" aria-pressed="false"><span>待开始</span><span class="overview-stat-value"><b data-work-count="ready">—</b><em>张</em></span></button>
-      <button type="button" data-work-filter="queued" aria-pressed="false"><span>排队中</span><span class="overview-stat-value"><b data-work-count="queued">—</b><em>张</em></span></button>
-      <button type="button" data-work-filter="running" aria-pressed="false"><span>识别中</span><span class="overview-stat-value"><b data-work-count="running">—</b><em>张</em></span></button>
-      <button type="button" data-work-filter="completed" aria-pressed="false"><span>已完成</span><span class="overview-stat-value"><b data-work-count="completed">—</b><em>张</em></span></button>
-      <button type="button" data-work-filter="failed" aria-pressed="false"><span>失败</span><span class="overview-stat-value"><b data-work-count="failed">—</b><em>张</em></span></button>
-    </div>
-    <p id="queue-pause-notice" class="queue-pause-notice hidden" role="status"></p>
-  </section>
-  <p id="progress-note" class="progress-note" role="status">正在加载当天任务…</p>
-  <section id="task-section" class="hidden workbench-tasks" aria-labelledby="workbench-list-title">
-    <div class="workbench-taskbar"><div class="workbench-list-heading"><h2 id="workbench-list-title">任务队列</h2><span id="workbench-visible-count" role="status"></span></div><label class="queue-review-toggle"><span>待复核</span><input id="workbench-needs-review" type="checkbox" role="switch"></label></div>
-    <div class="queue-tools"><input id="workbench-search" type="search" placeholder="搜索文件名、订单号" aria-label="搜索任务文件名或订单号"><button type="button" class="text-button" data-work-filter="all" aria-pressed="true">全部状态</button><button id="queue-start" type="button" class="primary-button" disabled>开始全部待开始</button></div>
-    <div id="queue-selection" class="queue-selection hidden"><span id="queue-selection-count"></span><button id="queue-selection-clear" type="button" class="text-button">取消选择</button><button id="queue-selected-review" type="button" class="mini-button hidden">复核所选</button><button id="queue-selected-start" type="button" class="mini-button">开始所选</button><button id="queue-selected-withdraw" type="button" class="mini-button">取消所选排队</button><button id="queue-selected-delete" type="button" class="mini-button queue-delete">删除所选</button></div>
-    <div class="table-wrap workbench-table-wrap" tabindex="0" role="region" aria-label="单据任务队列">
-      <table class="workbench-table"><colgroup><col class="queue-check-col"><col class="workbench-file-col"><col class="workbench-status-col"><col class="workbench-result-col"><col class="workbench-action-col"></colgroup><thead><tr><th><input id="workbench-select-all" type="checkbox" aria-label="全选当前显示的可操作单据"></th><th>单据名称</th><th>状态</th><th>当前步骤 / 进度</th><th>操作</th></tr></thead><tbody id="queue"><tr><td colspan="5" class="empty-state">正在加载任务…</td></tr></tbody></table>
-    </div>
-    <div class="workbench-list-footer"><span id="workbench-page-note" role="status"></span><button id="workbench-more" type="button" class="text-button hidden">再显示 50 张</button><div class="workbench-queue-footer"><span id="queue-control-label" role="status"></span><button id="refresh-progress" type="button" class="text-button">刷新</button></div></div>
-  </section>
+<section class="receipt-task-strip" aria-label="识别任务">
+  <div class="task-strip-info"><strong>识别任务</strong><span id="task-strip-scope"></span><span id="workbench-state-pill" class="workbench-state-pill">加载中</span><span id="task-strip-counts">正在获取任务…</span></div>
+  <div class="task-strip-actions"><button id="open-task-drawer" type="button" class="secondary-button" aria-haspopup="dialog">任务详情 <span aria-hidden="true">↗</span></button></div>
+  <p id="progress-note" class="progress-note" role="status"></p>
+  <p id="queue-start-remote-note" class="hidden">所选识别方案包含远程服务，开始后会上传回单用于识别。</p>
 </section>
+<dialog id="task-drawer" class="task-drawer" aria-labelledby="task-drawer-title">
+  <header class="task-drawer-header"><div><h2 id="task-drawer-title">任务详情</h2><p>查看识别进度，处理排队与异常</p></div><button id="close-task-drawer" type="button" class="task-drawer-close" aria-label="关闭任务详情">×</button></header>
+  <div class="task-drawer-content">
+    <label class="task-batch-field"><span id="task-drawer-day">当前日期</span><select id="task-batch-select" aria-label="选择任务批次"><option value="">当天全部批次</option></select></label>
+    <section class="task-batch-summary" aria-label="批次进度">
+      <div class="task-batch-heading"><strong id="task-batch-title">当天全部批次</strong><button id="task-view-records" type="button" class="text-button">查看回单 →</button></div>
+      <div class="task-summary-progress"><span>已结束 <strong id="overview-completed">—</strong> / <span id="overview-total">—</span> 张</span><span id="overview-percent">—</span></div>
+      <div class="progress-track" role="progressbar" aria-label="识别任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress"></span></div>
+      <p id="overview-remaining"></p><span id="task-summary" class="sr-only" role="status"></span>
+    </section>
+    <div class="task-global-controls"><button id="queue-toggle" type="button" class="secondary-button" disabled>暂停全部识别</button><span>作用于所有日期和批次</span></div>
+    <p id="queue-pause-notice" class="queue-pause-notice hidden" role="status"></p>
+    <section id="task-section" class="hidden" aria-labelledby="workbench-list-title">
+      <h3 id="workbench-list-title" class="sr-only">任务队列</h3>
+      <div class="task-drawer-tabs" aria-label="任务状态"><button type="button" data-task-tab="processing" aria-pressed="true">进行中 <b data-work-count="processing">—</b></button><button type="button" data-task-tab="ready" aria-pressed="false">待开始 <b data-work-count="ready">—</b></button><button type="button" data-task-tab="failed" aria-pressed="false">异常 <b data-work-count="failed">—</b></button></div>
+      <div class="task-queue-search"><input id="workbench-search" type="search" placeholder="搜索任务文件名、订单号" aria-label="搜索任务文件名或订单号"><span id="workbench-visible-count"></span></div>
+      <div class="task-queue-select"><label><input id="workbench-select-all" type="checkbox">全选当前任务</label><span>正在识别的任务不可勾选</span></div>
+      <div id="queue-selection" class="queue-selection hidden"><span id="queue-selection-count"></span><button id="queue-selection-clear" type="button" class="text-button">取消选择</button><button id="queue-selected-start" type="button" class="mini-button">开始所选</button><button id="queue-selected-withdraw" type="button" class="mini-button">取消所选排队</button><button id="queue-selected-delete" type="button" class="mini-button">删除所选</button></div>
+      <div id="queue" class="task-card-list" aria-live="off"></div>
+      <div class="task-queue-footer"><span id="workbench-page-note"></span><button id="workbench-more" type="button" class="text-button hidden">再显示 50 张</button></div>
+    </section>
+    <div id="task-failure-notice" class="task-failure-notice hidden"><span></span><button id="task-show-failures" type="button" class="secondary-button">查看异常</button></div>
+  </div>
+  <footer class="task-drawer-footer"><span>关闭面板不影响后台识别</span><span id="queue-control-label"></span><button id="refresh-progress" type="button" class="text-button">刷新</button></footer>
+</dialog>

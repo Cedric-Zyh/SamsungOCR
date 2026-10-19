@@ -24,7 +24,7 @@ SEAL_ORIENTATION_MODES = (
     {
         "id": "combined",
         "label": "四方向择优校正",
-        "description": "对 0/90/180/270 四次粗校正并各做一次文本框图微调，取章型行识别最好的一档",
+        "description": "在整章中检测横排文字，比较四个方向；未读到时补试斜向角度，按完整章型行微调",
     },
 )
 
@@ -53,6 +53,10 @@ FOUR_WAY_BAND_BOTTOM_RATIO = 0.64
 FOUR_WAY_ANCHOR_MIN_CONFIDENCE = 0.45
 
 FOUR_WAY_MIN_FINE_ROTATION = 2.0
+
+FOUR_WAY_MAX_FINE_ROTATION = 45.0
+
+FOUR_WAY_FINAL_ROW_MIN_CONFIDENCE = 0.55
 
 def resolve_seal_orientation_mode(value: str | None) -> str:
     selected = str(value or DEFAULT_SEAL_ORIENTATION_MODE).strip().lower()

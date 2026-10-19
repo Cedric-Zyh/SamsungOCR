@@ -1,0 +1,27 @@
+.seal-center-toolbar,.seal-standard-heading,.seal-standard-actions {display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.seal-center-toolbar h2 {margin:0 0 6px;font-size:18px;font-weight:650}.seal-center-toolbar p,.seal-standard-note {color:var(--muted);font-size:13px;line-height:1.6}
+.seal-center-toolbar>div {flex:1}.seal-center-toolbar>span {color:var(--muted);font-size:13px}
+.seal-center-search {display:flex;gap:10px;margin:20px 0}.seal-center-search input {flex:1;min-width:0}
+.seal-center-layout {display:grid;grid-template-columns:minmax(280px,.85fr) minmax(360px,1.15fr);gap:20px;align-items:start}
+.seal-library,.seal-center-detail {background:var(--paper);border:1px solid var(--line);border-radius:2px;padding:18px;min-width:0}
+.seal-center-detail h2 {font-size:18px;line-height:1.5;overflow-wrap:anywhere;margin:0 0 18px}
+.seal-library-item {display:flex;align-items:center;gap:14px;text-align:left;width:100%;padding:14px 10px;background:transparent;border:0;border-bottom:1px solid var(--line);cursor:pointer;color:var(--ink)}
+.seal-library-item img {width:70px;height:70px;object-fit:contain;background:white}.seal-library-item>span:nth-child(2){flex:1;min-width:0}.seal-library-item b {display:block;font-size:14px;overflow-wrap:anywhere}.seal-library-item small {display:block;margin-top:7px;color:var(--muted);font-size:11px}
+.seal-library-item.is-selected {background:#e7e8de;box-shadow:inset 3px 0 #a08351}.seal-library-item:hover {background:#ecece5}
+.seal-standard-heading {justify-content:space-between;margin:18px 0 12px}.seal-standard-heading a{color:var(--brand);font-size:12px}
+.seal-standard-card {display:flex;align-items:center;gap:18px;margin:0;background:#fff;padding:12px;border:1px solid var(--line);border-radius:6px;min-width:0}
+.seal-standard-card img {width:150px;height:150px;object-fit:contain;display:block}.seal-standard-card figcaption {min-width:0;flex:1}.seal-standard-card figcaption>b,.seal-standard-card figcaption>span {display:block;margin-bottom:8px}.seal-standard-card figcaption span,.seal-standard-card small {color:var(--muted);font-size:12px}.seal-standard-card p {font-size:14px;overflow-wrap:anywhere;line-height:1.6;margin:8px 0}
+.seal-standard-empty {padding:24px;background:#f5f4ec;border:1px dashed #bebbaa;border-radius:6px;line-height:1.7}.seal-standard-empty p,.seal-standard-empty small {color:var(--muted);font-size:13px}
+.seal-candidate-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:12px 0}
+.seal-candidate {display:flex;flex-direction:column;gap:8px;text-align:left;padding:10px;background:#fff;border:1px solid var(--line);border-radius:6px;min-width:0;cursor:pointer;color:var(--ink);overflow:hidden}.seal-candidate img {width:100%;height:165px;object-fit:contain;transition:transform .15s}.seal-candidate small {font-size:11px;color:var(--muted);overflow-wrap:anywhere}.seal-candidate-title {display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:600}.seal-candidate-text {font-size:12px;line-height:1.6;overflow-wrap:anywhere}.seal-candidate.is-selected {border-color:#5e6a4b;box-shadow:0 0 0 2px #a6af92}.seal-candidate:disabled{cursor:default;opacity:.7}
+.seal-standard-selection {padding:14px;background:#f0f1e8;border:1px solid #c3c9b5;border-radius:6px}.seal-standard-selection p{margin:0 0 12px;font-size:13px}.seal-standard-selection label {font-size:12px}.seal-standard-selection input {width:76px;padding:6px}.seal-standard-selection [role=status]{display:block;margin-top:10px;color:var(--muted)}
+[data-seal-standard] {margin-top:16px;border-top:1px solid var(--line)}
+body[data-active-page="seal-center"] .hero .eyebrow {display:none}
+body[data-active-page="seal-center"] .hero {box-shadow:none;border-radius:0}
+.seal-center-search input,.seal-standard-selection input {appearance:none;background:var(--paper);color:var(--ink);font:inherit;border:1px solid var(--line);border-radius:2px;box-shadow:none}
+.seal-center-search input {height:38px;padding:8px 12px;font-size:13px}
+.seal-center-search input:focus,.seal-standard-selection input:focus {border-color:#8b967b;box-shadow:none;outline:2px solid #626f4f30;outline-offset:2px}
+.seal-center-toolbar .secondary-button {min-height:36px;font-size:13px}
+.seal-standard-card,.seal-candidate,.seal-standard-selection,.seal-standard-empty {border-radius:2px}
+@media(max-width:1000px){.seal-center-layout{grid-template-columns:1fr}.seal-standard-card img{width:120px;height:120px}}
+@media(prefers-reduced-motion:reduce){.seal-candidate img{transition:none}}

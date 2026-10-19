@@ -76,6 +76,9 @@ def queue_progress(ctx: QueueDependencies):
             raise ValueError()
     except ValueError:
         return jsonify(error="请选择有效的导入日期"), 400
+    if request.args.get("include_related") == "1":
+        from .receipt_management import management_jobs
+        return jsonify(management_jobs(ctx, day))
     return jsonify(ctx.job_store.daily(day))
 
 

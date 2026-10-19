@@ -32,7 +32,7 @@ def review_result(ctx: ReviewDependencies, result_id: int):
             if "review_revision" in payload and payload["review_revision"] != ctx.review_revision(current):
                 return jsonify(error="这张回单已在其他窗口或重新识别中更新，请重新打开后核对；当前编辑尚未保存。",
                                code="review_revision_conflict"), 409
-            updated = ctx.apply_edits(current, payload)
+            updated = ctx.apply_edits(current, payload, _connection=connection)
             review_status = str(payload.get("review_status", "待复核"))
             final_result = str(payload.get("final_result") or updated.get("overall", "需人工复核"))
             confirmation_error = ctx.confirmation_error(updated, review_status, final_result)

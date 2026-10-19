@@ -5,18 +5,23 @@ import math
 import tempfile
 import numpy as np
 from PIL import Image
-from receipt_ocr.recognition.seal.preprocess.orientation_settings import FOUR_WAY_ANCHOR_MIN_CONFIDENCE, FOUR_WAY_BAND_BOTTOM_RATIO, FOUR_WAY_BAND_LEFT_RATIO, FOUR_WAY_BAND_RIGHT_RATIO, FOUR_WAY_BAND_TOP_RATIO, FOUR_WAY_COARSE_ANGLES, FOUR_WAY_MIN_FINE_ROTATION
-from receipt_ocr.recognition.seal.preprocess.orientation_angles import _candidate_rank, _round_stamp_type_texts, choose_round_stamp_angle
-from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _map_box_to_source, _oriented_type_anchor_box, _oriented_type_row_exact_box, _rotation_geometry, rotate_stamp_image
+from receipt_ocr.recognition.seal.preprocess.orientation_settings import (
+    FOUR_WAY_ANCHOR_MIN_CONFIDENCE, FOUR_WAY_COARSE_ANGLES,
+    FOUR_WAY_MIN_FINE_ROTATION, FOUR_WAY_MAX_FINE_ROTATION,
+    FOUR_WAY_FINAL_ROW_MIN_CONFIDENCE,
+)
+from receipt_ocr.recognition.seal.preprocess.orientation_angles import (
+    _round_stamp_type_texts, _stamp_type_marker_strength, choose_round_stamp_angle,
+)
+from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _map_box_to_source, _oriented_type_anchor_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _rotation_geometry, rotate_stamp_image
+from .horizontal_rows import grouped_type_candidate
 
 
 def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None):
     """Recognise the stamp-type row of one candidate.
 
-    ``focus_box`` is the polygon the detector actually read as the type row.
-    A fixed horizontal strip is only a fallback: a round stamp may print its
-    type row below the star rather than across the middle, so a centre strip
-    would look at ring lettering instead of the row.
+    ``focus_box`` comes from observed text. Without one there is no row to
+    read; a fixed centre strip could read ring lettering instead.
     """
     from receipt_ocr.recognition.seal.ocr.interface import read_line
 
@@ -29,10 +34,7 @@ def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None
             right = max(0, min(width, round(float(focus_box[2]))))
             bottom = max(0, min(height, round(float(focus_box[3]))))
         else:
-            left = round(width * FOUR_WAY_BAND_LEFT_RATIO)
-            right = round(width * FOUR_WAY_BAND_RIGHT_RATIO)
-            top = round(height * FOUR_WAY_BAND_TOP_RATIO)
-            bottom = round(height * FOUR_WAY_BAND_BOTTOM_RATIO)
+            return "", 0.0
         if right - left < 8 or bottom - top < 8:
             return "", 0.0
         band_path = Path(band_path)
@@ -75,6 +77,13 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
         boxes = detect_boxes(candidate_path, model_variant=model_variant)
     except Exception as exc:  # a broken angle must not abort the comparison
         error = str(exc)
+    try:
+        grouped = grouped_type_candidate(
+            candidate_path, boxes, scratch, band_dir, angle,
+            model_variant=model_variant, read_row=_read_type_band_text,
+        )
+    except Exception:
+        grouped = None  # A failed optional group must not discard a valid single row.
     decision = choose_round_stamp_angle(
         boxes, minimum_confidence=FOUR_WAY_ANCHOR_MIN_CONFIDENCE
     )
@@ -107,7 +116,7 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
         model_variant=model_variant,
         focus_box=focus_box,
     )
-    return {
+    single = {
         "angle": float(angle),
         "path": final_path,
         "fine_rotation": fine_rotation,
@@ -125,36 +134,63 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
         "decision": decision,
         "band_text": band_text,
         "band_confidence": band_confidence,
-        "rank": _candidate_rank(
-            anchor_text, band_text, band_confidence, bool(anchor_text)
-        ),
         "error": error,
     }
+    if grouped and (len(grouped["band_text"]) > len(band_text)
+                    or abs(fine_rotation) > FOUR_WAY_MAX_FINE_ROTATION
+                    or _stamp_type_marker_strength(band_text) < 2):
+        return grouped
+    return single
 
 def _select_four_way_candidate(candidates):
-    best = max(candidates, key=lambda item: (item["rank"], -item["angle"]))
-    # Equivalent readable rows should not favour a nearly quarter-turn fine
-    # correction just because interpolation nudged the OCR confidence upward.
-    equivalent = [item for item in candidates
-                  if not item["error"] and item["band_text"] == best["band_text"]
-                  and item["rank"][:2] == best["rank"][:2]
+    """Select from the actual post-rotation row, never the earlier anchor."""
+    verified = []
+    for item in candidates:
+        text, confidence = item["band_text"], item["band_confidence"]
+        strength = _stamp_type_marker_strength(text)
+        fine = item["fine_rotation"]
+        reason = ""
+        if item["error"]:
+            reason = "候选识别失败"
+        elif not math.isfinite(fine) or abs(fine) > FOUR_WAY_MAX_FINE_ROTATION:
+            # Four coarse directions cover every quarter-turn already. A
+            # larger fine correction can flip an otherwise upright stamp.
+            reason = "微调角度超过 45°"
+        elif (strength < 2 or len(text) < 3 or not math.isfinite(confidence)
+              or confidence < FOUR_WAY_FINAL_ROW_MIN_CONFIDENCE):
+            reason = "转正后未读到可靠章型行"
+        item["post_rotation_verified"] = not reason
+        item["rejection_reason"] = reason
+        item["rank"] = (
+            ((strength, len(text)), 1, round(confidence, 4))
+            if not reason else ((0, 0), 0, 0.0)
+        )
+        if not reason:
+            verified.append(item)
+    if not verified:
+        return next(item for item in candidates if item["angle"] == 0)
+    best = max(verified, key=lambda item: (item["rank"], -abs(item["fine_rotation"])))
+    # Equivalent readings prefer the least resampling, then the original view.
+    equivalent = [item for item in verified
+                  if item["band_text"] == best["band_text"]
                   and item["band_confidence"] >= best["band_confidence"] - 0.03]
     return min(equivalent, key=lambda item: (abs(item["fine_rotation"]), item["angle"])) if equivalent else best
 
 
 def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
-    """Coarse-rotate a round stamp to all four right angles, then fine-tune.
+    """Find the observed type row at right angles, then diagonals if needed.
 
     A text polygon cannot resolve the quarter-turn: the detector normalises
     every line angle to ``[-90, 90)``, so its geometry only says whether a row
     is level, never which way up the stamp is.  The coarse quarter-turn is
-    therefore chosen by evidence instead of by a model: each candidate is
-    rotated, fine-tuned on its own stamp-type polygon, and its type row is
-    read.  The angle whose row actually reads wins.
+    therefore chosen by evidence: each candidate is rotated and its observed
+    type row is read. Split fragments are verified as a whole row before a
+    small correction; four failed directions trigger intermediate angles.
 
-    Each candidate is scored from the detector's own polygon text and from the
-    line reading of that polygon's crop, so an angle is never discarded just
-    because its type row sits below the star rather than across the middle.
+    The polygon locates the type row, including rows below the star. Selection
+    then requires a readable type marker in the final rotated crop. A good
+    pre-rotation detection cannot rescue a failed final row or a fine rotation
+    beyond 45 degrees.
 
     The comparison never consults the requested seal text.  It rewards only
     the generic ``收货/专用/用章…章`` markers that every receipt stamp carries,
@@ -202,9 +238,22 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
                     "error": str(exc),
                 })
 
+        best = _select_four_way_candidate(candidates)
+        if not best["post_rotation_verified"]:
+            # A diagonal row can be missed at all four right angles. Only
+            # then compare the intermediate angles on the same full stamp.
+            for angle in (45, 135, 225, 315):
+                try:
+                    candidates.append(_four_way_candidate(
+                        source, scratch, band_dir, angle, model_variant=model_variant,
+                    ))
+                except Exception:
+                    continue
+            best = _select_four_way_candidate(candidates)
+
         decision = {
             "mode": "combined",
-            "model": "四方向粗校正 + 印章文字检测框微调",
+            "model": "整章横排文字检测 + 按需补试斜向角度",
             "applied_rotation": 0.0,
             "coarse_rotation": 0.0,
             "fine_rotation": 0.0,
@@ -214,12 +263,14 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         }
         # Prefer the unrotated view when two angles read equally well; a
         # needless quarter-turn changes the secondary read image for no gain.
-        best = _select_four_way_candidate(candidates)
         decision["four_way_candidates"] = {
             str(int(item["angle"])): {
                 "text": item["band_text"],
                 "fine_rotation": round(item["fine_rotation"], 3),
                 "anchor_text": item["anchor_text"],
+                "confidence": round(item["band_confidence"], 4),
+                "post_rotation_verified": item["post_rotation_verified"],
+                "rejection_reason": item["rejection_reason"],
                 "rank": list(item["rank"]),
                 "error": item["error"],
             }
@@ -227,12 +278,8 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         }
         if best["error"]:
             decision["error"] = best["error"]
-        best_reading = best["rank"][0]
-        # Refuse to rotate on a single stray glyph: require either a
-        # stamp-type marker somewhere, or a real polygon anchor whose row reads
-        # at least two characters.  Otherwise the original orientation stands.
-        if not best_reading[0] and not (best["rank"][1] and best_reading[1] >= 2):
-            decision["status"] = "四个方向均未找到章型文字，保留原方向"
+        if not best["post_rotation_verified"]:
+            decision["status"] = "各候选方向均未找到章型文字的可靠转正结果，保留原方向"
             return None, decision
 
         coarse_angle = float(best["angle"])
@@ -253,22 +300,31 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         applied_rotation=coarse_angle,
         coarse_rotation=coarse_angle,
         fine_rotation=round(best["fine_rotation"], 3),
+        rotation_steps=[angle for angle in (coarse_angle, best["fine_rotation"]) if angle],
         angle=coarse_angle,
         anchor_text=best["anchor_text"],
         anchor_angle=round(best["anchor_angle"], 3),
         confidence=round(best["anchor_confidence"], 4),
         type_band_text=best["band_text"],
         type_band_confidence=round(best["band_confidence"], 4),
-        # Only the type-row strings are persisted; the four full polygon sets
-        # stay in memory because the artifact JSON is kept for every receipt.
+        # Only the winning row geometry is persisted, not every detection at
+        # each trial angle.
         type_row_texts=_round_stamp_type_texts(best["boxes"], best["decision"]),
     )
     if best["focus_box"]:
         decision["oriented_type_row_box"] = best["focus_box"]
-        decision["oriented_type_row_exact_box"] = _oriented_type_row_exact_box(
+        decision["oriented_type_row_exact_box"] = best.get("exact_box") or _oriented_type_row_exact_box(
             best["boxes"], best["decision"], best["fine_matrix"],
             best["final_width"], best["final_height"],
         )
+        decision["oriented_type_row_polygons"] = best.get("mask_polygons") or _oriented_type_row_polygons(
+            best["boxes"], best["decision"], best["fine_matrix"],
+        )
+        if best.get("grouped_row"):
+            decision["type_row_grouped"] = True
+            decision["local_mask_verified"] = best["local_mask_verified"]
+            decision["oriented_type_row_read_box"] = best["focus_box"]
+            decision["type_row_texts"] = [best["band_text"]]
         decision["type_row_box"] = _map_box_to_source(
             best["focus_box"],
             best,
@@ -283,7 +339,7 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         if best["fine_rotation"] else ""
     )
     decision["status"] = (
-        f"四方向择优：{rotation_note}{fine_note}"
+        f"横排文字择优：{rotation_note}{fine_note}"
         f"（章型行：{best['band_text'] or '无'}）"
     )
     return oriented, decision

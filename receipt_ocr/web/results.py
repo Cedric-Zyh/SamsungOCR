@@ -140,6 +140,16 @@ def daily_results(ctx: ResultDependencies):
 
 
 def list_results(ctx: ResultDependencies):
+    if request.args.get("include_processing") == "1":
+        from .receipt_management import management_listing
+        try:
+            page, page_size = page_options()
+            return jsonify(management_listing(ctx,
+                {key: request.args.get(key, "") for key in ctx.result_filters}, page, page_size,
+                reviewable=request.args.get("reviewable") == "1",
+                selected_ids=selected_result_ids(), deferred_ids=selected_result_ids("deferred_ids")))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
     return receipt_listing(ctx, latest_by_filename=True)
 
 

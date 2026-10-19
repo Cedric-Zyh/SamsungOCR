@@ -55,6 +55,8 @@ from receipt_ocr.web import recognition as recognition_handlers
 from receipt_ocr.web import results as result_handlers
 from receipt_ocr.web import review as review_handlers
 from receipt_ocr.web import remote_settings
+from receipt_ocr.web import seal_standards as standard_handlers
+from receipt_ocr.domain.seal_standards import apply_standard_check
 from receipt_ocr.web.settings import normalize_recognition_settings as _normalize_recognition_settings
 
 
@@ -161,7 +163,7 @@ def _results_dependencies():
 def _review_dependencies():
     return ReviewDependencies(
         ground_truth_path=GROUND_TRUTH_PATH,
-        apply_edits=_apply_human_edits,
+        apply_edits=_apply_review_edits_with_standard,
         confirmation_error=_confirmation_error,
         project_result=_project_paginated_result,
         review_revision=_review_revision,
@@ -169,6 +171,16 @@ def _review_dependencies():
         database=database,
         seal_reference_matcher=seal_reference_matcher,
     )
+
+
+def _apply_review_edits_with_standard(current, payload, *, _connection=None):
+    updated = _apply_human_edits(current, payload)
+    requirement = (updated.get("fields") or {}).get("签章要求", "")
+    standard = database.get_seal_standard(requirement, _connection=_connection)
+    updated = apply_standard_check(updated, standard, preserve_confirmed=False)
+    if payload.get("review_status") == "确认不通过" and payload.get("final_result") == "不通过":
+        updated["overall"] = "不通过"
+    return updated
 
 
 def _purge_expired_data() -> dict:
@@ -237,12 +249,14 @@ def _configured_analyze(*args, recognition_config=None, previous_fields=None, **
     saved_qingtong = database.get_json_setting('qingtong_credentials', None)
     if isinstance(saved_qingtong, dict):
         analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
-    return recognition_service.recognize(
+    result = recognition_service.recognize(
         *args,
         recognition_config=recognition_config,
         previous_fields=previous_fields,
         **kwargs,
     )
+    requirement = (result.get("fields") or {}).get("签章要求", "")
+    return apply_standard_check(result, database.get_seal_standard(requirement))
 
 
 
@@ -720,9 +734,14 @@ def selected_seal_preview(result_id: int):
 
 
 def files(kind: str, name: str):
-    directory = {"previews": PREVIEW_DIR, "uploads": UPLOAD_DIR, "artifacts": ARTIFACT_DIR}.get(kind)
+    directory = {"previews": PREVIEW_DIR, "uploads": UPLOAD_DIR, "artifacts": ARTIFACT_DIR,
+                 "seal-standards": database.path.parent / "seal-standards"}.get(kind)
     if directory is None:
         abort(404)
+    if kind == "artifacts" and request.args.get("preview") == "rgb":
+        from .artifact_preview import send_rgb_artifact_preview
+
+        return send_rgb_artifact_preview(directory, name)
     return send_from_directory(directory, name)
 
 
@@ -735,12 +754,35 @@ def _project_paginated_result(item: dict, *, _connection=None) -> dict:
     )
     page_group = item.get("page_group") or {}
     if page_group.get("page_count", 0) <= 1 or item.get("page_role") == "continuation":
-        return item
+        return _with_standard_check(item, _connection=_connection)
     task_id = str(item.get("task_id") or "")
     if not task_id:
-        return item
+        return _with_standard_check(item, _connection=_connection)
     projected = database.query_receipts(filters={"task_id": task_id}, _connection=_connection)["items"]
-    return next((row for row in projected if int(row.get("id") or 0) == int(item.get("id") or 0)), item)
+    item = next((row for row in projected if int(row.get("id") or 0) == int(item.get("id") or 0)), item)
+    return _with_standard_check(item, _connection=_connection)
+
+
+def _with_standard_check(item, *, _connection=None):
+    requirement = (item.get("fields") or {}).get("签章要求", "")
+    return apply_standard_check(item, database.get_seal_standard(requirement, _connection=_connection))
+
+
+def _standard_dependencies():
+    return standard_handlers.SealStandardDependencies(database, ARTIFACT_DIR,
+        _project_paginated_result, _review_revision, _with_review_revision)
+
+
+def list_seal_standards():
+    return standard_handlers.list_standards(_standard_dependencies())
+
+
+def seal_standard_sources(standard_id):
+    return standard_handlers.standard_sources(_standard_dependencies(), standard_id)
+
+
+def register_seal_standard(result_id):
+    return standard_handlers.register_standard(_standard_dependencies(), result_id)
 
 
 def _source_for_record(item: dict) -> Path | None:
@@ -751,6 +793,9 @@ def _source_for_record(item: dict) -> Path | None:
 from .routes import register_routes
 
 register_routes(app, {
+    'list_seal_standards': list_seal_standards,
+    'seal_standard_sources': seal_standard_sources,
+    'register_seal_standard': register_seal_standard,
     'index': index,
     'ocr_backends': ocr_backends,
     'get_settings': get_settings,
