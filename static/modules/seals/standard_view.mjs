@@ -2,6 +2,25 @@ import {escapeHtml} from '../core/ui.mjs';
 
 export const shapeLabel = value => ({round:'圆形', ellipse:'椭圆', rectangle:'矩形'}[value] || '未知形状');
 export const colorLabel = value => ({red:'红色', blue:'蓝色'}[value] || '未知颜色');
+export const standardDate = value => String(value || '').replace('T', ' ').slice(0, 16);
+
+/** The archive gets a larger preview; the receipt review keeps its compact card. */
+export function standardDetail(standard) {
+  const requirement = String(standard.requirement || '未填写签章要求');
+  const parts = requirement.match(/^(.*公司)(收货专用章(?:[（(]\d+[）)])?)$/);
+  const title = parts ? parts[1] : requirement;
+  const subtitle = parts ? `<p class="seal-detail-subtitle">${escapeHtml(parts[2])}</p>` : '';
+  return `<div class="seal-detail-eyebrow"><span>当前标准章</span><span class="seal-standard-active"><i aria-hidden="true"></i>使用中</span></div>
+    <header class="seal-detail-heading"><div><h2>${escapeHtml(title)}</h2>${subtitle}</div><time class="seal-detail-updated">更新于 ${escapeHtml(standardDate(standard.updated_at))}</time></header>
+    <figure class="seal-detail-preview">
+      <a class="seal-preview-image" href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" aria-label="查看完整标准章图片（新窗口）"><img src="${escapeHtml(standard.image_url)}" alt="${escapeHtml(requirement)}的当前标准章"></a>
+      <a class="seal-icon-button seal-preview-zoom" href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" aria-label="放大标准章图片（新窗口）" title="查看原图"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5M7.5 10.5h6M10.5 7.5v6"/></svg></a>
+    </figure>
+    <dl class="seal-detail-metadata"><div><dt>印章形状</dt><dd>${shapeLabel(standard.shape)}</dd></div><div><dt>来源回单</dt><dd title="${escapeHtml(standard.source_filename || '')}">${escapeHtml(standard.source_filename || '—')}</dd></div><div><dt>印章颜色</dt><dd>${colorLabel(standard.color)}</dd></div><div><dt>当前版本</dt><dd>第 ${escapeHtml(standard.revision)} 版</dd></div></dl>
+    <div class="seal-detail-footer"><p>每条签章要求保留一枚标准章，替换后用于后续核验。</p><div class="seal-replace-action"><button class="primary-button" type="button" data-load-standard-sources aria-expanded="false" aria-controls="seal-standard-sources">替换标准章</button><small>从同要求回单中选择</small></div></div>
+    <div id="seal-standard-sources" data-standard-sources></div>`;
+}
+
 export function standardCard(standard) {
   if (!standard) return '<div class="seal-standard-empty"><b>尚无标准章</b><p>选择一枚转正、清理后的客户章，手动加入印章中心。</p><small>形状尚无参照，识别过程不会自动加入。</small></div>';
   return `<figure class="seal-standard-card"><a href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" title="打开完整标准章图片"><img src="${escapeHtml(standard.image_url)}" alt="已保存的标准章"></a><figcaption><b>当前标准章</b><span>${shapeLabel(standard.shape)} · ${colorLabel(standard.color)}</span><p>${escapeHtml(standard.recognized || '未识别到文字')}</p><small>来自 ${escapeHtml(standard.source_filename)} · 第 ${standard.revision} 版</small></figcaption></figure>`;

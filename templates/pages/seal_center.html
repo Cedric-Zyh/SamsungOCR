@@ -1,5 +1,20 @@
   <section data-page="seal-center" class="page hidden seal-center-page">
-    <div class="seal-center-toolbar"><div><h2>标准章档案</h2><p>手动维护合法章，每条签章要求只保留一枚标准章。</p></div><span data-standard-count>0 条签章要求</span><button class="secondary-button" type="button" data-standard-refresh>刷新</button></div>
-    <form id="seal-center-search-form" class="seal-center-search"><label class="sr-only" for="seal-center-search">搜索签章要求</label><input id="seal-center-search" type="search" placeholder="搜索签章要求、公司名称" maxlength="300"><button type="submit" class="mini-button">搜索</button></form>
-    <div class="seal-center-layout"><div class="seal-library"><p data-standard-list-status role="status"></p><div data-standard-list></div></div><div class="seal-center-detail" data-standard-detail></div></div>
+    <div class="seal-center-layout">
+      <div class="seal-library">
+        <div class="seal-library-header">
+          <div class="seal-center-toolbar">
+            <h2>标准章档案 <span class="seal-library-count" data-standard-count aria-label="0 条签章要求">0</span></h2>
+            <button class="seal-icon-button" type="button" data-standard-refresh aria-label="刷新标准章档案" title="刷新档案"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 19.7 11M4.3 13a8 8 0 0 0 13.6 4.9"/></svg></button>
+          </div>
+          <form id="seal-center-search-form" class="seal-center-search" role="search">
+            <button type="submit" class="seal-icon-button" aria-label="搜索标准章" title="搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></button>
+            <label class="sr-only" for="seal-center-search">搜索公司或签章要求</label>
+            <input id="seal-center-search" type="search" placeholder="搜索公司或签章要求" maxlength="300" autocomplete="off">
+          </form>
+        </div>
+        <p data-standard-list-status role="status" aria-live="polite"></p>
+        <div class="seal-library-list" data-standard-list aria-label="标准章档案列表"></div>
+      </div>
+      <div class="seal-center-detail" data-standard-detail aria-label="标准章详情"></div>
+    </div>
   </section>

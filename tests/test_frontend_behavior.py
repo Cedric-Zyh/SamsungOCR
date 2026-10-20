@@ -36,6 +36,14 @@ def test_standard_seal_selection_registration_replacement_and_review_guards():
     run_node("--test", "tests/seal_standards_ui.cjs")
 
 
+def test_process_history_grouping_and_request_lifecycle():
+    run_node("--test", "tests/process_history_ui.cjs")
+
+
+def test_record_column_resize_lock_and_persistence():
+    run_node("--test", "tests/record_column_widths.cjs")
+
+
 def test_second_round_ui_recovery_and_feedback_behaviors():
     run_node("--test", "tests/records_ui_round2.cjs", "tests/report_ui_round2.cjs",
              "tests/review_ui_round2.cjs")

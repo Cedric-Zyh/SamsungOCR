@@ -273,7 +273,11 @@ export function createApplication(environment, options = {}) {
 
 export function browserEnvironment(window, libraries) {
   return {window, document: window.document, location: window.location, history: window.history,
-    localStorage: {getItem: key => window.localStorage.getItem(key), setItem: (key, value) => window.localStorage.setItem(key, value)},
+    localStorage: {
+      getItem: key => window.localStorage.getItem(key),
+      setItem: (key, value) => window.localStorage.setItem(key, value),
+      removeItem: key => window.localStorage.removeItem(key),
+    },
     FormData: window.FormData, URLSearchParams: window.URLSearchParams,
     AbortController: window.AbortController, fetch: window.fetch.bind(window),
     setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window),

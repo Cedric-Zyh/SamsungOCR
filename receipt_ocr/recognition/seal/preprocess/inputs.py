@@ -11,6 +11,7 @@ from receipt_ocr.imaging.bands import save_round_seal_type_band
 from receipt_ocr.imaging.unwrap import save_ring_text_band_preview, save_unwrapped_seal
 from receipt_ocr.imaging.ring_border import trace_ellipse_border, save_ring_border_overlay
 from receipt_ocr.imaging.ring_company import save_company_ring_input
+from receipt_ocr.imaging.ring_seam import save_ring_with_blank_seam
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .shapes import classify_shape
 from .round import prepare_round_stamp
@@ -272,6 +273,21 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     )
                     artifact["ring_company_selection"] = selection
                     ring = company_ring
+            # Apply the tested gap gate to the final company strip, after any
+            # serial-number selection. OCR and the displayed preview must use
+            # the same derivative; retain its original for pixel-level review.
+            try:
+                shifted_ring = path("ring-seam")
+                seam = save_ring_with_blank_seam(ring, shifted_ring)
+                artifact["ring_seam_adjustment"] = seam
+                if seam["applied"]:
+                    artifact["unwrapped_before_seam_url"] = add(
+                        "ring-before-seam", ring, "调整起点前的环形展开图（仅供核对）"
+                    )
+                    ring = shifted_ring
+            except Exception as exc:
+                # Optional ordering must not suppress a usable OCR input.
+                artifact["errors"].append({"step": "ring_seam", "message": str(exc)})
             ring_url = add("ring", ring, "圆环公司文字", "ring")
             jobs.append((inputs[-1], ring))
             artifact.update(unwrapped_url=ring_url, unwrapped_text="", unwrap_texts=[])

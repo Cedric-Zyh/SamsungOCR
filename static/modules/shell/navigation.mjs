@@ -7,7 +7,7 @@ export function createNavigation({
   const {$, $$, toast} = ui;
 
   const pageInfo = {
-    'seal-center': ['印章中心', '按签章要求维护标准章，核对每一枚客户印章。'],
+    'seal-center': ['印章中心', '维护标准印章，让每一次核验都有据可依。'],
     records: ['回单管理', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
     quality: ['质量统计', '查看识别准确率、错误分布与样单评测结果。'],

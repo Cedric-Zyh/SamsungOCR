@@ -1,76 +1,50 @@
 import {escapeHtml, filenameParts} from '../core/ui.mjs';
 import {createApiClients} from '../core/api.mjs';
-
-const STATUS_TONE = {
-  awaiting_upload: 'waiting',
-  ready: 'waiting',
-  queued: 'waiting',
-  running: 'running',
-  succeeded: 'success',
-  failed: 'danger',
-  cancelled: 'danger',
-  review: 'review',
-  '确认通过': 'success',
-  '确认不通过': 'danger',
-  '待复核': 'review',
-  '无需复核': 'success'
-};
+import {buildProcessHistory} from './process_history_model.mjs';
+import {renderProcessHistory, executionLabel, formatTime} from './process_history_view.mjs';
 
 export function createProcessHistory({environment, ui, api, services = createApiClients(api)}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, URLSearchParams} = environment;
   const {$, toast} = ui;
-
-  function formatTime(value) {
-    if (!value) return '时间未记录';
-    return String(value).replace('T', ' ').replace(/([+-]\d{2}:\d{2}|Z)$/, '');
-  }
-
-  function tone(event) {
-    return STATUS_TONE[event.status] || STATUS_TONE[event.kind] || '';
-  }
+  let requestSerial = 0;
 
   function render(data) {
     const file = filenameParts(data.filename || '');
     $('#process-history-title').textContent = file.name || '流程记录';
-    const job = data.job || {};
-    const progress = job.progress || {};
-    const timing = job.processing_seconds != null ? `处理 ${job.processing_seconds} 秒` : '';
-    const waiting = job.wait_seconds ? `排队 ${job.wait_seconds} 秒` : '';
-    const current = progress.provider === 'model'
-      ? `${progress.method_label || progress.method || '识别模型'} · ${progress.target || '识别中'}`
-      : progress.provider === 'danzhengtong' ? `单证通 · ${progress.stage || '处理中'}` : '';
-    $('#process-history-subtitle').textContent = [data.current_status ? `当前：${data.current_status}` : '', current, waiting, timing, data.result_id ? `记录 #${data.result_id}` : '']
+    const model = buildProcessHistory(data);
+    $('#process-history-subtitle').textContent = [model.events[0]?.time ? formatTime(model.events[0].time) : '', data.result_id ? `记录 #${data.result_id}` : '']
       .filter(Boolean).join(' · ');
-    const events = data.events || [];
-    $('#process-history-content').innerHTML = events.length ? `
-      <ol class="process-timeline">
-        ${events.map(event => `<li class="process-event" data-tone="${escapeHtml(tone(event))}">
-          <span class="process-dot" aria-hidden="true"></span>
-          <div class="process-event-main">
-            <div class="process-event-head"><strong>${escapeHtml(event.title || '流程节点')}</strong><time>${escapeHtml(formatTime(event.time))}</time></div>
-            ${event.detail ? `<p>${escapeHtml(event.detail)}</p>` : ''}
-          </div>
-        </li>`).join('')}
-      </ol>` : '<div class="empty-state">暂无流程记录</div>';
+    $('#process-history-status').textContent = executionLabel(model.status);
+    $('#process-history-status').dataset.state = model.status;
+    $('#process-history-content').innerHTML = renderProcessHistory(model);
+    $('#process-history-logs-toggle').disabled = !model.events.length;
   }
 
   async function open({jobId = '', resultId = '', filename = ''} = {}) {
     const dialog = $('#process-history-dialog');
     if (!dialog) return;
+    const serial = ++requestSerial;
     const params = new URLSearchParams();
     if (jobId) params.set('job_id', jobId);
     if (resultId) params.set('result_id', resultId);
     $('#process-history-title').textContent = filename ? filenameParts(filename).name : '流程记录';
     $('#process-history-subtitle').textContent = '正在加载…';
+    $('#process-history-status').textContent = '';
+    $('#process-history-logs-toggle').disabled = true;
+    $('#process-history-logs-toggle').setAttribute('aria-expanded', 'false');
+    $('[data-process-log-label]').textContent = '查看完整日志';
     $('#process-history-content').innerHTML = '<div class="empty-state">正在加载流程记录…</div>';
+    $('#process-history-content').scrollTop = 0;
     if (!dialog.open) {
       document.body.classList.add('modal-open');
       dialog.showModal();
     }
     try {
-      render(await services.records.processHistory(params));
+      const data = await services.records.processHistory(params);
+      if (serial === requestSerial && dialog.open) render(data);
     } catch (error) {
+      if (serial !== requestSerial || !dialog.open) return;
       $('#process-history-subtitle').textContent = '加载失败';
       $('#process-history-content').innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
       toast(error.message, 'danger');
@@ -85,7 +59,16 @@ export function createProcessHistory({environment, ui, api, services = createApi
   function initialize() {
     const dialog = $('#process-history-dialog');
     if (!dialog) return;
-    dialog.addEventListener('close', () => document.body.classList.remove('modal-open'));
+    dialog.addEventListener('close', () => { ++requestSerial; document.body.classList.remove('modal-open'); });
+    $('#process-history-logs-toggle').addEventListener('click', () => {
+      const log = $('#process-history-log');
+      if (!log) return;
+      const expanded = log.classList.contains('hidden');
+      log.classList.toggle('hidden', !expanded);
+      $('#process-history-logs-toggle').setAttribute('aria-expanded', String(expanded));
+      $('[data-process-log-label]').textContent = expanded ? '收起完整日志' : '查看完整日志';
+      if (expanded) { log.focus({preventScroll:true}); log.scrollIntoView({block:'start'}); }
+    });
     dialog.addEventListener('click', event => {
       if (event.target.closest('[data-process-close]')) close();
       if (event.target === dialog) close();

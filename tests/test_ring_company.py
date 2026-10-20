@@ -63,7 +63,7 @@ def test_pipeline_reads_company_derivative_and_retains_full_unwrap(monkeypatch, 
 
     class Reader:
         def read_line(self, path, *, provider):
-            assert path.name == 'seal-0-ring-company.png'
+            assert path.name == 'seal-0-ring-seam.png'
             assert cv2.imread(str(path)).shape[1] < _company_strip().shape[1]
             return [TextObservation(raw, .97, 0, 0, 1, 1)]
 
@@ -77,7 +77,11 @@ def test_pipeline_reads_company_derivative_and_retains_full_unwrap(monkeypatch, 
     assert artifact['errors'] == []
     assert texts == [raw, expected]
     assert artifact['unwrapped_full_url'].endswith('/seal-0-ring.png')
-    assert artifact['unwrapped_url'].endswith('/seal-0-ring-company.png')
+    assert artifact['unwrapped_before_seam_url'].endswith('/seal-0-ring-company.png')
+    assert artifact['unwrapped_url'].endswith('/seal-0-ring-seam.png')
     assert artifact['reads'][0]['image_url'] == artifact['unwrapped_url']
+    shifted = cv2.imread(str(tmp_path / 'artifacts/seals/seal-0-ring-seam.png'))
+    company = cv2.imread(str(tmp_path / 'artifacts/seals/seal-0-ring-company.png'))
+    assert np.array_equal(np.roll(shifted, artifact['ring_seam_adjustment']['shift'], axis=1), company)
     full = next(item for item in artifact['inputs'] if item['name'] == 'ring-full')
     assert full['ocr_input'] is False

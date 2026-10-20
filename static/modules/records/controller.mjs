@@ -6,6 +6,7 @@ import {activeFilterEntries, recordReviewScope} from './record_filters.mjs';
 import {createImportCalendar} from '../imports/import_calendar.mjs';
 import {createRecordRow} from './record_row.mjs';
 import {createRecordSelection} from './selection.mjs';
+import {initializeColumnWidths} from './column_widths.mjs';
 
 const FIXED_RECORD_PAGE_SIZE = 25;
 
@@ -251,6 +252,7 @@ export function createRecords({
   }
 
   function initialize() {
+    initializeColumnWidths({environment, ui});
     $('#import-date').value = $('#import-date').defaultValue = localToday();
     calendar.sync();
     let compact = false;
