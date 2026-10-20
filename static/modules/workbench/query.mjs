@@ -33,6 +33,9 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       if ($('#overview-completed')) $('#overview-completed').textContent = '—';
       if ($('#overview-total')) $('#overview-total').textContent = '—';
       if ($('#overview-percent')) $('#overview-percent').textContent = '—';
+      for (const id of ['task-count-succeeded', 'task-count-failed', 'task-count-pending']) {
+        if ($(`#${id}`)) $(`#${id}`).textContent = '—';
+      }
       if ($('#overview-remaining')) $('#overview-remaining').textContent = '正在加载当天数据…';
       if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '加载中';
       if ($('#workbench-type-counts')) $('#workbench-type-counts').innerHTML = '';

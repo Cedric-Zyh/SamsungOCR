@@ -424,6 +424,9 @@ def queue_control():
 def upload_job(job_id):
     return queue_handlers.upload_job(_queue_dependencies(), job_id, wake=_wake_jobs)
 
+def job_image(job_id):
+    return queue_handlers.job_image(_queue_dependencies(), job_id)
+
 
 
 def start_jobs():
@@ -790,6 +793,9 @@ def _source_for_record(item: dict) -> Path | None:
 
 
 
+from .samples import register_sample_routes
+register_sample_routes(app, sys.modules[__name__])
+
 from .routes import register_routes
 
 register_routes(app, {
@@ -813,6 +819,7 @@ register_routes(app, {
     'queue_progress': queue_progress,
     'queue_control': queue_control,
     'upload_job': upload_job,
+    'job_image': job_image,
     'start_jobs': start_jobs,
     'manage_queued': manage_queued,
     'retry_job': retry_job,

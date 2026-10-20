@@ -10,10 +10,12 @@ import tempfile
 from PIL import Image, ImageOps
 
 from receipt_ocr.runtime.execution import timed
+from receipt_ocr.domain.ocr import TextObservation
 from .preprocess.inputs import prepare_inputs
 from .preprocess.number import merge_number_read
 from .ocr.interface import OcrReader
 from .postprocess.ring_text import reorder_ring_text
+from .postprocess.multi_zone import finalize_multi_zone
 
 
 _RECTANGULAR_COMBINE_MIN_CONFIDENCE = 0.75
@@ -196,8 +198,16 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
             for input_image, path in jobs:
                 try:
                     # A ring is one revolution, not three alternative rows.
-                    observations = (reader.read(path, provider=ocr_backend) if input_image["channel"] == "body"
-                                    else reader.read_line(path, provider=ocr_backend))
+                    if "detected_rows" in input_image:
+                        observations = [
+                            TextObservation(row["text"], row["confidence"], row["x"], row["y"],
+                                            row["width"], row["height"])
+                            for row in input_image["detected_rows"]
+                        ]
+                    elif input_image["channel"] == "body" and input_image.get("read_mode") != "line":
+                        observations = reader.read(path, provider=ocr_backend)
+                    else:
+                        observations = reader.read_line(path, provider=ocr_backend)
                     if artifact.get("shape_code") == "rectangle" and input_image["channel"] == "body":
                         body_observations.extend(observations)
                         body_path = path
@@ -209,8 +219,14 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                                 "region_id": artifact["region_id"], "channel": input_image["channel"],
                                 "provider": ocr_backend, "text": row.text, "confidence": row.confidence,
                                 "image_url": input_image["image_url"]}
+                        if artifact.get("rectangular_layout") == "single_detection":
+                            read["rectangle_row_index"] = (
+                                position if "detected_rows" in input_image
+                                else input_image["rectangle_row_index"]
+                            )
                         artifact["reads"].append(read)
-                        texts.append(row.text)
+                        if input_image["channel"] not in {"layout_inner", "layout_lower"}:
+                            texts.append(row.text)
                         channel_texts = [
                             item["text"] for item in artifact["reads"]
                             if item.get("channel") == input_image["channel"]
@@ -227,36 +243,46 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 except Exception as exc:
                     input_image.update(status="failed", error=str(exc))
                     artifact["errors"].append({"step": input_image["channel"], "message": str(exc)})
+            texts.extend(finalize_multi_zone(artifact))
             merge_number_read(artifact)
             if artifact.get("stamp_number_status") == "merged":
                 texts.append(artifact["round_type_band_text"])
             if artifact.get("shape_code") == "rectangle":
-                body_parts = _rectangular_body_text_parts(
-                    body_observations,
-                    body_path=body_path,
-                    reader=reader,
-                    provider=ocr_backend,
-                    directory=directory,
-                    index=index,
-                )
+                fixed_layout = artifact.get("rectangular_layout") == "single_detection"
+                if fixed_layout:
+                    body_parts = ["" for _ in artifact["rectangular_fixed_rows"]]
+                    for read in artifact["reads"]:
+                        if read.get("channel") == "body" and read["confidence"] >= .75:
+                            body_parts[read["rectangle_row_index"]] += read["text"]
+                    artifact["rectangular_row_texts"] = body_parts
+                else:
+                    body_parts = _rectangular_body_text_parts(
+                        body_observations,
+                        body_path=body_path,
+                        reader=reader,
+                        provider=ocr_backend,
+                        directory=directory,
+                        index=index,
+                    )
                 combined = "".join(body_parts)
                 if combined:
                     artifact["rectangular_text"] = combined
                     artifact["rectangular_texts"] = body_parts
                     artifact["rectangular_row_texts"] = body_parts
-                    row_images = sorted(
-                        Path(directory).glob(f"seal-{index}-rectangular-row-*.png"),
-                        key=lambda path: path.name,
-                    )
-                    artifact["rectangular_row_urls"] = [
-                        f"{prefix}/{path.name}" for path in row_images
-                    ]
+                    if not fixed_layout:
+                        row_images = sorted(
+                            Path(directory).glob(f"seal-{index}-rectangular-row-*.png"),
+                            key=lambda path: path.name,
+                        )
+                        artifact["rectangular_row_urls"] = [
+                            f"{prefix}/{path.name}" for path in row_images
+                        ]
                     texts.append(combined)
             ring_reads = [
                 item["text"] for item in artifact["reads"]
                 if item.get("channel") == "ring" and item.get("text")
             ]
-            if ring_reads:
+            if ring_reads and not artifact.get("multi_zone_layout"):
                 raw_ring_text = " | ".join(ring_reads)
                 reorder = reorder_ring_text(
                     ring_reads[0], requirement=requirement, alternatives=ring_reads[1:]

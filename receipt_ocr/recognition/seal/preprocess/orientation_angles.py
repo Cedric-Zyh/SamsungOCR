@@ -7,6 +7,12 @@ from receipt_ocr.recognition.seal.preprocess.orientation_settings import MIN_CON
 from receipt_ocr.providers.orientation import MODEL_NAME
 
 
+def _is_business_acceptance_marker(text):
+    # A complete type row without “章”; do not accept arbitrary company names
+    # containing “业务”, or incomplete readings such as “业务受”.
+    return re.sub(r"\s+", "", str(text or "")) in {"业务受理", "业务受理章"}
+
+
 def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN_CONFIDENCE):
     """Choose a round-stamp rotation from a detected ``用章`` text polygon.
 
@@ -29,6 +35,7 @@ def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN
             "用章" in text
             or "专用" in text
             or ("收货" in text and "章" in text)
+            or _is_business_acceptance_marker(text)
         )
         if not is_stamp_type:
             continue
@@ -211,7 +218,7 @@ def _stamp_type_marker_strength(text):
     text = str(text or "")
     if "收货" in text and "章" in text:
         return 3
-    if ("专用" in text and "章" in text) or "用章" in text:
+    if ("专用" in text and "章" in text) or "用章" in text or _is_business_acceptance_marker(text):
         return 2
     if "章" in text:
         return 1

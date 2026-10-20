@@ -30,6 +30,7 @@ def register_routes(app, handlers, *, before_request) -> None:
         ("/api/queue", "queue_progress", ("GET",)),
         ("/api/queue/control", "queue_control", ("GET", "POST")),
         ("/api/jobs/<job_id>/upload", "upload_job", ("POST",)),
+        ("/api/jobs/<job_id>/image", "job_image", ("GET",)),
         ("/api/jobs/manage", "manage_queued", ("POST",)),
         ("/api/jobs/start", "start_jobs", ("POST",)),
         ("/api/jobs/<job_id>/retry", "retry_job", ("POST",)),

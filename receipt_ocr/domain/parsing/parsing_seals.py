@@ -6,6 +6,7 @@ import re
 from difflib import SequenceMatcher
 
 from .parsing_text import normalize_text
+from .seal_information_fields import compare_information_fields
 
 
 def normalize_seal_text_strict(text: str) -> str:
@@ -88,11 +89,13 @@ def compare_seal_text_strict(
         actual = normalize_seal_text_strict(text)
         if not actual:
             continue
+        field_match = compare_information_fields(expected, actual) if actual != expected else None
         candidates.append({
             "recognized": text,
-            "status": _strict_seal_text_status(expected, actual),
-            "requirement_coverage": _required_character_coverage(expected, actual),
-            "score": SequenceMatcher(None, expected, actual).ratio() if expected else 0.0,
+            "status": "匹配" if field_match else _strict_seal_text_status(expected, actual),
+            "requirement_coverage": 1.0 if field_match else _required_character_coverage(expected, actual),
+            "score": 1.0 if field_match else SequenceMatcher(None, expected, actual).ratio() if expected else 0.0,
+            "field_comparison": field_match,
         })
     selected = max(
         candidates,
@@ -117,12 +120,13 @@ def compare_seal_text_strict(
         "score": round(score, 3),
         "requirement_coverage": round(selected["requirement_coverage"], 6),
         "status": status,
-        "message": message,
+        "message": (selected.get("field_comparison") or {}).get("message", message),
         "confidence": round(score, 3),
         "company_score": round(score, 3),
         "company_conflict": False,
         "reliable": status in {"匹配", "不匹配"},
-        "comparison_policy": "strict_text",
+        "comparison_policy": "strict_information_fields" if selected.get("field_comparison") else "strict_text",
+        "field_comparison": selected.get("field_comparison"),
     }
 
 

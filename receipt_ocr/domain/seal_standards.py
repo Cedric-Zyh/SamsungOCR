@@ -37,7 +37,8 @@ def seal_candidates(result):
         texts.extend([artifact.get("rectangular_text"), ring, center, artifact.get("color_isolated_text"),
                       artifact.get("combined_text")])
         texts.extend(artifact.get("matching_texts") or [])
-        texts.extend(read.get("text") for read in artifact.get("reads") or [] if isinstance(read, dict))
+        texts.extend(read.get("text") for read in artifact.get("reads") or []
+                     if isinstance(read, dict) and read.get("matching") is not False)
         texts.extend(artifact.get("color_isolated_texts") or [])
         # Remote OCR belongs only to the explicitly identified API stamp.
         if artifact.get("source") == "清瞳印章区域":
@@ -53,6 +54,7 @@ def seal_candidates(result):
             "color": str(artifact.get("color") or ""),
             "recognized": comparison["recognized"], "texts": texts,
             "text_status": comparison["status"], "score": comparison["score"],
+            "text_match_message": comparison["message"] if comparison.get("field_comparison") else "",
             "can_register": bool(clean and shape in SHAPES and artifact.get("color") in {"red", "blue"}),
         })
     return candidates

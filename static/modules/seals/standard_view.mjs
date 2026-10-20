@@ -34,6 +34,7 @@ export function candidateCard(candidate, {selected=false, sourceId='', filename=
     <span class="seal-candidate-title">印章 ${Number(candidate.index) + 1}<small>${shapeLabel(candidate.shape)} · ${colorLabel(candidate.color)}</small></span>
     <span class="seal-candidate-text">${escapeHtml(candidate.recognized || '未识别到文字')}</span>
     <small>文字${escapeHtml(status || '未识别')}${candidate.color_status === '不同' ? ' · 颜色不同（仅供核对）' : ''}${filename ? ` · ${escapeHtml(filename)}` : ''}</small>
+    ${candidate.text_match_message ? `<small>${escapeHtml(candidate.text_match_message)}</small>` : ''}
     ${selectable ? '' : '<small>缺少完整章色图或形状信息，请重新识别后加入</small>'}
   </button>`;
 }

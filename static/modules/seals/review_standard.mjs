@@ -11,8 +11,7 @@ export function createReviewStandard({ui, reviewState, services, onSaved, syncRe
       ${standardCard(standard)}
       <p class="seal-standard-note">${standard ? '本单有一枚章的文字、形状同时符合即可。颜色差异仅供核对。' : '首次出现的签章要求需要手动加入标准章。'}</p>
       <div class="seal-candidate-grid">${check.candidates.map(c => candidateCard(c)).join('') || '<p class="empty-state">暂无单枚印章处理图，请重新识别后选择。</p>'}</div>
-      ${mode === 'view' ? '<small>进入复核后可加入或替换标准章。</small>' : selectionControls(!!standard)}`;
-    if (mode === 'view') { $$('[data-seal-candidate]', root).forEach(b => b.disabled = true); return; }
+      ${selectionControls(!!standard)}`;
     let selected = null;
     const selection = $('[data-standard-selection]', root);
     const rotation = $('[data-standard-rotation]', root);
@@ -49,7 +48,8 @@ export function createReviewStandard({ui, reviewState, services, onSaved, syncRe
       syncReviewReadiness?.();
       feedback.textContent = '正在保存标准章…';
       try {
-        const response = await services.sealStandards.save(item.id, {
+        const save = reviewState.sampleView ? services.samples.saveStandard : services.sealStandards.save;
+        const response = await save(item.id, {
           candidate_id:selected.id, standard_revision:standard?.revision || 0,
           review_revision:item.review_revision, rotation:Number(rotation.value) || 0,
         });

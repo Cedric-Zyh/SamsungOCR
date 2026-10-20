@@ -41,6 +41,16 @@ function query(path, params = {}) {
 /** Endpoint and transport details live here; features supply domain inputs. */
 export function createApiClients(api) {
   return {
+    samples: {
+      list: () => api('/api/samples'),
+      run: filenames => api('/api/samples/run', {method: 'POST', json: {filenames}}),
+      history: () => api('/api/samples/history'),
+      statistics: taskId => api(query('/api/samples/statistics', {task_id: taskId})),
+      get: id => api(`/api/samples/results/${encodeURIComponent(id)}`),
+      reviewHistory: id => api(`/api/samples/results/${encodeURIComponent(id)}/review-history`),
+      groundTruth: id => api(`/api/samples/results/${encodeURIComponent(id)}/ground-truth`),
+      saveStandard: (id, payload) => api(`/api/samples/results/${encodeURIComponent(id)}/seal-standard`, {method:'POST', json:payload}),
+    },
     sealStandards: {
       list: search => api(query('/api/seal-standards', {search})),
       sources: id => api(`/api/seal-standards/${encodeURIComponent(id)}/sources`),

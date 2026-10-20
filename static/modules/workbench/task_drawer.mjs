@@ -26,7 +26,8 @@ export function createTaskDrawer({environment, ui, progressState, renderWorkbenc
     } else {
       const jobs = [...(progressState.queueJobs?.values() || [])];
       chooseTab(jobs.some(item => ['running', 'queued'].includes(item.status)) ? 'processing'
-        : jobs.some(item => ['ready', 'awaiting_upload'].includes(item.status)) ? 'ready' : 'failed');
+        : jobs.some(item => ['ready', 'awaiting_upload'].includes(item.status)) ? 'ready'
+        : jobs.some(item => item.status === 'failed') ? 'failed' : 'ready');
     }
     if (!node.open) node.showModal();
     document.body.classList.add('task-drawer-open');
@@ -57,7 +58,10 @@ export function createTaskDrawer({environment, ui, progressState, renderWorkbenc
     if ($('#task-strip-counts')) $('#task-strip-counts').textContent = all.ready + all.queued + all.running + all.failed
       ? `待开始 ${all.ready} · 排队 ${all.queued} · 识别中 ${all.running}${all.failed ? ` · 失败 ${all.failed}` : ''}`
       : all.succeeded ? `识别已结束 · ${all.succeeded} 张` : '导入回单后开始识别';
-    if ($('#task-drawer-day')) $('#task-drawer-day').textContent = `${$('#progress-date').value} · 导入批次`;
+    if ($('#task-drawer-day')) $('#task-drawer-day').textContent = $('#progress-date').value;
+    for (const [id, value] of Object.entries({'task-count-succeeded': current.succeeded, 'task-count-failed': current.failed, 'task-count-pending': current.ready + current.queued + current.running})) {
+      if ($(`#${id}`)) $(`#${id}`).textContent = value.toLocaleString();
+    }
     if ($('#task-batch-title')) $('#task-batch-title').textContent = `${progressState.taskBatch ? '当前批次' : '当天全部批次'} · ${items.length} 张`;
     if ($('#overview-remaining')) $('#overview-remaining').textContent = `成功 ${current.succeeded} · 失败 ${current.failed} · 识别中 ${current.running} · 排队 ${current.queued} · 待开始 ${current.ready}`;
     if ($('#task-failure-notice')) {
@@ -86,8 +90,10 @@ export function createTaskDrawer({environment, ui, progressState, renderWorkbenc
     $('#task-batch-select')?.addEventListener('change', event => { progressState.taskBatch = event.target.value; renderWorkbenchRows(); });
     $$('[data-task-tab]').forEach(button => button.addEventListener('click', () => chooseTab(button.dataset.taskTab)));
     $('#task-show-failures')?.addEventListener('click', () => chooseTab('failed'));
-    $('#task-view-records')?.addEventListener('click', () => { close(); openManagedRecords($('#progress-date').value, progressState.taskBatch || '', $('#task-batch-select').selectedOptions?.[0]?.textContent || '当前导入批次'); });
+    const viewRecords = () => { close(); openManagedRecords($('#progress-date').value, progressState.taskBatch || '', $('#task-batch-select').selectedOptions?.[0]?.textContent || '当前导入批次'); };
+    $('#task-view-records')?.addEventListener('click', viewRecords);
     document.addEventListener('click', event => {
+      if (event.target.closest('[data-task-view-records]')) viewRecords();
       const button = event.target.closest('[data-open-task-job]');
       if (button) open(button.dataset.openTaskJob);
     });

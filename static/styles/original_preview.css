@@ -1,0 +1,19 @@
+/* Reuse the review image controls without entering the recognition results view. */
+.original-preview-dialog { width:min(1080px,calc(100vw - 32px)); max-width:none; height:calc(100dvh - 48px); max-height:900px; padding:0; border:1px solid var(--archive-line); border-radius:2px; background:var(--archive-paper); color:var(--archive-ink); overflow:hidden; }
+.original-preview-dialog[open] { display:flex; flex-direction:column; }
+.original-preview-dialog::backdrop { background:#30352d66; backdrop-filter:blur(2px); }
+.original-preview-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 24px; border-bottom:1px solid var(--archive-line); }
+.original-preview-header>div { min-width:0; }
+.original-preview-header h2 { margin:0; font-family:inherit; font-size:18px; font-weight:600; line-height:1.5; }
+.original-preview-header p { margin:5px 0 0; font-size:13px; color:var(--archive-muted); overflow-wrap:anywhere; }
+.original-preview-header button { flex:none; }
+#original-preview-content { flex:1; min-height:0; }
+.original-preview-dialog .review-preview { display:flex; flex-direction:column; height:100%; min-width:0; padding:0; background:#dfdcd5; }
+.original-preview-dialog .image-toolbar { flex:none; background:var(--archive-paper); border-bottom:1px solid var(--archive-line); }
+.original-preview-dialog .image-source-picker { font-size:13px; color:var(--archive-text); }
+.original-preview-dialog .image-viewport { flex:1; min-height:0; height:auto; overflow:auto; padding:16px; overscroll-behavior:contain; }
+.original-preview-dialog [data-preview] { display:block; width:100%; max-width:none; max-height:none; height:auto; background:#fff; border:1px solid var(--archive-line); }
+.original-preview-dialog .image-caption { flex:none; margin:0; padding:10px 16px; background:var(--archive-paper); color:var(--archive-muted); font-size:12px; }
+.original-preview-dialog .image-interaction-hint { display:none; }
+[data-page="records"] .processing-row-actions { flex-wrap:wrap; gap:2px 4px; }
+[data-page="records"] .records-table:not(.has-custom-column-widths) col.action-col { width:140px; }

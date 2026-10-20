@@ -77,6 +77,42 @@ def test_required_date_is_not_used_to_complete_a_partial_ocr_read():
     assert decision.actual_date is None
 
 
+@pytest.mark.parametrize("required, observations, expected", [
+    ("2025-08-31", [("2025年8月3日", .9794), ("2025年8月31日", .958)], "2025-08-31"),
+    # Matching is a priority, not a small score bonus.
+    ("2025-08-31", [("2025年8月3日", .99), ("2025年8月31日", .4)], "2025-08-31"),
+    ("2025-08-30", [("2025年8月3日", .9794), ("2025年8月31日", .958)], "2025-08-03"),
+    ("", [("2025年8月3日", .8), ("2025年8月31日", .9)], "2025-08-31"),
+    ("未识别", [("2025年8月3日", .8), ("2025年8月31日", .9)], "2025-08-31"),
+    # Repeated lower-confidence transforms must not outweigh confidence.
+    ("2025-08-30", [("2025年8月3日", .8)] * 4 + [("2025年8月31日", .9)], "2025-08-31"),
+    # A partial apparent match cannot borrow the business year/month.
+    ("2025-08-31", [("202年8月31日", .99), ("2025年8月3日", .8)], "2025-08-03"),
+])
+def test_date_selection_prefers_required_match_then_confidence(required, observations, expected):
+    rows = [TextObservation(text, score, .8, .55, .1, .04)
+            for text, score in observations]
+    evidence = DateStageEvidence(
+        fields={"要求到货": required}, combined_rows=rows, date_rows=rows,
+        date_artifacts=[], has_receipt_footer=True, anchor_y=.47,
+    )
+    decision = DateDecision()
+    _select_complete_dates(evidence, decision, DateConsensus())
+    assert decision.actual_date.isoformat() == expected
+
+
+def test_required_match_must_be_in_an_eligible_date_region():
+    valid = TextObservation("2025年8月3日", .8, .8, .55, .1, .04)
+    outside = TextObservation("2025年8月31日", .99, .1, .1, .1, .04)
+    evidence = DateStageEvidence(
+        fields={"要求到货": "2025-08-31"}, combined_rows=[outside, valid],
+        date_rows=[], date_artifacts=[], has_receipt_footer=True, anchor_y=.47,
+    )
+    decision = DateDecision()
+    _select_complete_dates(evidence, decision, DateConsensus())
+    assert decision.date_row is valid
+
+
 def test_region_ocr_never_routes_to_the_retired_secondary_backend(tmp_path):
     calls = []
 

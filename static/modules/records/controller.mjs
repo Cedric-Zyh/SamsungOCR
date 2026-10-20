@@ -7,6 +7,7 @@ import {createImportCalendar} from '../imports/import_calendar.mjs';
 import {createRecordRow} from './record_row.mjs';
 import {createRecordSelection} from './selection.mjs';
 import {initializeColumnWidths} from './column_widths.mjs';
+import {createOriginalPreview} from './original_preview.mjs';
 
 const FIXED_RECORD_PAGE_SIZE = 25;
 
@@ -18,6 +19,7 @@ export function createRecords({
   const {document, window, location, FormData, URLSearchParams, AbortController, setTimeout, clearTimeout} = environment;
   const {$, $$, toast} = ui;
   const recordRow = createRecordRow({ReceiptWorkbench, recordsState});
+  const originalPreview = createOriginalPreview({environment, ui});
   let recordResetTimer;
   const searchState = {timer: null, composing: false};
   let tablePopover, tablePopoverAnchor;
@@ -252,6 +254,7 @@ export function createRecords({
   }
 
   function initialize() {
+    originalPreview.initialize();
     initializeColumnWidths({environment, ui});
     $('#import-date').value = $('#import-date').defaultValue = localToday();
     calendar.sync();
@@ -315,6 +318,12 @@ export function createRecords({
     window.addEventListener('hashchange', () => closeTablePopover());
     document.addEventListener('scroll', event => { if (tablePopover && !tablePopover.contains(event.target)) closeTablePopover(); }, true);
     $('#records-body').addEventListener('click', event => {
+      const preview = event.target.closest('[data-preview-job]');
+      if (preview && !preview.disabled) {
+        const item = recordsState.records.find(row => row.processing_job?.id === preview.dataset.previewJob);
+        if (item) originalPreview.open(item, preview);
+        return;
+      }
       if (event.target.closest('[data-record-retry]')) return loadRecords();
       if (event.target.closest('[data-clear-record-filters]')) return clearAdditionalFilters();
       if (event.target.closest('[data-record-date]')) {
@@ -381,5 +390,5 @@ export function createRecords({
 
   }
 
-  return {initialize, loadRecords, recordRow, toggleSelected, selectCurrentPage, updateSelectionToolbar, bulkReview, deleteRecords, setImportDate, openDayRecords, changeImportDate, scheduleRecordSearch, getReviewScope, startRecordsReview, removeFilter, renderFilterChips, setDensity, clearAdditionalFilters, setPageSize};
+  return {initialize, openOriginalPreview: originalPreview.open, loadRecords, recordRow, toggleSelected, selectCurrentPage, updateSelectionToolbar, bulkReview, deleteRecords, setImportDate, openDayRecords, changeImportDate, scheduleRecordSearch, getReviewScope, startRecordsReview, removeFilter, renderFilterChips, setDensity, clearAdditionalFilters, setPageSize};
 }

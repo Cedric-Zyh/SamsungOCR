@@ -39,6 +39,7 @@ export function createSealCenter({ui, services}) {
     $$('[data-standard-id]', node).forEach(b => { const active=Number(b.dataset.standardId)===id; b.classList.toggle('is-selected',active); b.setAttribute('aria-pressed',String(active)); });
     const standard = standards.find(s => s.id === id); if (!standard) return;
     detail.innerHTML = standardDetail(standard);
+    detail.scrollTop = 0;
     $('[data-load-standard-sources]', detail).addEventListener('click', async event => {
       const trigger = event.currentTarget;
       trigger.disabled=true; trigger.textContent='正在加载…';

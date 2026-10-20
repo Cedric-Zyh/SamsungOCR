@@ -1,12 +1,13 @@
 import {localToday} from '../core/ui.mjs';
 export function createNavigation({
   environment, ui, navigationState, recordsState, reportState, reviewState, canLeaveReview, dismissReview,
-  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadReport, loadSealCenter
+  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadReport, loadSealCenter, loadSamples
 }) {
   const {document, window, location, history} = environment;
   const {$, $$, toast} = ui;
 
   const pageInfo = {
+    samples: ['样单中心', '按客户公司管理样单，预览原图并运行测试。'],
     'seal-center': ['印章中心', '维护标准印章，让每一次核验都有据可依。'],
     records: ['回单管理', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
@@ -23,16 +24,16 @@ export function createNavigation({
       navigationState.reviewReturn = {
         focus: document.activeElement,
         recordId: document.activeElement?.closest('[data-open-review]')?.dataset.openReview,
-        scroll: reviewState.reviewOrigin?.hash === '#records' ? reviewState.reviewOrigin.scroll : 0,
+        scroll: reviewState.reviewOrigin?.scroll || 0,
         tableTop: table?.scrollTop || 0, tableLeft: table?.scrollLeft || 0,
       };
-      reviewState.reviewOrigin = {hash: '#records', scroll: navigationState.reviewReturn.scroll};
+      reviewState.reviewOrigin = {hash: reviewState.sampleView ? '#samples' : '#records', scroll: navigationState.reviewReturn.scroll};
       const toastNode = $('#toast');
       navigationState.toastParent = toastNode?.parentElement;
       if (toastNode) dialog.append(toastNode);
       document.body.classList.add('review-dialog-open');
       dialog.showModal();
-      if (!recordsState.recordsLoaded) loadRecords().catch(error => toast(error.message, 'danger'));
+      if (!reviewState.sampleView && !recordsState.recordsLoaded) loadRecords().catch(error => toast(error.message, 'danger'));
     } else if (page !== 'review' && dialog.open) {
       dismissReview?.();
       dialog.close();
@@ -47,13 +48,17 @@ export function createNavigation({
         if (focus?.isConnected && focus.closest('[data-page="records"]')) focus.focus({preventScroll: true});
         else $('#record-search')?.focus({preventScroll: true});
       }
+      if (saved && page === 'samples') {
+        navigationState.restoreScroll = saved.scroll;
+        if (saved.focus?.isConnected) saved.focus.focus({preventScroll: true});
+      }
       navigationState.reviewReturn = null;
     }
   }
   function showPage(page) {
     if (!pageInfo[page]) page = 'records';
     if ($('#import-dialog').open) $('#import-dialog').close();
-    const backgroundPage = page === 'review' ? 'records' : page;
+    const backgroundPage = page === 'review' ? (reviewState.sampleView ? 'samples' : 'records') : page;
     $$('[data-page]').forEach(section => section.classList.toggle('hidden', section.dataset.page !== page && section.dataset.page !== backgroundPage));
     $$('[data-nav]').forEach(link => {
       const active = link.dataset.nav === backgroundPage;
@@ -62,7 +67,7 @@ export function createNavigation({
     });
     $('#page-title').textContent = pageInfo[backgroundPage][0];
     $('#page-subtitle').textContent = pageInfo[backgroundPage][1];
-    document.title = `${pageInfo[page][0]} · 三星回单核验台`;
+    document.title = `${page === 'review' && reviewState.sampleView ? '查看样单' : pageInfo[page][0]} · 三星回单核验台`;
     document.body.dataset.activePage = page;
     syncReviewDialog(page);
     const reviewEntry = $('#open-batch-review');
@@ -83,17 +88,18 @@ export function createNavigation({
       route = 'records';
       history.replaceState(null, '', '#records');
     }
-    if (reviewState.current && !/^(review|view)\/\d+$/.test(route) && !canLeaveReview()) { history.replaceState(null, '', `#${reviewState.reviewMode || 'review'}/${reviewState.current.id}`); return; }
+    if (reviewState.current && !/^(review|view|sample-view)\/\d+$/.test(route) && !canLeaveReview()) { history.replaceState(null, '', `#${reviewState.sampleView ? 'sample-view' : reviewState.reviewMode || 'review'}/${reviewState.current.id}`); return; }
     if (route === 'import') { showPage('records'); showImportDialog(); return; }
-    if (/^(review|view)\/\d+$/.test(route)) {
+    if (/^(review|view|sample-view)\/\d+$/.test(route)) {
       const id = Number(route.split('/')[1]);
-      const mode = route.startsWith('view/') ? 'view' : 'review';
-      if (reviewState.current?.id === id && reviewState.reviewMode === mode) showPage('review');
-      else openReview(id, {mode}).catch(error => {
-        if (location.hash !== `#${mode}/${id}`) return;
+      const sample = route.startsWith('sample-view/');
+      const mode = sample || route.startsWith('view/') ? 'view' : 'review';
+      if (reviewState.current?.id === id && reviewState.reviewMode === mode && !!reviewState.sampleView === sample) showPage('review');
+      else openReview(id, {mode, sample}).catch(error => {
+        if (location.hash !== `#${sample ? 'sample-view' : mode}/${id}`) return;
         toast(error.message, 'danger');
-        if (reviewState.current) history.replaceState(null, '', `#${reviewState.reviewMode || 'review'}/${reviewState.current.id}`);
-        else location.hash = 'records';
+        if (reviewState.current) history.replaceState(null, '', `#${reviewState.sampleView ? 'sample-view' : reviewState.reviewMode || 'review'}/${reviewState.current.id}`);
+        else location.hash = sample ? 'samples' : 'records';
       });
     } else {
       if (route === 'review' && !reviewState.current) showReviewEmpty?.({loading: true});
@@ -108,6 +114,7 @@ export function createNavigation({
         loadRecords({background: !!recordsState.recordsLoaded}).catch(error => toast(error.message, 'danger'));
         loadDailyResults({refreshRecords: false}).catch(error => toast(error.message, 'danger'));
       }
+      if (route === 'samples' && loadSamples) loadSamples();
       if (route === 'seal-center' && loadSealCenter) loadSealCenter().catch(error => toast(error.message, 'danger'));
       if (route === 'quality' && (reportState.reportStale || !reportState.reportLoadedAt || Date.now() - reportState.reportLoadedAt >= 30000)) loadReport().catch(error => toast(error.message, 'danger'));
     }

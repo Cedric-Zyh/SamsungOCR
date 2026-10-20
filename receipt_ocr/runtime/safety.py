@@ -37,18 +37,17 @@ def _apply_single_paddle_safety(
     seal_check["confidence"] = round(
         min(0.68, float(seal_check.get("confidence") or 0)), 3
     )
-    # 印章沿用严格三态比对：忽略空格及中英文括号后，完整一致就是
-    # “匹配”。这种结果不需要再被单模型安全规则降级；安全规则仍然
-    # 约束部分匹配、漏字、错字和未识别结果。
-    from ..domain.parsing.parsing_seals import normalize_seal_text_strict
+    # Recheck original evidence, including required fields on information seals;
+    # never trust a stored match flag or field breakdown by itself.
+    from ..domain.parsing.parsing_seals import compare_seal_text_strict
 
-    expected_seal = normalize_seal_text_strict(seal_check.get("requirement") or "")
-    actual_seal = normalize_seal_text_strict(seal_check.get("recognized") or "")
+    verified_seal = compare_seal_text_strict(
+        seal_check.get("requirement") or "", [seal_check.get("recognized") or ""]
+    )
     seal_is_strict_exact_match = (
-        seal_check.get("comparison_policy") == "strict_text"
+        seal_check.get("comparison_policy") in {"strict_text", "strict_information_fields"}
         and seal_check.get("status") == "匹配"
-        and bool(expected_seal)
-        and expected_seal == actual_seal
+        and verified_seal["status"] == "匹配"
         and not seal_check.get("simulated")
     )
     seal_check["reliable"] = seal_is_strict_exact_match

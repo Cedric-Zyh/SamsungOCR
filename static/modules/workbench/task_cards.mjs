@@ -2,6 +2,16 @@ import {escapeHtml} from '../core/ui.mjs';
 import {workbenchAttention} from './presentation.mjs';
 import {selectionKey, overviewStatus} from './overview.mjs';
 
+export function renderTaskEmpty(items, {filters, search = '', ReceiptWorkbench}) {
+  const hasResults = items.some(item => overviewStatus(item, ReceiptWorkbench) === 'completed');
+  const complete = items.length > 0 && items.every(item => overviewStatus(item, ReceiptWorkbench) === 'completed');
+  const label = filters.includes('failed') ? '异常' : filters.length === 1 && filters[0] === 'ready' ? '待开始' : '进行中';
+  const title = !items.length ? '这一天还没有回单' : search?.trim() ? '未找到匹配的任务' : `暂无${label}任务`;
+  const description = !items.length ? '选择其他日期，或导入回单开始识别。' : search?.trim() ? '试试其他关键词，或切换任务状态。'
+    : complete ? '本批次已处理完成，可前往回单列表查看结果。' : '可切换任务状态，查看其他待处理任务。';
+  return `<div class="task-empty"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="9" y="7" width="29" height="37" rx="4"/><rect x="24" y="18" width="29" height="37" rx="4"/><path d="M31 28h14M31 35h9"/>${complete ? '<circle cx="50" cy="50" r="11"/><path class="task-empty-check" d="m45 50 4 4 6-7"/>' : ''}</svg><strong>${title}</strong><p>${description}</p>${hasResults ? '<button type="button" class="text-button" data-task-view-records>查看识别结果 <span aria-hidden="true">→</span></button>' : ''}</div>`;
+}
+
 export function renderTaskCard(item, {ReceiptWorkbench, importsState, progressState, selected, deleting, selectable}) {
   const job = item.job, status = overviewStatus(item, ReceiptWorkbench), key = selectionKey(item);
   const uploading = importsState.uploadingJobs?.has(job?.id);

@@ -164,10 +164,6 @@ export function createImports({
       importFiles(ReceiptImport.collectDrop(event.dataTransfer, count => { $('#folder-scan-status').textContent = `正在读取文件夹及子文件夹，已找到 ${count} 个文件…`; }), '拖拽批量识别');
     });
 
-    const sampleNames = $$('.sample-button[data-sample]').map(button => button.dataset.sample);
-    $$('.sample-button[data-sample]').forEach(button => button.addEventListener('click', () => startBatch([], [button.dataset.sample], `样单 ${button.dataset.sample}`)));
-    $('#run-all-samples').addEventListener('click', () => startBatch([], sampleNames, `现有 ${sampleNames.length} 张标注样单端到端测试`));
-
     $('#bulk-retry').addEventListener('click', bulkRetry);
 
     window.addEventListener('beforeunload', event => {

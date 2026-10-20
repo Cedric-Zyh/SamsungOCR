@@ -264,3 +264,88 @@ def test_reference_changes_refresh_pending_list_summaries_but_preserve_confirmed
     assert db.get_result(old)['error_type']=='图像质量问题'
     assert db.get_result(confirmed)['overall']=='通过'
     assert db.get_result(confirmed)['review_status']=='确认通过'
+
+
+def sample_standard_source():
+    from receipt_ocr.web.samples import SampleCenter, sample_urls
+    service = SampleCenter(web)
+    folder = service.artifact_dir / "test"
+    folder.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (40, 24), "blue").save(folder / "0-oriented.png")
+    result_id = service.database.insert_result(
+        filename="sample-only.png", stored_name="sample:sample-only.png",
+        preview_name="", task_id="", result=sample_urls(receipt(artifact(color="blue"))))
+    return service, result_id
+
+
+def test_view_sample_can_register_shared_standard_without_using_same_id_production_record(app_store):
+    db, client, add, _ = app_store
+    production_id = add(artifact(), requirement="其他正式回单公司")
+    before = db.get_result(production_id)
+    service, sample_id = sample_standard_source()
+    assert sample_id == production_id
+    sample_before = service.database.get_result(sample_id)
+    detail = client.get(f"/api/samples/results/{sample_id}").get_json()
+    response = client.post(f"/api/samples/results/{sample_id}/seal-standard", json={
+        "candidate_id": detail["seal_standard_check"]["candidates"][0]["id"],
+        "review_revision": detail["review_revision"], "standard_revision": 0, "rotation": 90})
+    assert response.status_code == 200, response.get_json()
+    saved = response.get_json()
+    assert saved["standard"]["source_kind"] == "sample"
+    assert saved["standard"]["source_filename"] == "sample-only.png"
+    assert saved["result"]["sample_center"] is True
+    assert saved["result"]["seal_standard_check"]["status"] == "matched"
+    assert saved["result"]["review_revision"] != detail["review_revision"]
+    assert db.get_result(production_id) == before
+    assert db.history(production_id) == []
+    assert service.database.get_result(sample_id) == sample_before
+    assert len(db.list_results()) == 1
+    assert len(db.list_seal_standards()) == 1
+    image = client.get(saved["standard"]["image_url"])
+    assert image.status_code == 200
+    from io import BytesIO
+    with Image.open(BytesIO(image.data)) as stamp:
+        assert stamp.size == (24, 40)
+        assert stamp.getpixel((0, 0)) == (0, 0, 255)
+    reopened = client.get(f"/api/samples/results/{sample_id}").get_json()
+    assert reopened["seal_standard_check"]["standard"]["id"] == saved["standard"]["id"]
+
+
+def test_sample_standard_replacement_rejects_stale_views_and_preserves_source_identity(app_store):
+    db, client, add, _ = app_store
+    saved = register(client, add(artifact())).get_json()["standard"]
+    assert saved["source_kind"] == "receipt"
+    _, sample_id = sample_standard_source()
+    detail = client.get(f"/api/samples/results/{sample_id}").get_json()
+    payload = {"candidate_id": detail["seal_standard_check"]["candidates"][0]["id"],
+               "review_revision": detail["review_revision"], "standard_revision": saved["revision"]}
+    endpoint = f"/api/samples/results/{sample_id}/seal-standard"
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 200, response.get_json()
+    replacement = response.get_json()["standard"]
+    assert replacement["id"] == saved["id"]
+    assert replacement["revision"] == 2
+    assert replacement["source_kind"] == "sample"
+    assert client.post(endpoint, json=payload).status_code == 409
+    assert db.get_seal_standard(REQUIREMENT)["revision"] == 2
+    assert db.history(sample_id)[0]["action"] == "标准章更新后重新核对"
+
+
+def test_sample_registration_rejects_missing_artifacts_and_path_escape(app_store):
+    db, client, _, _ = app_store
+    service, sample_id = sample_standard_source()
+    (service.artifact_dir / "test" / "0-oriented.png").unlink()
+    detail = client.get(f"/api/samples/results/{sample_id}").get_json()
+    endpoint = f"/api/samples/results/{sample_id}/seal-standard"
+    payload = {"candidate_id": detail["seal_standard_check"]["candidates"][0]["id"],
+               "review_revision": detail["review_revision"], "standard_revision": 0}
+    assert client.post(endpoint, json=payload).status_code == 400
+    escaping = artifact()
+    escaping["color_isolated_oriented_url"] = "/files/samples/artifacts/../../outside.png"
+    other = service.database.insert_result(filename="escape.png", stored_name="sample:escape.png",
+        preview_name="", task_id="", result=receipt(escaping))
+    detail = client.get(f"/api/samples/results/{other}").get_json()
+    payload.update(candidate_id=detail["seal_standard_check"]["candidates"][0]["id"],
+                   review_revision=detail["review_revision"])
+    assert client.post(f"/api/samples/results/{other}/seal-standard", json=payload).status_code == 400
+    assert db.list_seal_standards() == []

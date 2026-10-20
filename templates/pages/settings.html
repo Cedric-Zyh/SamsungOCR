@@ -173,16 +173,6 @@
           </div>
         </details>
       </div>
-      <details class="settings-card settings-disclosure settings-samples">
-        <summary><span><strong>样单测试</strong><small>{{ samples|length }} 张已标注样单 · 使用当前配置</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
-        <div class="settings-disclosure-body">
-{% if samples %}
-          <div class="settings-sample-heading"><p>选一张样单快速检查，或运行全部样单。</p><button type="button" class="sample-button accent" id="run-all-samples">测试全部 {{ samples|length }} 张</button></div>
-          <div class="sample-buttons">{% for sample in samples %}<button type="button" class="sample-button" data-sample="{{ sample }}">{{ sample.split('.')[0] }}</button>{% endfor %}</div>
-{% else %}
-          <div class="settings-sample-heading"><p>暂无可用的已标注样单，可先导入回单进行测试。</p><button type="button" class="sample-button" id="run-all-samples" disabled>暂无样单</button></div>
-{% endif %}
-        </div>
-      </details>
+      <div class="settings-card settings-sample-heading"><p>样单已按客户公司归入独立的样单中心。</p><a class="secondary-button" href="#samples">打开样单中心</a></div>
       <details class="settings-runtime"><summary>运行信息</summary><div><span>运行环境<strong>{{ python_path }}</strong></span><span>数据存储<strong>storage/results.db</strong></span></div></details>
     </section>

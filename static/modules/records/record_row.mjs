@@ -28,10 +28,9 @@ export function createRecordRow({ReceiptWorkbench, recordsState}) {
     const reviewDetail = item.review_status && !redundantReview ? `<small>${escapeHtml(item.review_status)}</small>` : '';
     const verdictTitle = providerFailed ? verdict : [verdict, item.review_status].filter(Boolean).join(' · ');
     const errors = [...new Set([item.error_message, ...providerErrors(item)].filter(Boolean))];
-    const needsReview = item.review_status === '待复核';
     const primaryAction = providerFailed
       ? `<button type="button" class="mini-button row-review row-primary" data-retry-row="${item.id}">重试</button>`
-      : `<button type="button" class="mini-button row-review ${needsReview ? 'row-primary' : 'row-secondary'}" data-open-review="${item.id}" data-review-mode="${needsReview ? 'review' : 'view'}">${needsReview ? '复核' : '查看'}</button>`;
+      : `<button type="button" class="mini-button row-review row-secondary" data-open-review="${item.id}" data-review-mode="view">查看</button>`;
     return `<tr class="${providerFailed ? 'failed-row' : item.review_status === '待复核' ? 'pending-row' : ''}">
       <td><input class="record-select" type="checkbox" value="${item.id}" ${recordsState.selected.has(Number(item.id)) ? 'checked' : ''} aria-label="选择订单 ${escapeHtml(orderLabel)}"></td>
       <td class="file-cell" title="${escapeHtml(orderLabel)}"><button type="button" class="record-file-link" data-open-review="${item.id}" data-review-mode="view" aria-label="查看订单 ${escapeHtml(orderLabel)}"><strong>${escapeHtml(orderLabel)}</strong></button><small class="record-customer" title="${escapeHtml(fields['客户名称'] || '')}">${escapeHtml(fields['客户名称'] || '—')}</small>${pageInfo ? `<small class="record-file-meta">${escapeHtml(pageInfo)}</small>` : ''}</td>
@@ -54,7 +53,7 @@ export function createRecordRow({ReceiptWorkbench, recordsState}) {
       <td class="file-cell"><strong title="${escapeHtml(item.filename || name)}">${escapeHtml(name)}</strong><small class="record-customer" title="${escapeHtml(fields['客户名称'] || pending)}">${escapeHtml(fields['客户名称'] || pending)}</small></td>
       <td class="processing-placeholder">${pending}</td><td class="processing-placeholder">${pending}</td><td class="processing-placeholder">${pending}</td>
       <td class="verdict-cell"><span class="pill ${status === 'failed' ? 'danger' : 'pending'}">${label}</span>${status === 'failed' ? `<small class="error-text">${escapeHtml(job.error_message || '识别未完成，请重试')}</small>` : item.id ? '<small>上次结果暂不作为当前结论</small>' : ''}</td>
-      <td><button type="button" class="mini-button row-primary" ${attribute}="${escapeHtml(job.id)}">${action}</button></td></tr>`;
+      <td><div class="row-actions processing-row-actions"><button type="button" class="mini-button row-secondary" data-preview-job="${escapeHtml(job.id)}" ${status === 'awaiting_upload' ? 'disabled title="图片尚未上传，请先补传图片"' : ''}>预览</button><button type="button" class="mini-button row-primary" ${attribute}="${escapeHtml(job.id)}">${action}</button></div></td></tr>`;
   }
 
   return recordRow;

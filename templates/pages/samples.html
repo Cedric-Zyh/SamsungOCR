@@ -1,0 +1,46 @@
+<section data-page="samples" class="sample-center-page hidden">
+  <div class="sample-center-heading"><p>按回单上的客户名称归类 · 测试记录独立保存</p><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-history-open">测试记录</button><button type="button" class="secondary-button" id="sample-statistics-open">统计结果</button></div></div>
+  <div class="sample-center-layout">
+    <aside class="sample-companies" aria-label="客户公司目录">
+      <header><h2>客户公司</h2><span id="sample-company-count">—</span></header>
+      <input id="sample-company-search" type="search" placeholder="搜索公司名称" aria-label="搜索客户公司">
+      <div id="sample-company-list" class="sample-company-list"></div>
+    </aside>
+    <div class="sample-library">
+      <header class="sample-library-heading"><div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p></div><button type="button" class="primary-button" id="sample-run-company" disabled>运行全部样单</button></header>
+      <div class="sample-tools">
+        <input type="search" id="sample-search" placeholder="搜索样单编号" aria-label="搜索样单编号">
+        <button type="button" class="secondary-button" id="sample-run-selected" disabled>运行所选</button>
+        <label><input type="checkbox" id="sample-select-page"> 本页</label>
+        <button type="button" class="text-button" id="sample-clear-selection" disabled>已选 0 张</button>
+      </div>
+      <div class="sample-tabs" role="group" aria-label="按测试状态筛选">
+        <button type="button" data-sample-status="" class="active" aria-pressed="true">全部</button>
+        <button type="button" data-sample-status="未测试" aria-pressed="false">未测试</button>
+        <button type="button" data-sample-status="测试中" aria-pressed="false">测试中</button>
+        <button type="button" data-sample-status="已完成" aria-pressed="false">已完成</button>
+        <button type="button" data-sample-status="运行失败" aria-pressed="false">运行失败</button>
+      </div>
+      <p id="sample-feedback" role="status" class="sample-feedback"></p>
+      <div id="sample-grid" class="sample-grid" aria-label="样单卡片"></div>
+      <nav class="sample-pagination" aria-label="样单分页"><span id="sample-page-info"></span><div><button type="button" class="mini-button" id="sample-prev">上一页</button><span id="sample-page-number"></span><button type="button" class="mini-button" id="sample-next">下一页</button></div></nav>
+      <p class="sample-footnote">点击预览或测试结果，打开样单查看窗口。</p>
+    </div>
+  </div>
+</section>
+<dialog id="sample-history-dialog" class="workspace-dialog sample-history-dialog" aria-labelledby="sample-history-title">
+  <header><div><h2 id="sample-history-title">样单测试记录</h2><p>最近 200 次单张测试</p></div><div><button type="button" class="secondary-button" id="sample-history-refresh">刷新</button> <button type="button" class="secondary-button" data-dismiss-dialog>关闭 ×</button></div></header>
+  <div id="sample-history-body" aria-live="polite"></div>
+</dialog>
+<dialog id="sample-statistics-dialog" class="workspace-dialog sample-statistics-dialog" aria-labelledby="sample-statistics-title">
+  <header class="sample-statistics-heading"><div><h2 id="sample-statistics-title">样单统计结果</h2><p>对照人工标注，分别查看日期和各路印章结果</p></div><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-statistics-refresh">刷新</button><button type="button" class="secondary-button" data-dismiss-dialog autofocus>关闭 ×</button></div></header>
+  <div class="sample-statistics-scope">
+    <label>客户公司 <select id="sample-statistics-company"><option value="">全部公司</option></select></label>
+    <label>统计范围 <select id="sample-statistics-batch"><option value="">每张样单最近一次测试</option></select></label>
+    <p id="sample-statistics-summary" aria-live="polite"></p>
+  </div>
+  <div class="sample-tabs" role="group" aria-label="统计类型"><button type="button" data-stat-tab="date" aria-pressed="false">日期结果</button><button type="button" data-stat-tab="seal" class="active" aria-pressed="true">印章结果</button></div>
+  <p id="sample-statistics-feedback" role="alert"></p>
+  <div id="sample-statistics-body"></div>
+  <footer class="sample-statistics-footer"><p id="sample-statistics-note"></p><nav aria-label="统计分页"><span id="sample-statistics-page"></span><button type="button" class="mini-button" id="sample-statistics-prev" aria-label="上一页统计结果" disabled>‹</button><button type="button" class="mini-button" id="sample-statistics-next" aria-label="下一页统计结果" disabled>›</button></nav></footer>
+</dialog>

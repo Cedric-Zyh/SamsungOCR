@@ -18,10 +18,14 @@ class SealStandardDependencies:
     project_result: object
     review_revision: object
     with_review_revision: object
+    source_database: object = None
+    source_project_result: object = None
+    artifact_url_prefix: str = "/files/artifacts/"
+    source_kind: str = "receipt"
 
 
 def _image_path(ctx, url):
-    prefix = "/files/artifacts/"
+    prefix = ctx.artifact_url_prefix
     if not url.startswith(prefix):
         raise ValueError("该印章缺少可用的转正清理图，请重新识别后加入")
     root = ctx.artifact_dir.resolve()
@@ -61,11 +65,14 @@ def register_standard(ctx, result_id):
         return jsonify(error="旋转角度须在 -180 到 180 度之间"), 400
     destination = None
     committed = False
+    source_database = ctx.source_database if ctx.source_database is not None else ctx.database
+    project_source = ctx.source_project_result or ctx.project_result
     try:
         with ctx.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            stored = ctx.database.get_result(result_id, _connection=connection)
-            current = ctx.project_result(stored, _connection=connection)
+            stored = source_database.get_result(result_id,
+                _connection=connection if source_database is ctx.database else None)
+            current = project_source(stored, _connection=connection)
             if payload.get("review_revision") != ctx.review_revision(current):
                 return jsonify(error="回单或标准章已更新，请刷新后重新选择", code="review_revision_conflict"), 409
             requirement = str((current.get("fields") or {}).get("签章要求") or "").strip()
@@ -91,6 +98,7 @@ def register_standard(ctx, result_id):
                 "requirement": requirement, "image_name": destination.name,
                 "recognized": candidate["recognized"], "shape": candidate["shape"], "color": candidate["color"],
                 "source_result_id": result_id, "source_filename": current["filename"], "candidate_id": candidate["id"],
+                "source_kind": ctx.source_kind,
             }, expected_revision=expected_revision, _connection=connection)
             # Refresh pending receipts in the same transaction so queue/list
             # summaries agree with the new reference. Confirmed reviews keep
@@ -105,14 +113,14 @@ def register_standard(ctx, result_id):
                 saved = prepare_review_payload(pending, updated, review_status="待复核",
                     final_result=updated.get("overall", "需人工复核"), note=pending.get("human_note", ""),
                     error_type=pending.get("error_type", ""))
-                action = ("替换标准章" if previous else "加入印章中心") if pending["id"] == result_id else "标准章更新后重新核对"
+                action = ("替换标准章" if previous else "加入印章中心") if ctx.source_kind == "receipt" and pending["id"] == result_id else "标准章更新后重新核对"
                 ctx.database.review_result(pending["id"], result=saved, review_status="待复核",
                     final_result=updated.get("overall", "需人工复核"), note=pending.get("human_note", ""),
                     error_type=pending.get("error_type", ""), action=action, _connection=connection)
         committed = True
         # Standards own their PNGs; deleting/expiring a receipt cannot remove
         # them. Keep prior revision files for existing audit snapshots.
-        updated = ctx.project_result(ctx.database.get_result(result_id))
+        updated = project_source(source_database.get_result(result_id))
         return jsonify(standard=standard, result=ctx.with_review_revision(updated))
     except KeyError:
         abort(404)

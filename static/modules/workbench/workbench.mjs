@@ -5,7 +5,7 @@ import {localToday} from '../core/ui.mjs';
 import {createImportCalendar} from '../imports/import_calendar.mjs';
 import {confirmInline} from '../core/inline_confirm.mjs';
 import {createWorkFilterState} from './filters.mjs';
-import {renderTaskCard} from './task_cards.mjs';
+import {renderTaskCard, renderTaskEmpty} from './task_cards.mjs';
 import {createTaskDrawer} from './task_drawer.mjs';
 
 const WORK_PAGE_SIZE = 50;
@@ -57,6 +57,7 @@ export function createProgress({
   }
   function syncSelection() {
     const current = viewState.shownItems.filter(selectable), all = $('#workbench-select-all');
+    $('#task-queue-select')?.classList.toggle('hidden', !current.length);
     if (all) {
       all.checked = !!current.length && current.every(item => selected.has(selectionKey(item)));
       all.indeterminate = !all.checked && current.some(item => selected.has(selectionKey(item)));
@@ -166,7 +167,7 @@ export function createProgress({
       ? WORK_FILTERS.processing : filters.map(value => WORK_FILTERS[value]).join('、')) : WORK_FILTERS.all;
     $('#workbench-visible-count').textContent = `${label} ${visible.length} 张`;
     if ($('#workbench-total-label')) $('#workbench-total-label').textContent = `当天共 ${items.length} 张`;
-    if ($('#workbench-list-title')) $('#workbench-list-title').textContent = '任务队列';
+    if ($('#workbench-list-title')) $('#workbench-list-title').textContent = '任务列表';
     if ($('#workbench-page-note')) $('#workbench-page-note').textContent = `已显示 ${shown.length} / ${visible.length} 张`;
     if ($('#workbench-more')) {
       $('#workbench-more').classList.toggle('hidden', shown.length >= visible.length);
@@ -176,7 +177,7 @@ export function createProgress({
     syncStartRecognition();
     const markup = shown.map(item => renderTaskCard(item, {
       ReceiptWorkbench, importsState, progressState, selected, deleting: queueActionSaving, selectable
-    })).join('') || `<div class="task-empty"><strong>${!items.length ? '这一天还没有回单' : `暂无符合条件的${label}单据`}</strong><p>${!items.length ? '选择其他日期，或点击上方“导入回单”。' : '可切换任务状态；识别结果请在回单列表查看。'}</p></div>`;
+    })).join('') || renderTaskEmpty(items, {filters, search: progressState.workSearch, ReceiptWorkbench});
     if (progressState.queueMarkup !== markup) {
       const root = $('#queue'), active = document.activeElement;
       const focusData = root.contains?.(active) ? Object.entries(active.dataset || {})[0] : null;
@@ -245,9 +246,10 @@ export function createProgress({
     const control = progressState.queueControl;
     if (!control) return;
     const pausing = control.status === 'pausing';
-    $('#queue-control-label').textContent = `所有日期 · ${control.paused ? (pausing ? '暂停中' : '已暂停') : '识别开启'}`;
+    $('#queue-control-label').textContent = control.paused ? (pausing ? '后台识别暂停中' : '后台识别已暂停') : '后台识别已开启';
     $('#queue-control-label').classList.toggle('paused', control.paused);
-    $('#queue-toggle').textContent = control.paused ? '继续全部识别' : '暂停全部识别';
+    $('#queue-toggle').textContent = control.paused ? '继续识别' : '暂停识别';
+    if ($('#task-pause-scope')) $('#task-pause-scope').textContent = `${control.paused ? '继续' : '暂停'}作用于所有日期和批次`;
     $('#queue-toggle').disabled = !!progressState.queueControlSaving || !!progressState.queueStartSaving;
     $('#queue-toggle').classList.toggle('resume-queue', control.paused);
     $('#queue-toggle').title = control.paused ? '继续查询及所有日期中已点击开始的回单；待开始回单仍保持等待' : '暂停单证通后续查询及后续回单；已发出的请求结束后暂停';

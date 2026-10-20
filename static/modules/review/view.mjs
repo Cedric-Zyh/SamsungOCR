@@ -10,7 +10,8 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
   return function renderReview(item, id, mode) {
     $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
     $('#review-dialog').dataset.reviewMode = mode;
-    $('#review-dialog-title').textContent = mode === 'view' ? '查看回单' : '人工复核';
+    $('#review-dialog-title').textContent = reviewState.sampleView ? '查看样单' : mode === 'view' ? '查看回单' : '人工复核';
+    $('#review-dialog .review-dialog-close').setAttribute('aria-label', reviewState.sampleView ? '关闭查看样单，返回样单中心' : '关闭人工复核，返回回单管理');
     $('#toggle-review-queue').classList.toggle('hidden', mode === 'view');
     $('#review-session-progress').classList.toggle('hidden', mode === 'view');
     $('.review-workspace').classList.toggle('view-mode', mode === 'view');

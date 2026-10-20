@@ -21,6 +21,9 @@ def initialize_seal_standards(connection):
         updated_at TEXT NOT NULL,
         revision INTEGER NOT NULL DEFAULT 1
     )""")
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(seal_standards)")}
+    if "source_kind" not in columns:
+        connection.execute("ALTER TABLE seal_standards ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'receipt'")
 
 
 def standard_record(row):
@@ -53,17 +56,17 @@ class SealStandardOperationsMixin:
             if type(expected_revision) is not int or expected_revision != revision:
                 raise ValueError("标准章已变化，请刷新后重新选择；已有标准章必须明确执行替换")
             timestamp = now_iso()
-            data = {**values, "requirement_key": requirement_key(values["requirement"]),
+            data = {"source_kind": "receipt", **values, "requirement_key": requirement_key(values["requirement"]),
                     "created_at": current["created_at"] if current else timestamp,
                     "updated_at": timestamp, "revision": revision + 1}
             connection.execute("""INSERT INTO seal_standards(
                 requirement_key,requirement,image_name,recognized,shape,color,source_result_id,
-                source_filename,candidate_id,created_at,updated_at,revision
+                source_filename,candidate_id,created_at,updated_at,revision,source_kind
             ) VALUES(:requirement_key,:requirement,:image_name,:recognized,:shape,:color,:source_result_id,
-                :source_filename,:candidate_id,:created_at,:updated_at,:revision)
+                :source_filename,:candidate_id,:created_at,:updated_at,:revision,:source_kind)
             ON CONFLICT(requirement_key) DO UPDATE SET image_name=excluded.image_name,
                 recognized=excluded.recognized,shape=excluded.shape,color=excluded.color,
-                source_result_id=excluded.source_result_id,source_filename=excluded.source_filename,
+                source_result_id=excluded.source_result_id,source_filename=excluded.source_filename,source_kind=excluded.source_kind,
                 candidate_id=excluded.candidate_id,updated_at=excluded.updated_at,revision=excluded.revision""", data)
             return self.get_seal_standard(values["requirement"], _connection=connection)
 

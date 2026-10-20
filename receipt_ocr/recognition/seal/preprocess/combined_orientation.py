@@ -13,8 +13,70 @@ from receipt_ocr.recognition.seal.preprocess.orientation_settings import (
 from receipt_ocr.recognition.seal.preprocess.orientation_angles import (
     _round_stamp_type_texts, _stamp_type_marker_strength, choose_round_stamp_angle,
 )
-from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _map_box_to_source, _oriented_type_anchor_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _rotation_geometry, rotate_stamp_image
-from .horizontal_rows import grouped_type_candidate
+from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _map_box_to_source, _oriented_type_anchor_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _rotation_geometry, _transform_points, rotate_stamp_image
+from .horizontal_rows import grouped_type_candidate, polygon_bounds
+from .row_extent import verify_row_extent
+
+
+def _orient_complete_row(source, best, scratch, band_dir, *, model_variant):
+    """Verify a full row, rotate the whole stamp, then map the same polygons.
+
+    Search images are temporary. Render the final fine rotation from the
+    coarse image once, without accumulating a second fine interpolation.
+    """
+    from ..ocr.interface import OcrReader
+
+    if best.get("grouped_row"):
+        return best
+    seed = _oriented_type_row_exact_box(
+        best["boxes"], best["decision"], best["fine_matrix"],
+        best["final_width"], best["final_height"],
+    )
+    if seed is None:
+        return best
+    proposal = verify_row_extent(
+        best["path"], Path(band_dir) / f"coarse-{int(best['angle'])}-complete-row-before.png",
+        seed, best["band_text"], best["band_confidence"],
+        reader=OcrReader(), provider=f"paddle_{model_variant}",
+    )
+    if proposal is None:
+        return best
+    residual = float(proposal["baseline_angle"])
+    fine = best["fine_rotation"] + residual
+    if abs(fine) > FOUR_WAY_MAX_FINE_ROTATION:
+        return best
+    coarse = int(best["angle"])
+    coarse_source = Path(source) if coarse == 0 else Path(scratch) / f"coarse-{coarse}.png"
+    final_path = Path(scratch) / "complete-row-oriented.png"
+    rotate_stamp_image(coarse_source, final_path, fine)
+    matrix, width, height = _rotation_geometry(
+        best["candidate_width"], best["candidate_height"], fine,
+    )
+    previous = np.vstack((best["fine_matrix"], [0, 0, 1]))
+    mapping = (np.vstack((matrix, [0, 0, 1])) @ np.linalg.inv(previous))[:2]
+    polygon = _transform_points(proposal["polygon"], mapping)
+    interior = _transform_points(proposal["protected_interior"], mapping)
+    exact = polygon_bounds([polygon], width, height)
+    focus = polygon_bounds([polygon], width, height, .025)
+    # Read directly from the newly rotated WHOLE stamp, without a row-only warp.
+    text, confidence = _read_type_band_text(
+        final_path, Path(band_dir) / f"coarse-{coarse}-complete-row.png",
+        model_variant=model_variant, focus_box=focus,
+    )
+    if text != proposal["text"] or not math.isfinite(confidence) or confidence < .9:
+        return best
+    proposal.update(
+        before_rotation_polygon=proposal["polygon"], polygon=polygon,
+        protected_interior=interior, correction_angle=residual,
+        text_before_rotation=proposal["text"], text=text, confidence=confidence,
+        coordinate_frame="final_oriented_stamp",
+    )
+    return dict(
+        best, path=final_path, fine_rotation=fine, fine_matrix=matrix,
+        final_width=width, final_height=height, focus_box=focus, exact_box=exact,
+        mask_polygons=[polygon], band_text=text, band_confidence=confidence,
+        complete_row=proposal,
+    )
 
 
 def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None):
@@ -282,6 +344,13 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
             decision["status"] = "各候选方向均未找到章型文字的可靠转正结果，保留原方向"
             return None, decision
 
+        try:
+            best = _orient_complete_row(
+                source, best, scratch, band_dir, model_variant=model_variant,
+            )
+        except Exception as exc:
+            # A failed refinement must not discard a verified coarse candidate.
+            decision["complete_row_error"] = str(exc)
         coarse_angle = float(best["angle"])
         is_original = coarse_angle == 0.0 and not best["fine_rotation"]
         if is_original:
@@ -320,7 +389,11 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         decision["oriented_type_row_polygons"] = best.get("mask_polygons") or _oriented_type_row_polygons(
             best["boxes"], best["decision"], best["fine_matrix"],
         )
-        if best.get("grouped_row"):
+        if best.get("complete_row"):
+            decision["horizontal_row_localization"] = best["complete_row"]
+            decision["oriented_type_row_read_box"] = best["focus_box"]
+            decision["type_row_texts"] = [best["band_text"]]
+        elif best.get("grouped_row"):
             decision["type_row_grouped"] = True
             decision["local_mask_verified"] = best["local_mask_verified"]
             decision["oriented_type_row_read_box"] = best["focus_box"]

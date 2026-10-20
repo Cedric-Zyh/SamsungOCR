@@ -54,9 +54,23 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function modernSealInputChain(item, typeBandLabel, unwrapLabel) {
     const oriented = item.color_isolated_oriented_url || item.color_isolated_url;
+    if (item.multi_zone_layout) {
+      const regions = (item.inputs || []).filter(input => input.zone_name).map(input => {
+        const reads = (item.reads || []).filter(read => read.input_id === input.id);
+        const label = reads.find(read => read.zone_label)?.zone_label || input.label;
+        return artifactCard(label, input.image_url, reads.map(read => read.text).join(' | '),
+          input.zone_name === 'upper' || input.zone_name === 'lower');
+      }).join('');
+      return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>自动定位完整横排文字，保留外圈两端；按实际文字分布展开弧段，电话单独记录。</small><div class="artifact-grid">${
+        artifactCard('旋正增强图', oriented)
+      }${artifactCard('自动文字分区', item.multi_zone_layout.overlay_url)}${
+        artifactCard('内部文字填白后', item.ring_input_url)
+      }${regions}</div></section>`;
+    }
     const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const tightMask = item.ring_input_mask_method === 'contained_text_ink';
+    const measuredRow = item.ring_input_mask_method === 'verified_glyph_row';
+    const tightMask = measuredRow || item.ring_input_mask_method === 'contained_text_ink';
     const ringInputLabel = tightMask
       ? '旋正章色图 · 仅横排文字笔画填白（环形展开来源）'
       : hasMaskedTypeRow
@@ -92,6 +106,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : '';
     const missing = !item.ring_input_url
       ? '<small class="low-note">当前记录缺少环形 OCR 实际输入图，请重新识别生成新版证据。</small>'
+      : measuredRow
+        ? `<small>按完整横排文字范围识别并填白该行笔画，保留外边框；再从第 3 张图展开读取环字。${escapeHtml(box)}</small>`
       : tightMask
         ? `<small>先识别横排文字，仅填白文字框内的独立笔画，保留跨边界的外圈和相邻文字；再从第 3 张图展开读取环字。${numberRecovery ? '环形输入仍使用编号修复前的章色图。' : ''}${item.ring_company_selection ? '已排除小字号段，完整展开图保留供核对。' : ''}${escapeHtml(box)}</small>`
       : item.ring_company_selection
@@ -104,7 +120,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function modernSealReads(item) {
     const rows = (item.reads || []).filter(row => row?.text).map(row => {
-      const channel = row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel || 'OCR';
+      const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel || 'OCR');
       const confidence = row.confidence == null ? '' : ` · ${percent(row.confidence)}`;
       return `<div class="seal-source-row"><b>${escapeHtml(channel)} · ${escapeHtml(row.provider || 'OCR')}</b><span>${escapeHtml(row.text)}${confidence}</span></div>`;
     });
@@ -299,7 +315,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         const unwrapText = [item.unwrapped_text, item.secondary_unwrapped_text, item.secondary_read_text].filter(Boolean).join(' | ');
         const rotatedText = [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ');
         const rectangularRowCards = (item.rectangular_row_urls || []).map((url, index) => artifactCard(
-          `矩形印章合并文字带 ${index + 1}`,
+          `矩形印章${item.rectangular_layout === 'single_detection' ? '文字行' : '合并文字带'} ${index + 1}`,
           url,
           (item.rectangular_row_texts || item.rectangular_texts || [])[index] || '',
         )).join('');
@@ -362,17 +378,17 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   async function renderHistory() {
     const id = reviewState.current.id, content = $('#review-content').firstElementChild;
-    const history = await (services.records.history(id));
+    const history = await (reviewState.sampleView ? services.samples.reviewHistory(id) : services.records.history(id));
     if (reviewState.current?.id !== id || $('#review-content').firstElementChild !== content) return;
     $('[data-history]', $('#review-content')).innerHTML = history.length ? history.map(row => `<div class="history-item"><b>${escapeHtml(row.action)}</b><span>${escapeHtml(row.changed_at)}</span><p>${escapeHtml(historySummary(row))}</p></div>`).join('') : '<div class="empty-state">尚无人工修改记录</div>';
   }
 
   async function renderGroundTruth() {
     const id = reviewState.current.id, content = $('#review-content').firstElementChild;
-    const truth = await (services.records.groundTruth(id));
+    const truth = await (reviewState.sampleView ? services.samples.groundTruth(id) : services.records.groundTruth(id));
     if (reviewState.current?.id !== id || $('#review-content').firstElementChild !== content) return;
     const root = $('#review-content');
-    $('[data-truth-status]', root).textContent = truth.exists ? '该样本已有真值，可审计更新' : '尚未标注，可在确认时新增';
+    $('[data-truth-status]', root).textContent = truth.exists ? (reviewState.sampleView ? '该样本已有标注' : '该样本已有真值，可审计更新') : '尚未标注，可在确认时新增';
     if (!reviewState.reviewDirty) $('[name=truth_seal_should_match]', root).value = truth.exists
       ? String(Boolean(truth.entry?.seal_should_match)) : '';
     const history = truth.history || [];

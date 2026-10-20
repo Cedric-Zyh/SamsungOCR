@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from receipt_ocr.domain.parsing import compare_dates, find_receipt_date
+from receipt_ocr.domain.parsing import compare_dates, find_receipt_date, parse_date
 from receipt_ocr.recognition.date.postprocess.state import (
     DateStageEvidence,
     DateDecision,
@@ -13,15 +13,24 @@ from receipt_ocr.recognition.date.postprocess.state import (
 def _select_complete_dates(
     evidence: DateStageEvidence, decision: DateDecision, consensus: DateConsensus
 ) -> None:
-    """Choose the best complete date that OCR actually read."""
-    # Pass an empty requirement deliberately. ``find_receipt_date`` accepts a
-    # required date as a parsing prior and can repair missing components from
-    # it; the structured date flow must select only a literal OCR-owned date.
-    decision.actual_date, decision.date_row = find_receipt_date(
-        evidence.combined_rows,
-        "",
-        anchor_y=evidence.anchor_y,
-        trusted_region=evidence.trusted_region,
+    """Prefer an observed required-date match, then OCR confidence."""
+    required = parse_date(evidence.fields.get("要求到货", ""))
+    candidates = []
+    for row in evidence.combined_rows:
+        # Parse each observation without a business-date prior: the required
+        # date ranks complete OCR values but must never fill missing digits.
+        # Retain the existing footer/region eligibility checks as well.
+        found, accepted_row = find_receipt_date(
+            [row], "", anchor_y=evidence.anchor_y,
+            trusted_region=evidence.trusted_region,
+        )
+        if found is not None and accepted_row is not None:
+            candidates.append((found, accepted_row))
+    decision.actual_date, decision.date_row = max(
+        candidates,
+        key=lambda item: (required is not None and item[0] == required,
+                          item[1].confidence),
+        default=(None, None),
     )
 
 

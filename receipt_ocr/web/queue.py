@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 import uuid
 
-from flask import abort, jsonify, request
+from flask import abort, jsonify, request, send_file
 
 from receipt_ocr.application import resolve_recognition_options
 from receipt_ocr.storage import ReceiptFileStore
@@ -141,6 +141,26 @@ def upload_job(ctx: QueueDependencies, job_id, wake=None):
     if job["start_requested"]:
         (wake or (lambda: _wake_jobs(ctx)))()
     return jsonify(ctx.job_store.public(job, ctx.database.get_json_setting("recognition_defaults"))), 202
+
+
+def job_image(ctx: QueueDependencies, job_id):
+    """Preview the uploaded source, without creating a result or waking OCR."""
+    try:
+        job = ctx.job_store.get(job_id)
+        result_id = job.get("result_id") or job.get("target_result_id")
+        if result_id:
+            ctx.database.get_result(result_id)
+    except KeyError:
+        abort(404)
+    if job["status"] in {"awaiting_upload", "cancelled"} or not job.get("stored_name"):
+        abort(404)
+    # Do not fall back to a same-named sample if this job's upload is missing.
+    source = ReceiptFileStore(ctx.data_dir, ctx.upload_dir).source_for_record(
+        {"stored_name": job["stored_name"]}
+    )
+    if source is None or source.suffix.lower() not in ctx.allowed_extensions:
+        abort(404)
+    return send_file(source, conditional=True)
 
 
 def start_jobs(ctx: QueueDependencies, wake=None):

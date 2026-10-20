@@ -2,6 +2,15 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {createReviewStandard} = require('../static/modules/seals/review_standard.mjs');
 const {candidateCard, standardCard} = require('../static/modules/seals/standard_view.mjs');
+
+test('information stamp card explains field matching and escapes the explanation', () => {
+  const markup = candidateCard({id:'info', index:0, can_register:true,
+    image_url:'/stamp.png', text_status:'匹配', shape_status:'尚无参照',
+    text_match_message:'名称、授权代码一致；地址、电话为附加信息 <script>bad</script>'});
+  assert.match(markup, /名称、授权代码一致；地址、电话为附加信息/);
+  assert.ok(markup.includes('&lt;script&gt;bad&lt;/script&gt;'));
+  assert.ok(!markup.includes('<script>'));
+});
 const {reviewReadiness} = require('../static/modules/review/review_readiness.mjs');
 
 function element() {
@@ -14,7 +23,7 @@ function element() {
     fire(name) { return events.get(name)?.({stopPropagation() {}}); },
   };
 }
-function harness({mode = 'review', standard = null} = {}) {
+function harness({mode = 'review', standard = null, sampleView = false} = {}) {
   const nodes = new Map();
   const $ = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
   const candidates = [{id:'first',index:0,can_register:true}, {id:'raw',index:1,can_register:false}];
@@ -22,13 +31,15 @@ function harness({mode = 'review', standard = null} = {}) {
   const unrelated = element(), controls = [...buttons, unrelated, $('[data-standard-save]'), $('[data-standard-rotation]')];
   const $$ = selector => selector === '[data-seal-candidate]' ? buttons : controls;
   const item = {id:7,review_revision:'receipt-1',seal_standard_check:{standard,candidates}};
-  const reviewState = {current:item,reviewSaving:false,reviewDirty:false};
-  let resolveSave, rejectSave, calls = [], saved;
-  const services = {sealStandards:{save: (...args) => {
+  const reviewState = {current:item,reviewSaving:false,reviewDirty:false,sampleView};
+  let resolveSave, rejectSave, calls = [], routes = [], saved;
+  const save = route => (...args) => {
+    routes.push(route);
     calls.push(args); return new Promise((resolve,reject) => {resolveSave=resolve;rejectSave=reject;});
-  }}};
+  };
+  const services = {sealStandards:{save:save('receipt')},samples:{saveStandard:save('sample')}};
   createReviewStandard({ui:{$,$$,toast(){}},reviewState,services,onSaved:value=>saved=value})(item,{},mode);
-  return {$,buttons,controls,unrelated,reviewState,calls,resolve:value=>resolveSave(value),reject:error=>rejectSave(error),saved:()=>saved};
+  return {$,buttons,controls,unrelated,reviewState,calls,routes,resolve:value=>resolveSave(value),reject:error=>rejectSave(error),saved:()=>saved};
 }
 
 test('viewing and selecting a candidate do not register; save locks the entire review and sends its revision', async () => {
@@ -68,10 +79,21 @@ test('replacement explicitly submits the current standard revision and restores 
   assert.equal(h.unrelated.disabled,false);assert.equal(h.buttons[1].disabled,true);
 });
 
-test('read-only receipt never binds registration actions', () => {
-  const h=harness({mode:'view'});
-  h.buttons[0].fire('click');h.$('[data-standard-save]').fire('click');
-  assert.equal(h.calls.length,0);assert(h.buttons.every(b=>b.disabled));
+test('view mode allows explicit standard registration and preserves read-only receipt fields', async () => {
+  for (const sampleView of [false, true]) {
+    const h=harness({mode:'view',sampleView});
+    h.unrelated.disabled=true;
+    assert.equal(h.buttons[0].disabled,false);
+    assert.equal(h.buttons[1].disabled,true);
+    h.buttons[0].fire('click');
+    assert.equal(h.calls.length,0);
+    const pending=h.$('[data-standard-save]').fire('click');
+    assert.deepEqual(h.routes,[sampleView ? 'sample' : 'receipt']);
+    h.resolve({result:{id:7,sample_center:sampleView}});await pending;
+    assert.equal(h.saved().sample_center,sampleView);
+    assert.equal(h.unrelated.disabled,true);
+    assert.equal(h.buttons[1].disabled,true);
+  }
 });
 
 test('text match alone is not ready without a shape reference; explicit manual confirmation is independent', () => {

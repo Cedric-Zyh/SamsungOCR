@@ -275,13 +275,53 @@ test('global queue controls stay explicit while day progress reports processed c
   const h = harness(); h.control = {paused: true, status: 'pausing', running: 1, queued: 11};
   h.jobs = [{id: 'running', filename: 'running.jpg', status: 'running'}, {id: 'failed', filename: 'failed.jpg', status: 'failed'}];
   await h.controller.loadDailyResults(); await h.filters[1].dispatch('click');
-  assert.equal(h.$('#queue-control-label').textContent, '所有日期 · 暂停中');
+  assert.equal(h.$('#queue-control-label').textContent, '后台识别暂停中');
+  assert.equal(h.$('#queue-toggle').textContent, '继续识别');
+  assert.match(h.$('#task-pause-scope').textContent, /所有日期和批次/);
   assert.match(h.$('#queue-pause-notice').textContent, /所有日期.*11 张/);
   assert.match(h.$('#queue').innerHTML, /正在完成当前图片/);
   assert.equal(h.$('#task-summary').textContent, '已处理 2 / 3 张');
-  assert.equal(h.$('#workbench-list-title').textContent, '任务队列');
+  assert.equal(h.$('#workbench-list-title').textContent, '任务列表');
   h.state.progress.queueControl = {paused: false}; h.controller.renderQueueControl();
   assert.equal(h.$('#queue-pause-notice').classList.contains('hidden'), true);
+  assert.equal(h.$('#queue-toggle').textContent, '暂停识别');
+  assert.equal(h.$('#queue-control-label').textContent, '后台识别已开启');
+});
+
+test('completed drawer uses result navigation and hides selection, while search has a distinct empty state', async () => {
+  const h = harness(); h.data = Array.from({length: 6}, (_, index) => row(index + 1));
+  h.state.progress.workFilters = ['ready'];
+  await h.controller.loadDailyResults();
+  assert.equal(h.$('#overview-total').textContent, '6');
+  assert.equal(h.$('#overview-percent').textContent, '100%');
+  assert.equal(h.$('#task-count-succeeded').textContent, '6');
+  assert.equal(h.$('#task-count-failed').textContent, '0');
+  assert.equal(h.$('#task-count-pending').textContent, '0');
+  assert.equal(h.$('#task-queue-select').classList.contains('hidden'), true);
+  assert.match(h.$('#queue').innerHTML, /暂无待开始任务/);
+  assert.match(h.$('#queue').innerHTML, /data-task-view-records/);
+  h.state.progress.workSearch = 'missing'; h.controller.renderWorkbenchRows();
+  assert.match(h.$('#queue').innerHTML, /未找到匹配的任务/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /本批次已处理完成/);
+});
+
+test('drawer metrics follow batch scope and selection returns only for selectable rows', async () => {
+  const h = harness(); h.data = [];
+  h.jobs = [readyJob('ready', {task_id: 'a'}), readyJob('running', {task_id: 'a', status: 'running'}),
+    readyJob('failed', {task_id: 'b', status: 'failed'})];
+  h.state.progress.workFilters = ['ready'];
+  await h.controller.loadDailyResults();
+  assert.equal(h.$('#task-count-pending').textContent, '2');
+  assert.equal(h.$('#task-count-failed').textContent, '1');
+  assert.equal(h.$('#task-queue-select').classList.contains('hidden'), false);
+  h.state.progress.taskBatch = 'a'; h.controller.renderWorkbenchRows();
+  assert.equal(h.$('#task-count-failed').textContent, '0');
+  assert.equal(h.$('#overview-total').textContent, '2');
+  h.state.progress.workFilters = ['running']; h.controller.renderWorkbenchRows();
+  assert.equal(h.$('#task-queue-select').classList.contains('hidden'), true);
+  h.$('#progress-date').value = '2026-09-09'; h.api = async () => { throw Error('offline'); };
+  await assert.rejects(h.controller.loadDailyResults(), /offline/);
+  assert.equal(h.$('#task-count-pending').textContent, '—');
 });
 
 const readyJob = (id, extra = {}) => ({id, filename: `${id}.jpg`, status: 'ready', start_requested: false,

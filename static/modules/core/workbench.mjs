@@ -149,7 +149,7 @@ const ReceiptWorkbench = (() => {
             && Array.isArray(box) && box.length === 4 && box.every(value => typeof value === 'number' && Number.isFinite(value))
             && box[2] > box[0] && box[3] > box[1]) {
           const revision = typeof record.review_revision === 'string' ? `?revision=${encodeURIComponent(record.review_revision)}` : '';
-          add(`/files/selected-seal/${record.id}.png${revision}`, '印章区域', 'seal');
+          add(`/files/${record.sample_center ? 'sample-selected-seal' : 'selected-seal'}/${record.id}.png${revision}`, '印章区域', 'seal');
         }
         // Local candidates may be different stamps from QingTong's decision.
         continue;

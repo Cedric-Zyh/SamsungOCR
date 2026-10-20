@@ -1,3 +1,4 @@
+import {createSampleCenter} from '../samples/center.mjs';
 import {createState} from '../core/state.mjs';
 import {createUi} from '../core/ui.mjs';
 import {createApi, createApiClients} from '../core/api.mjs';
@@ -103,6 +104,7 @@ export function createApplication(environment, options = {}) {
     startReviewScope: (...args) => review_queue.startReviewScope(...args),
     markReviewSaved: (...args) => review_queue.markReviewSaved(...args),
     ensureReviewScope: (...args) => review_queue.ensureReviewScope(...args),
+    retrySample: async filename => { if (await sample_center.run([filename])) review.closeModal(); },
     getReviewScope: () => document.body.dataset.activePage === 'records'
       ? records.getReviewScope('filtered')
       : {kind: 'day', label: `${$('#progress-date').value || ''} · 当天全部`, filters: {import_date: $('#progress-date').value || ''}},
@@ -165,6 +167,10 @@ export function createApplication(environment, options = {}) {
     api,
     services
   });
+  const sample_center = createSampleCenter({environment, ui, services,
+    flushSettings: () => recognition_plan.flushSettings(),
+    openResult: (id, options) => review.openReview(id, {sample: true, ...options}),
+    openOriginal: (...args) => records.openOriginalPreview(...args)});
   const navigation = createNavigation({
     environment,
     ui,
@@ -181,6 +187,7 @@ export function createApplication(environment, options = {}) {
     loadDailyResults: (...args) => progress.loadDailyResults(...args),
     loadRecords: (...args) => records.loadRecords(...args),
     loadReport: (...args) => report.loadReport(...args),
+    loadSamples: () => sample_center.load(),
     loadSealCenter: (...args) => seal_center.load(...args)
   });
 
@@ -220,6 +227,7 @@ export function createApplication(environment, options = {}) {
     if (document.hidden) return;
     try {
       const page = document.body.dataset.activePage;
+      if (page === 'samples') await sample_center.load();
       if (['progress', 'records'].includes(page) && Date.now() - (progressState.dailyAttemptAt || 0) >= 2000) await progress.loadDailyResults({refreshRecords:false});
       if (page === 'records' && (recordsState.recordsStale || Date.now() - (recordsState.recordAttemptAt || 0) >= 10000)) await records.loadRecords({background:!!recordsState.recordsLoaded});
       else if (page === 'quality' && Date.now() - (reportState.reportAttemptAt || 0) >= 30000) await report.loadReport();
@@ -257,6 +265,7 @@ export function createApplication(environment, options = {}) {
     progress.initialize();
     report.initialize();
     seal_center.initialize();
+    sample_center.initialize();
     navigation.initialize();
     document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQueue(); });
 
@@ -268,7 +277,7 @@ export function createApplication(environment, options = {}) {
 
   return {initialize, state, pollQueue, polling, invalidateResultViews, refreshVisibleResults,
     records, imports, recognition_plan, review, review_evidence, review_queue, progress, report, navigation, process_history,
-    retention_settings, seal_center};
+    retention_settings, seal_center, sample_center};
 }
 
 export function browserEnvironment(window, libraries) {

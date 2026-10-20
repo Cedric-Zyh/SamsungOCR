@@ -283,6 +283,36 @@ def test_four_way_rejects_good_anchor_when_final_row_is_unreadable():
     assert flipped['rejection_reason'] == '转正后未读到可靠章型行'
 
 
+@pytest.mark.parametrize('text', ['业务受理', '业务受理章', '业务 受理'])
+def test_business_acceptance_is_a_complete_direction_anchor(text):
+    from receipt_ocr.recognition.seal.preprocess.orientation_angles import _stamp_type_marker_strength
+    decision = choose_round_stamp_angle([dict(
+        text=text, confidence=.99, angle=-12.361,
+        points=[[20, 90], [180, 50], [190, 90], [30, 130]],
+    )])
+    assert decision['anchor_text'] == text
+    assert not decision.get('partial_anchor')
+    assert _stamp_type_marker_strength(text) == 2
+    original = dict(angle=0, fine_rotation=0., band_text='', band_confidence=0., error='')
+    candidate = dict(angle=45, fine_rotation=-12.361, band_text=text,
+                     band_confidence=.9999, error='')
+    assert combined_orientation._select_four_way_candidate([original, candidate]) is candidate
+    assert candidate['post_rotation_verified']
+
+
+@pytest.mark.parametrize('text,confidence,fine', [
+    ('业务受', .99, -12.361), ('业务受埋', .99, -12.361),
+    ('业务受理有限公司', .99, -12.361), ('业务受理', .54, -12.361),
+    ('业务受理', .9998, 79.353),
+])
+def test_business_acceptance_keeps_text_confidence_and_angle_checks(text, confidence, fine):
+    original = dict(angle=0, fine_rotation=0., band_text='', band_confidence=0., error='')
+    candidate = dict(angle=45, fine_rotation=fine, band_text=text,
+                     band_confidence=confidence, error='')
+    assert combined_orientation._select_four_way_candidate([original, candidate]) is original
+    assert not candidate['post_rotation_verified']
+
+
 @pytest.mark.parametrize('fine', [-86.179, 78.254])
 def test_four_way_rejects_quarter_turn_as_fine_correction(fine):
     original = dict(angle=0, fine_rotation=3.1, band_text='收货专用章',
