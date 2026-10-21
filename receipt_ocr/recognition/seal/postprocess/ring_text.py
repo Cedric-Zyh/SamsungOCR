@@ -35,6 +35,11 @@ def _rotations(text: str) -> list[tuple[int, str]]:
 
 
 def _suffix_score(text: str) -> float:
+    # A branch belongs after its parent company. Prefer the complete suffix
+    # over rotating “第二分公司” (or “天津分公司”) ahead of the parent name.
+    # This only ranks existing cyclic readings; missing glyphs stay missing.
+    if re.search(r"(?:有限责任公司|有限公司)[\u4e00-\u9fff0-9]{0,20}分公司$", text):
+        return 1.08
     if text.endswith("有限责任公司"):
         return 1.0
     if text.endswith("有限公司"):

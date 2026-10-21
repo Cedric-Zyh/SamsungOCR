@@ -35,6 +35,9 @@ def prepare(tmp_path, boxes):
         # The detector must see only the area under the actual type row.
         assert provider == "paddle_v6"
         with Image.open(path) as search:
+            if search.size == (88, 37):
+                # Optional search across the purpose row's padded lower edge.
+                return []
             assert search.size == (200, 75)
             assert search.getpixel((90, 20)) == (255, 60, 60)
         return boxes

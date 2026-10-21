@@ -11,10 +11,13 @@ from PIL import Image, ImageOps
 
 from receipt_ocr.runtime.execution import timed
 from receipt_ocr.domain.ocr import TextObservation
+from receipt_ocr.domain.seal_serial import serial_matching_texts
 from .preprocess.inputs import prepare_inputs
 from .preprocess.number import merge_number_read
 from .ocr.interface import OcrReader
 from .postprocess.ring_text import reorder_ring_text
+from .preprocess.ring_serial import read_ring_serial
+from .preprocess.ring_alternative import read_normal_alternative
 from .postprocess.multi_zone import finalize_multi_zone
 
 
@@ -219,7 +222,7 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                                 "region_id": artifact["region_id"], "channel": input_image["channel"],
                                 "provider": ocr_backend, "text": row.text, "confidence": row.confidence,
                                 "image_url": input_image["image_url"]}
-                        if artifact.get("rectangular_layout") == "single_detection":
+                        if artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}:
                             read["rectangle_row_index"] = (
                                 position if "detected_rows" in input_image
                                 else input_image["rectangle_row_index"]
@@ -248,7 +251,7 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
             if artifact.get("stamp_number_status") == "merged":
                 texts.append(artifact["round_type_band_text"])
             if artifact.get("shape_code") == "rectangle":
-                fixed_layout = artifact.get("rectangular_layout") == "single_detection"
+                fixed_layout = artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}
                 if fixed_layout:
                     body_parts = ["" for _ in artifact["rectangular_fixed_rows"]]
                     for read in artifact["reads"]:
@@ -292,5 +295,25 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 artifact["unwrapped_text"] = reorder["text"]
                 if reorder["changed"]:
                     texts.append(reorder["text"])
+            if artifact.get("shape_code") == "round" and not artifact.get("multi_zone_layout"):
+                # Independent evidence; included in matching only if requested.
+                serial_source = Path(directory) / f"seal-{index}-ring-input.png"
+                if serial_source.is_file():
+                    try:
+                        read_ring_serial(serial_source, directory, index, prefix, artifact,
+                                         reader=reader, provider=ocr_backend)
+                    except Exception as exc:
+                        artifact["ring_serial_detection"] = {"status": "failed"}
+                        artifact["errors"].append({"step": "ring_serial", "message": str(exc)})
+            texts.extend(serial_matching_texts(requirement, artifact))
+            if artifact.get("shape_code") == "ellipse" and not artifact.get("multi_zone_layout"):
+                # Keep optional evidence out of reads/texts consumed by matching,
+                # standard registration, and the primary ring result.
+                try:
+                    artifact["ring_normal_alternative"] = read_normal_alternative(
+                        directory, index, prefix, artifact, reader=reader, provider=ocr_backend)
+                except Exception as exc:
+                    artifact["ring_normal_alternative"] = {
+                        "status": "failed", "matching": False, "error": str(exc)}
             artifacts.append(artifact)
     return texts, artifacts

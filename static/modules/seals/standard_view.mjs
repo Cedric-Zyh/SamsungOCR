@@ -17,8 +17,8 @@ export function standardDetail(standard) {
       <a class="seal-icon-button seal-preview-zoom" href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" aria-label="放大标准章图片（新窗口）" title="查看原图"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5M7.5 10.5h6M10.5 7.5v6"/></svg></a>
     </figure>
     <dl class="seal-detail-metadata"><div><dt>印章形状</dt><dd>${shapeLabel(standard.shape)}</dd></div><div><dt>来源回单</dt><dd title="${escapeHtml(standard.source_filename || '')}">${escapeHtml(standard.source_filename || '—')}</dd></div><div><dt>印章颜色</dt><dd>${colorLabel(standard.color)}</dd></div><div><dt>当前版本</dt><dd>第 ${escapeHtml(standard.revision)} 版</dd></div></dl>
-    <div class="seal-detail-footer"><p>每条签章要求保留一枚标准章，替换后用于后续核验。</p><div class="seal-replace-action"><button class="primary-button" type="button" data-load-standard-sources aria-expanded="false" aria-controls="seal-standard-sources">替换标准章</button><small>从同要求回单中选择</small></div></div>
-    <div id="seal-standard-sources" data-standard-sources></div>`;
+    <div class="seal-detail-footer"><p>每条签章要求保留一枚标准章，替换后用于后续核验。</p><div class="seal-replace-action"><button class="primary-button" type="button" data-load-standard-sources aria-haspopup="dialog" aria-controls="seal-standard-dialog">替换标准章</button><small>从同要求回单中选择</small></div></div>
+    `;
 }
 
 export function standardCard(standard) {
@@ -37,14 +37,4 @@ export function candidateCard(candidate, {selected=false, sourceId='', filename=
     ${candidate.text_match_message ? `<small>${escapeHtml(candidate.text_match_message)}</small>` : ''}
     ${selectable ? '' : '<small>缺少完整章色图或形状信息，请重新识别后加入</small>'}
   </button>`;
-}
-
-export function selectionControls(hasStandard) {
-  return `<div class="seal-standard-selection hidden" data-standard-selection>
-    <p>已选择 <b data-standard-selected-label></b>。请核对完整章图与方向。</p>
-    <div class="seal-standard-actions"><label>顺时针旋转 <input type="number" min="-180" max="180" step="1" value="0" data-standard-rotation aria-label="标准章旋转角度"> °</label>
-    <button type="button" class="mini-button" data-standard-save>${hasStandard ? '确认替换标准章' : '加入印章中心'}</button>
-    <button type="button" class="text-button" data-standard-cancel>取消选择</button></div>
-    <small data-standard-feedback role="status"></small>
-  </div>`;
 }

@@ -44,3 +44,16 @@ test('sample selected-seal previews never reference the production result id rou
   assert(sources.some(source => source.url === '/files/sample-selected-seal/1.png'));
   assert(!sources.some(source => source.url.startsWith('/files/selected-seal/')));
 });
+
+test('sample import uses multipart and delete stays scoped to the sample library', async () => {
+  const calls = [];
+  const clients = createApiClients(async (...args) => calls.push(args));
+  const form = new FormData();
+  form.append('company', '客户甲');
+  await clients.samples.importFiles(form);
+  await clients.samples.remove(['new.png']);
+  assert.deepEqual(calls, [
+    ['/api/samples/import', {method:'POST', body:form}],
+    ['/api/samples/delete', {method:'POST', json:{filenames:['new.png']}}],
+  ]);
+});

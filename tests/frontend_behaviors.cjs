@@ -167,7 +167,7 @@ if (process.argv.includes('--render-samples')) {
     pending.resolve([row(1)]);await loading;
     assert.equal(h.$('#open-batch-review').attributes['aria-label'],'人工复核当前筛选');
     assert.equal(h.$('#review-entry-count').textContent,'');
-    h.controllers.navigation.showPage('quality');
+    h.controllers.navigation.showPage('settings');
     assert.equal(h.$('#open-batch-review').attributes['aria-label'],'人工复核，2025-03-31，当天全部');
     assert.match(h.$('#open-batch-review').title,/2025-03-31/);
   });

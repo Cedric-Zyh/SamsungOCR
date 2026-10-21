@@ -255,12 +255,88 @@ def _ellipse_normal_maps(outer, inner, estimated_inner):
             (y - depth * ny).astype(np.float32))
 
 
-def _trim_ring_whitespace(image):
+def _ellipse_proportional_maps(outer, inner, estimated_inner):
+    """Unwrap one revolution in ellipse coordinates without crossing normals.
+
+    Retain a full-height proportional band even at the major-axis tips.
+    Normal-offset sampling has to cap its depth there to prevent folds,
+    which clips tall side glyphs. The source image is never stretched first.
+    """
+    (cx, cy), (axis_a, axis_b), angle = outer[2]
+    a, b = axis_a / 2, axis_b / 2
+    rotation = np.deg2rad(angle)
+    co, si = np.cos(rotation), np.sin(rotation)
+    start = np.arctan2(co / b, si / a)  # bottom ray, independent of axis order
+    width = max(1200, min(3600, round(np.pi * (a + b))))
+    theta = np.linspace(start, start + 2 * np.pi, width, endpoint=False)
+    outer_fraction = .91
+    inner_fraction = .40 if estimated_inner else min(.40, inner[0] / outer[0])
+    height = max(96, round(width * (outer_fraction - inner_fraction) / (2 * np.pi)))
+    fraction = np.linspace(outer_fraction, inner_fraction, height)[:, None]
+    x = a * np.cos(theta) * fraction
+    y = b * np.sin(theta) * fraction
+    return ((cx + x * co - y * si).astype(np.float32),
+            (cy + x * si + y * co).astype(np.float32))
+
+
+def _split_short_seam_strokes(image):
+    """Find matching short strokes on both ends, excluding the outer rim."""
+    height, width = image.shape
+    _, _, stats, _ = cv2.connectedComponentsWithStats((image < 225).astype(np.uint8))
+    short = [s for s in stats[1:] if s[4] >= 10
+             and height * .08 <= s[1] and s[1] + s[3] <= height * .95
+             and s[3] < height * .20 and s[2] >= height * .06]
+    left = [s for s in short if s[0] <= 2]
+    right = [s for s in short if s[0] + s[2] >= width - 2]
+    return any(min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+               >= .5 * min(a[3], b[3]) for a in left for b in right)
+
+
+def _align_complete_ring_seam(image):
+    """Move a cut glyph into the interior before trimming a complete revolution.
+
+    Unlike the later wide-gap heuristic (which also accepts partial arcs),
+    this runs only on the untrimmed periodic sampler output. Require ink at
+    both ends and a nearly empty gap across the *entire* radial band, so an
+    upper stroke or a small serial digit cannot be mistaken for whitespace.
+    Rolling keeps every pixel, including faint strokes and gap speckles.
+    """
+    height, width = image.shape
+    if height < 20 or width < height * 3:
+        return image
+    if not _split_short_seam_strokes(image):
+        return image
+    ink = image < 225
+    edge = max(2, round(height * .025))
+    if not (ink[:, :edge].sum() >= height * .08
+            and ink[:, -edge:].sum() >= height * .08):
+        return image
+    sparse = ink.sum(axis=0) <= max(1, int(height * .008))
+    best_start, best_width, start = 0, 0, None
+    for index, blank in enumerate(np.append(sparse, False)):
+        if blank and start is None:
+            start = index
+        elif not blank and start is not None:
+            length = index - start
+            if length > best_width:
+                best_start, best_width = start, length
+            start = None
+    if best_width < max(4, round(height * .05)):
+        return image
+    seam = best_start + best_width // 2
+    return np.roll(image, -seam, axis=1)
+
+
+def _trim_ring_whitespace(image, *, preserve_short_strokes=False):
     """Trim only outside the text span, retaining every pixel inside it."""
     height, width = image.shape
     _, _, stats, _ = cv2.connectedComponentsWithStats((image < 225).astype(np.uint8))
     components = [s for s in stats[1:]
                   if s[cv2.CC_STAT_AREA] >= 10 and s[cv2.CC_STAT_HEIGHT] >= height * .20]
+    if preserve_short_strokes:
+        components.extend(s for s in stats[1:] if s[4] >= 10
+                          and height * .08 <= s[1] and s[1] + s[3] <= height * .95
+                          and s[3] < height * .20 and s[2] >= height * .06)
     # Letters on the outer arc can touch the sampled strip's top edge.
     # Position alone cannot distinguish them from border ink (long border
     # strokes are already removed before trimming). Rejecting that edge
@@ -269,6 +345,10 @@ def _trim_ring_whitespace(image):
         return image
     left = min(s[0] for s in components)
     right = max(s[0] + s[2] for s in components)
+    # If no safe seam was found, retain the periodic ends instead of
+    # discarding the two halves of a short stroke (e.g. the character 二).
+    if _split_short_seam_strokes(image):
+        left, right = 0, width
     top = min(s[1] for s in components)
     bottom = max(s[1] + s[3] for s in components)
     # Include faint/short fragments adjacent to the strong character bodies.
@@ -284,8 +364,10 @@ def _save_ellipse_annulus_unwrapped(
     *,
     single_line: bool = False,
     ring_guide=None,
+    trim_whitespace: bool = True,
+    proportional: bool = False,
 ) -> bool:
-    """Unwrap with an observed border guide, or fitted normals as fallback."""
+    """Use a measured border, or the selected fitted-ellipse sampler."""
     if ring_guide is not None and tuple(gray.shape[:2]) != ring_guide.source_shape:
         raise ValueError("印章边框与展开图片坐标不一致")
     geometry = ring_guide.annulus if ring_guide is not None else _fit_ellipse_annulus(mask)
@@ -315,8 +397,9 @@ def _save_ellipse_annulus_unwrapped(
     strips = []
     for phase in ((0.0,) if single_line else (0.0, 2.0 * np.pi / 3.0, 4.0 * np.pi / 3.0)):
         if single_line:
+            sampler = _ellipse_proportional_maps if proportional else _ellipse_normal_maps
             map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
-                            else _ellipse_normal_maps(outer, inner, estimated_inner))
+                            else sampler(outer, inner, estimated_inner))
             strips.append(cv2.remap(gray, map_x, map_y, cv2.INTER_CUBIC,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=255))
             break
@@ -364,8 +447,12 @@ def _save_ellipse_annulus_unwrapped(
         border_lines, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5))
     )
     output = cv2.bitwise_not(cv2.subtract(unwrapped_ink, border_lines))
-    if single_line:
-        output = _trim_ring_whitespace(output)
+    if single_line and trim_whitespace:
+        aligned = _align_complete_ring_seam(output)
+        output = _trim_ring_whitespace(aligned, preserve_short_strokes=aligned is not output)
+    if single_line and proportional:
+        output = cv2.copyMakeBorder(output, 16, 16, 16, 16,
+                                    cv2.BORDER_CONSTANT, value=255)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", output)

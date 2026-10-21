@@ -1,5 +1,6 @@
+import {openStandardDialog} from './standard_dialog.mjs';
 import {escapeHtml} from '../core/ui.mjs';
-import {standardDetail, standardDate, candidateCard, selectionControls, shapeLabel, colorLabel} from './standard_view.mjs';
+import {standardDetail, standardDate, shapeLabel, colorLabel} from './standard_view.mjs';
 
 export function createSealCenter({ui, services}) {
   const {$, $$, toast} = ui;
@@ -45,32 +46,25 @@ export function createSealCenter({ui, services}) {
       trigger.disabled=true; trigger.textContent='正在加载…';
       try {
         const data = await services.sealStandards.sources(id);
-        if (serial !== detailRequest) return;
+        if (serial !== detailRequest || node.classList.contains('hidden')) return;
         if (data.standard.revision !== standard.revision) {
           standards = standards.map(s => s.id === id ? data.standard : s);
           await show(id); toast('标准章已更新，请核对当前图片后重新选择替换章。'); return;
         }
-        const target=$('[data-standard-sources]',detail);
-        target.innerHTML=`<h3>选择替换章</h3><p>以下为相同签章要求的回单，请选择一枚完整章图。</p><div class="seal-candidate-grid">${data.sources.flatMap(s=>s.candidates.map(c=>candidateCard(c,{sourceId:s.id,filename:s.filename}))).join('') || '<p>没有可用的来源回单，请先识别新的回单。</p>'}</div>${selectionControls(true)}`;
-        trigger.textContent='已展开替换章'; trigger.setAttribute('aria-expanded','true');
-        let selected=null, source=null;
-        const selection=$('[data-standard-selection]',target), rotation=$('[data-standard-rotation]',target), feedback=$('[data-standard-feedback]',target);
-        const cancel=()=>{ selected=source=null; selection.classList.add('hidden'); $$('[data-seal-candidate]',target).forEach(b=>{b.classList.remove('is-selected');b.setAttribute('aria-pressed','false');$('img',b).style.transform='';}); };
-        $$('[data-seal-candidate]',target).forEach(button=>button.addEventListener('click',()=>{
-          if(saving)return; cancel();source=data.sources.find(s=>s.id===Number(button.dataset.sourceId));selected=source.candidates.find(c=>c.id===button.dataset.sealCandidate);
-          button.classList.add('is-selected');button.setAttribute('aria-pressed','true');rotation.value='0';feedback.textContent='';
-          $('[data-standard-selected-label]',target).textContent=`${source.filename} · 印章 ${Number(selected.index)+1}`;selection.classList.remove('hidden');
-        }));
-        rotation.addEventListener('input',()=>{const image=$('.seal-candidate.is-selected img',target);if(image)image.style.transform=`rotate(${Number(rotation.value)||0}deg)`;});
-        $('[data-standard-cancel]',target).addEventListener('click',cancel);
-        $('[data-standard-save]',target).addEventListener('click',async()=>{
-          if(!selected||saving)return;if(!rotation.checkValidity()){rotation.reportValidity();return;}
-          saving=true;$$('button,input',target).forEach(b=>b.disabled=true);feedback.textContent='正在替换…';
-          try{
-            const response=await services.sealStandards.save(source.id,{candidate_id:selected.id,standard_revision:data.standard.revision,review_revision:source.review_revision,rotation:Number(rotation.value)||0});
-            standards=standards.map(s=>s.id===id?response.standard:s);saving=false;
-            await show(id);await load();toast('标准章已替换，图片、识别文字、形状和颜色已同步更新。');
-          }catch(error){saving=false;feedback.textContent=error.message;$$('button,input',target).forEach(b=>b.disabled=false);$$('[data-seal-candidate]',target).forEach(b=>b.disabled=!data.sources.find(s=>s.id===Number(b.dataset.sourceId))?.candidates.find(c=>c.id===b.dataset.sealCandidate)?.can_register);}
+        trigger.disabled=false; trigger.textContent='替换标准章';
+        openStandardDialog({ui,standard:data.standard,requirement:data.standard.requirement,sources:data.sources,
+          onSave:async ({source,candidate,rotation}) => {
+            if(saving) throw new Error('正在保存，请稍候。');
+            saving=true;
+            try { return await services.sealStandards.save(source.id,{candidate_id:candidate.id,
+              standard_revision:data.standard.revision,review_revision:source.review_revision,rotation}); }
+            finally { saving=false; }
+          },
+          onSaved:response => {
+            standards=standards.map(s=>s.id===id?response.standard:s);
+            load().catch(error=>toast(error.message,'danger'));
+            toast('标准章已替换，图片、识别文字、形状和颜色已同步更新。');
+          }
         });
       } catch(error) {toast(error.message,'danger');trigger.disabled=false;trigger.textContent='替换标准章';}
     });

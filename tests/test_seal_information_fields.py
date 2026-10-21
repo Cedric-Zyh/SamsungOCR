@@ -122,3 +122,74 @@ def test_single_model_policy_rechecks_required_fields(text, simulated, reliable)
         {}, check, {"page": "paddle_v6", "date": "paddle_v6", "seal": "paddle_v6"}
     )
     assert check["reliable"] is reliable
+
+
+FOSHAN_REQUIRED = "三星电子服务中心授权代码:6055487"
+FOSHAN_ADDRESS = "佛山市禅城区体育路1号首层"
+FOSHAN_PHONE = "0757-83285088"
+FOSHAN_STAMP = FOSHAN_REQUIRED + FOSHAN_ADDRESS + FOSHAN_PHONE
+
+
+@pytest.mark.parametrize("text", [
+    FOSHAN_STAMP,
+    FOSHAN_STAMP.replace(":", "： "),
+    FOSHAN_STAMP.replace("6055487", "６０５５４８７"),
+    FOSHAN_REQUIRED + "\n" + FOSHAN_ADDRESS + "\n" + FOSHAN_PHONE,
+    FOSHAN_REQUIRED + "地址：" + FOSHAN_ADDRESS + FOSHAN_PHONE,
+    FOSHAN_REQUIRED + FOSHAN_ADDRESS + "电话：" + FOSHAN_PHONE,
+])
+def test_unlabelled_address_and_phone_preserve_complete_identity(text):
+    result = compare(FOSHAN_REQUIRED, text)
+    assert result["status"] == "匹配"
+    assert result["recognized"] == text
+    assert result["all_recognized"] == [text]
+    assert result["field_comparison"]["matched_fields"] == ["名称", "授权代码"]
+    assert result["field_comparison"]["additional_fields"] == ["地址", "电话"]
+    assert result["comparison_policy"] == "strict_information_fields"
+    _apply_single_paddle_safety(
+        {}, result, {"page": "paddle_v6", "date": "paddle_v6", "seal": "paddle_v6"}
+    )
+    assert result["reliable"] is True
+
+
+@pytest.mark.parametrize("text", [
+    FOSHAN_STAMP.replace("6055487", "6055488"),
+    FOSHAN_STAMP.replace("6055487", "605548"),
+    FOSHAN_STAMP.replace("6055487", "60554870"),
+    FOSHAN_STAMP.replace("6055487", "06055487"),
+    FOSHAN_STAMP.replace("6055487", "605548O"),
+    FOSHAN_STAMP.replace("三星", "星"),
+    FOSHAN_STAMP.replace("服务中心", "服文出心"),
+    FOSHAN_STAMP.replace("服务中心", "服务中心分公司"),
+    FOSHAN_STAMP.replace("佛山市", "佛山市其他公司"),
+    FOSHAN_STAMP.replace("体育路", "体育分公司路"),
+    FOSHAN_STAMP.replace("首层", "首层编号1"),
+    FOSHAN_STAMP.replace("首层", "首层收货章1"),
+    FOSHAN_STAMP + "另一个公司",
+    FOSHAN_STAMP + "授权代码:6055488",
+    FOSHAN_STAMP + "电话:0757-83285089",
+    FOSHAN_REQUIRED + "其他信息" + FOSHAN_PHONE,
+    FOSHAN_REQUIRED + FOSHAN_ADDRESS,
+    FOSHAN_REQUIRED + FOSHAN_PHONE,
+    FOSHAN_STAMP.replace(FOSHAN_PHONE, "0757-832850"),
+    FOSHAN_STAMP.replace(FOSHAN_PHONE, "0757-832850880"),
+])
+def test_unlabelled_fields_do_not_hide_wrong_identity_or_ambiguous_tail(text):
+    assert compare(FOSHAN_REQUIRED, text)["status"] != "匹配"
+
+
+@pytest.mark.parametrize("field,value,wrong", [
+    ("地址", FOSHAN_ADDRESS, FOSHAN_ADDRESS.replace("1", "2")),
+    ("电话", FOSHAN_PHONE, "0757-83285089"),
+])
+def test_unlabelled_contacts_must_match_when_required(field, value, wrong):
+    required = FOSHAN_REQUIRED + field + ":" + value
+    assert compare(required, FOSHAN_STAMP)["status"] == "匹配"
+    assert compare(required, FOSHAN_STAMP.replace(value, wrong))["status"] != "匹配"
+
+
+def test_unlabelled_fields_cannot_be_assembled_from_separate_seals():
+    result = compare_seal_text_strict(FOSHAN_REQUIRED, [
+        "三星电子服务中心", "授权代码:6055487" + FOSHAN_ADDRESS + FOSHAN_PHONE,
+    ])
+    assert result["status"] != "匹配"

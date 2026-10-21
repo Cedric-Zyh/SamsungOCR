@@ -1,0 +1,16 @@
+{% macro import_dropzone(prefix="", noun="回单", autofocus=true) -%}
+<div id="{{ prefix }}drop-zone" class="drop-zone small-drop" aria-label="上传{{ noun }}图片">
+            <input id="{{ prefix }}file-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
+            <input id="{{ prefix }}folder-input" type="file" webkitdirectory directory multiple hidden>
+            <div class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 48" fill="none"><path class="upload-sheet-back" d="M13 8h20v29H13z" transform="rotate(-12 23 23)"/><rect x="15" y="7" width="24" height="32" rx="3"/><path d="M21 15h12M21 20h8M21 29l4 4 8-9"/></svg>
+            </div>
+            <h2>将{{ noun }}拖到这里</h2>
+            <p>支持多张图片或整个文件夹，自动包含子文件夹</p>
+            <div class="button-row">
+              <button type="button" class="primary-button" id="{{ prefix }}choose-file"{% if autofocus %} autofocus{% endif %}>选择图片</button>
+              <button type="button" class="secondary-button" id="{{ prefix }}choose-folder">选择文件夹</button>
+            </div>
+            <span class="import-formats">JPG · PNG · BMP · WEBP</span>
+          </div>
+{%- endmacro %}

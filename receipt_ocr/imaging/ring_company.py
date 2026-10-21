@@ -7,8 +7,8 @@ import numpy as np
 from .io import _read_image, _write_stage_image
 
 
-def save_company_ring_input(source, destination):
-    """Exclude an isolated run of small outer glyphs before company OCR.
+def small_outer_groups(image):
+    """Locate isolated runs of small outer glyphs without changing pixels.
 
     On round company seals the oppositely oriented serial number unfolds as
     small glyphs against the top (outer) edge. Require a long, consistent run,
@@ -16,7 +16,6 @@ def save_company_ring_input(source, destination):
     This is a conservative layout gate, not a text-level digit replacement or
     a general orientation classifier. Ambiguous layouts keep the full input.
     """
-    image = _read_image(source)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
     ink = (gray < 180).astype(np.uint8)
@@ -25,7 +24,7 @@ def save_company_ring_input(source, destination):
     large = [row for row in components
              if row[3] >= height * .50 and row[2] >= height * .20]
     if len(large) < 3:
-        return None
+        return []
 
     small = sorted(row for row in components
                    if height * .14 <= row[3] <= height * .38
@@ -39,7 +38,6 @@ def save_company_ring_input(source, destination):
         else:
             groups.append([row])
 
-    keep = np.ones(width, dtype=bool)
     excluded = []
     pad = max(2, round(height * .02))
     for group in groups:
@@ -54,11 +52,23 @@ def save_company_ring_input(source, destination):
         below = ink[min(height, bottom + pad):, left:right]
         if below.size == 0 or np.mean(below) > .005:
             continue
-        keep[left:right] = False
         excluded.append({"box": [left, top, right, bottom], "glyph_count": len(group)})
+
+    return excluded
+
+
+def save_company_ring_input(source, destination):
+    """Keep the existing company-only derivative unchanged."""
+    image = _read_image(source)
+    excluded = small_outer_groups(image)
 
     if not excluded:
         return None
+    height, width = image.shape[:2]
+    keep = np.ones(width, dtype=bool)
+    for item in excluded:
+        left, _, right, _ = item["box"]
+        keep[left:right] = False
     # Join the remaining arc segments without rescaling their glyphs. The
     # existing circular seam reorder still handles a split company suffix.
     output = image[:, keep]

@@ -136,6 +136,13 @@ def prepare_number_input(source, destination, focus_box, *, reader, provider):
                 search_box[0] + tight_box[2], search_box[1] + tight_box[3],
             ])
         if len(candidates) != 1:
+            if not candidates:
+                from .number_overlap import prepare_overlapping_number
+                overlap = prepare_overlapping_number(
+                    source, destination, focus_box, reader=reader, provider=provider,
+                )
+                if overlap is not None:
+                    return {**overlap, "initial_search_box": list(search_box)}
             return {**evidence, "status": "ambiguous" if candidates else "not_detected"}
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)

@@ -1,20 +1,8 @@
+{% from "partials/import_dropzone.html" import import_dropzone %}
     <section data-page="import" class="hidden">
       <section class="workspace batch-workspace">
         <div class="upload-panel">
-          <div id="drop-zone" class="drop-zone small-drop" aria-label="上传回单图片">
-            <input id="file-input" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
-            <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-            <div class="upload-icon" aria-hidden="true">
-              <svg viewBox="0 0 48 48" fill="none"><path class="upload-sheet-back" d="M13 8h20v29H13z" transform="rotate(-12 23 23)"/><rect x="15" y="7" width="24" height="32" rx="3"/><path d="M21 15h12M21 20h8M21 29l4 4 8-9"/></svg>
-            </div>
-            <h2>将回单拖到这里</h2>
-            <p>支持多张图片或整个文件夹，自动包含子文件夹</p>
-            <div class="button-row">
-              <button type="button" class="primary-button" id="choose-file" autofocus>选择图片</button>
-              <button type="button" class="secondary-button" id="choose-folder">选择文件夹</button>
-            </div>
-            <span class="import-formats">JPG · PNG · BMP · WEBP</span>
-          </div>
+          {{ import_dropzone() }}
           <p id="folder-scan-status" class="import-hint" role="status" aria-live="polite"></p>
           <div class="import-guidance">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg>

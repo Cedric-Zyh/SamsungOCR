@@ -72,9 +72,36 @@ def detected_rows(boxes, image, rho, *, allow_single_type=False):
         np.asarray(rows[0]['polygon'], np.float32),
         np.asarray(rows[1]['polygon'], np.float32),
     )
-    if intersection > 1:
+    smaller_area = min(cv2.contourArea(np.asarray(row['polygon'], np.float32))
+                       for row in rows)
+    if intersection > .12 * smaller_area:
         return []
     return rows
+
+
+def _detect_layout_rows(source, directory, index, image, rho, *, reader, provider):
+    """Detect at a bounded scale, then map the complete rows to source pixels."""
+    height, width = image.shape[:2]
+    if max(height, width) > 512:
+        directory.mkdir(parents=True, exist_ok=True)
+        scale = 512 / max(height, width)
+        size = (round(width * scale), round(height * scale))
+        preview = directory / f'seal-{index}-zones-detection.png'
+        if not cv2.imwrite(str(preview), cv2.resize(image, size, interpolation=cv2.INTER_AREA)):
+            raise ValueError('文字分区检测图保存失败')
+        boxes = []
+        for box in reader.detect_boxes(preview, provider=provider):
+            points = np.asarray(box.get('points', []), dtype=float)
+            if points.shape != (4, 2) or not np.isfinite(points).all():
+                continue
+            boxes.append({**box, 'points': (points * [width / size[0],
+                                                    height / size[1]]).tolist()})
+        rows = detected_rows(boxes, image, rho, allow_single_type=True)
+        if len(rows) == 2:
+            return boxes, rows
+    # Retain fine-detail rows that the smaller preview cannot locate.
+    boxes = reader.detect_boxes(source, provider=provider)
+    return boxes, detected_rows(boxes, image, rho, allow_single_type=True)
 
 
 def prepare_detected_layout(source, directory, index, image, guide, rho, *, reader, provider):
@@ -86,8 +113,9 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
     def path(name):
         return directory / f'seal-{index}-zones-{name}.png'
 
-    boxes = reader.detect_boxes(source, provider=provider)
-    rows = detected_rows(boxes, image, rho, allow_single_type=True)
+    boxes, rows = _detect_layout_rows(
+        source, directory, index, image, rho, reader=reader, provider=provider,
+    )
     if len(rows) == 1:
         # Whole-stamp detection can miss a short parenthesized number.
         # Reuse the established tight-number locator, not a wide middle band.
@@ -113,8 +141,9 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
         polygons=[row['polygon'] for row in rows], mask_destination=path('mask'),
     )
     masked = cv2.imread(str(path('ring-input')))
-    maps = _arc_maps(masked, rho, guide, allow_empty_lower=True)
     roles = [row['role'] for row in rows]
+    maps = _arc_maps(masked, rho, guide, allow_empty_lower=True,
+                     allow_sparse_lower='phone' in roles)
     if maps is None or ('number' in roles and 'lower' not in maps):
         return None
     overlay = image.copy()
@@ -126,12 +155,24 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
     for i, row in enumerate(rows):
         name = f'inner-{i+1}'
         save_row_polygon(source, path(name), row['polygon'])
+        # Keep the full-resolution crop for inspection; read the same pixels
+        # at a stable line height rather than letting oversized glyphs vary.
+        crop = cv2.imread(str(path(name)))
+        read_path = path(name)
+        if crop.shape[0] > 64:
+            read_path = path(name + '-read')
+            size = (max(1, round(crop.shape[1] * 64 / crop.shape[0])), 64)
+            if not cv2.imwrite(str(read_path), cv2.resize(crop, size, interpolation=cv2.INTER_AREA)):
+                raise ValueError('内部文字识别图保存失败')
         cv2.polylines(overlay, [np.rint(row['polygon']).astype(np.int32)], True, (80, 110, 80), 3)
         plan['rows'].append({**row, 'name': name})
-        plan['jobs'].append((name, path(name), 'layout_inner', f'内部文字 {i+1}'))
+        plan['jobs'].append((name, read_path, 'layout_inner', f'内部文字 {i+1}'))
     cv2.imwrite(str(plan['overlay']), overlay)
     blue, green, red = (c.astype(float) for c in cv2.split(masked))
-    gray = (255-np.clip((red-np.maximum(blue, green))*255/160, 0, 255)).astype('uint8')
+    # Contact stamps already use the enhanced color image. Amplifying it again
+    # clips the thin gaps between dense company-name strokes after unwrapping.
+    gain = 1.0 if 'phone' in roles else 255/160
+    gray = (255-np.clip((red-np.maximum(blue, green))*gain, 0, 255)).astype('uint8')
     for key, mapping in maps.items():
         pixels = cv2.remap(gray, mapping['x'], mapping['y'], cv2.INTER_CUBIC,
                            borderMode=cv2.BORDER_CONSTANT, borderValue=255)

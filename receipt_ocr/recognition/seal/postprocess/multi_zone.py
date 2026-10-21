@@ -5,6 +5,16 @@ from collections import Counter
 from ..layout_fields import inner_role, phone_value
 
 
+def _station_phone(text):
+    phone = phone_value(text)
+    if phone:
+        return phone
+    # Labelled, contiguous landlines only. Keep the actual digits; a high OCR
+    # score does not make a short/partial phone number complete.
+    match = re.fullmatch(r'电话[:：]((?:010|02\d)\d{8}|0[3-9]\d{2}\d{7,8})', text)
+    return match[1] if match else ''
+
+
 def finalize_multi_zone(artifact):
     if not artifact.get('multi_zone_layout'):
         return []
@@ -12,6 +22,7 @@ def finalize_multi_zone(artifact):
     centers, stations, numbers, names = [], [], [], []
     phones, observed_roles = [], []
     unknown_lower = False
+    station_layout = artifact['multi_zone_layout'].get('method') == 'ellipse_station_rows'
     for row in rows:
         channel = row.get('channel')
         if channel not in {'layout_inner', 'layout_lower', 'ring'}:
@@ -25,7 +36,7 @@ def finalize_multi_zone(artifact):
             if trusted:
                 names.append(text)
         elif channel == 'layout_lower':
-            phone = phone_value(text)
+            phone = _station_phone(text) if station_layout else phone_value(text)
             role = '下弧电话' if phone else '下弧文字'
             artifact['lower_arc_text'] = row['text']
             if trusted and phone:
@@ -33,6 +44,8 @@ def finalize_multi_zone(artifact):
                 artifact.update(phone_text=phone, phone_url=row['image_url'])
             else:
                 unknown_lower = True
+                if station_layout:
+                    role = '下弧电话（识别不完整，请核对）'
         elif trusted and phone_value(text):
             role = '章内电话'
             phone = phone_value(text)
@@ -79,12 +92,27 @@ def finalize_multi_zone(artifact):
             artifact['combined_text'] = bases[-1]+'电话:'+phones[0]
         else:
             artifact['combined_text'] = ''
+    elif station_layout:
+        complete = (Counter(observed_roles) == Counter(['number', 'type', 'station'])
+                    and len(names) == len(centers) == len(stations) == len(numbers) == 1)
+        if complete:
+            base = names[0]+centers[0]+numbers[0]+stations[0]
+            matching.append(base)
+            if len(phones) == 1 and not unknown_lower:
+                matching.extend([base+'电话:'+phones[0], base+phones[0].replace('-', '')])
+            artifact['combined_text'] = matching[1] if len(matching) > 1 else base
+        else:
+            artifact['combined_text'] = ''
+        artifact['phone_status'] = ('recognized' if len(phones) == 1 and not unknown_lower
+                                    else 'needs_review')
     elif len(names) == len(centers) == len(stations) == 1:
         matching.append(names[0]+centers[0]+stations[0])
         if len(numbers) == 1:
             matching.append(names[0]+centers[0]+numbers[0]+stations[0])
     artifact['matching_texts'] = matching
-    if layout.get('method') != 'ellipse_detected_rows':
+    if layout.get('method') not in {'ellipse_detected_rows', 'ellipse_station_rows'}:
         artifact['combined_text'] = matching[0] if matching else ''
     artifact['multi_zone_layout']['status'] = 'recognized' if matching else 'needs_review'
+    if station_layout and artifact['phone_status'] == 'needs_review':
+        artifact['multi_zone_layout']['status'] = 'needs_review'
     return matching

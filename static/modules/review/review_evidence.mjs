@@ -69,15 +69,19 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     }
     const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const measuredRow = item.ring_input_mask_method === 'verified_glyph_row';
+    const measuredRow = ['verified_glyph_row', 'verified_local_row'].includes(item.ring_input_mask_method);
     const tightMask = measuredRow || item.ring_input_mask_method === 'contained_text_ink';
-    const ringInputLabel = tightMask
+    const ringInputLabel = item.ring_number_mask?.status === 'applied'
+      ? '旋正章色图 · 横排文字与已确认编号笔画填白（环形展开来源）'
+      : tightMask
       ? '旋正章色图 · 仅横排文字笔画填白（环形展开来源）'
       : hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
     const unwrapCardLabel = item.ring_company_selection
       ? `${unwrapLabel}（公司名称输入，已排除小字号段）`
+      : item.ring_geometry === 'fitted_ellipse_normals'
+      ? `${unwrapLabel}（沿椭圆垂直方向展开，双档识别一致）`
       : item.ring_geometry === 'ellipse_observed_border'
       ? `${unwrapLabel}（沿检测到的边框环展开）`
       : item.ring_geometry === 'ellipse_direct_normals'
@@ -96,9 +100,13 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifactCard(ringInputLabel, item.ring_input_url),
       artifactCard('环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || '', true),
+      item.ring_normal_alternative?.image_url ? artifactCard(
+        '环字备选 · 沿边框垂直方向展开（仅供核对，不参与匹配）',
+        item.ring_normal_alternative.image_url, item.ring_normal_alternative.text || '', true) : '',
       item.unwrapped_full_url ? artifactCard('完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
       item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
       item.stamp_number_url ? artifactCard(numberLabel, item.stamp_number_url, item.stamp_number_text || '') : '',
+      item.ring_serial_url ? artifactCard('环形编号（独立识别）', item.ring_serial_url, item.ring_serial_text || '', true) : '',
       numberRecovery?.original_number_url ? artifactCard('编号原图笔画核对', numberRecovery.original_number_url) : '',
     ].join('');
     const box = hasMaskedTypeRow
@@ -120,7 +128,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function modernSealReads(item) {
     const rows = (item.reads || []).filter(row => row?.text).map(row => {
-      const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel || 'OCR');
+      const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel === 'serial' ? '环形编号' : row.channel || 'OCR');
       const confidence = row.confidence == null ? '' : ` · ${percent(row.confidence)}`;
       return `<div class="seal-source-row"><b>${escapeHtml(channel)} · ${escapeHtml(row.provider || 'OCR')}</b><span>${escapeHtml(row.text)}${confidence}</span></div>`;
     });
@@ -314,8 +322,10 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         const codeText = [item.code_line_text, item.secondary_code_line_text].filter(Boolean).join(' | ');
         const unwrapText = [item.unwrapped_text, item.secondary_unwrapped_text, item.secondary_read_text].filter(Boolean).join(' | ');
         const rotatedText = [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ');
+        const rectangularPartLabel = item.rectangular_layout === 'frame_columns' ? '文字块'
+          : ['single_detection', 'frame_rows'].includes(item.rectangular_layout) ? '文字行' : '合并文字带';
         const rectangularRowCards = (item.rectangular_row_urls || []).map((url, index) => artifactCard(
-          `矩形印章${item.rectangular_layout === 'single_detection' ? '文字行' : '合并文字带'} ${index + 1}`,
+          `矩形印章${rectangularPartLabel} ${index + 1}`,
           url,
           (item.rectangular_row_texts || item.rectangular_texts || [])[index] || '',
         )).join('');

@@ -283,8 +283,10 @@ def test_four_way_rejects_good_anchor_when_final_row_is_unreadable():
     assert flipped['rejection_reason'] == '转正后未读到可靠章型行'
 
 
-@pytest.mark.parametrize('text', ['业务受理', '业务受理章', '业务 受理'])
-def test_business_acceptance_is_a_complete_direction_anchor(text):
+@pytest.mark.parametrize('text', ['业务受理', '业务受理章', '业务 受理', '东城星河城', '东城 星河城',
+                                 '业务章', '业 务章', '业务专章', '业务 专章',
+                                 '客户服务中心', '客户 服务中心'])
+def test_registered_horizontal_row_is_a_complete_direction_anchor(text):
     from receipt_ocr.recognition.seal.preprocess.orientation_angles import _stamp_type_marker_strength
     decision = choose_round_stamp_angle([dict(
         text=text, confidence=.99, angle=-12.361,
@@ -304,6 +306,15 @@ def test_business_acceptance_is_a_complete_direction_anchor(text):
     ('业务受', .99, -12.361), ('业务受埋', .99, -12.361),
     ('业务受理有限公司', .99, -12.361), ('业务受理', .54, -12.361),
     ('业务受理', .9998, 79.353),
+    ('东城星河', .99, -24.5), ('东城星河成', .99, -24.5),
+    ('东城星河城有限公司', .99, -24.5), ('东城星河城', .54, -24.5),
+    ('东城星河城', .9998, 66.9),
+    ('业务', .99, -20.), ('业务草', .99, -20.), ('业务章有限公司', .99, -20.),
+    ('业务章', .54, -20.), ('业务章', .999, 60.),
+    ('业务专', .99, -20.), ('业务专章有限公司', .99, -20.),
+    ('业务专章', .54, -20.), ('业务专章', .999, 60.),
+    ('客户服务中', .99, -20.), ('客户服务中心有限公司', .99, -20.),
+    ('客户服务中心', .54, -20.), ('客户服务中心', .999, 60.),
 ])
 def test_business_acceptance_keeps_text_confidence_and_angle_checks(text, confidence, fine):
     original = dict(angle=0, fine_rotation=0., band_text='', band_confidence=0., error='')

@@ -5,12 +5,35 @@ import hashlib
 from .decision import decide_overall
 from .issues import issue, active_issues
 from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict
+from .seal_serial import serial_matching_texts
 
 SHAPES = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
 
 
 def requirement_key(value):
     return normalize_seal_text_strict(str(value or ""))
+
+
+def _registration_preferences(result, candidates):
+    """Hide only proven remote duplicates in the picker, not in OCR evidence."""
+    local_urls = set()
+    variants = (result.get("recognition_variants") or {}).get("seal") or []
+    for variant in variants:
+        details = variant.get("details") or {}
+        check = details.get("seal_check") or {}
+        if check.get("region_source") == "清瞳印章区域":
+            local_urls.update(a.get("original_url") for a in
+                             (details.get("processing_artifacts") or {}).get("seals") or []
+                             if a.get("source") != "清瞳印章区域")
+    # Older single-engine results may not carry recognition_variants.
+    check = result.get("seal_check") or {}
+    if not variants and any(c.get("region_source") == "清瞳印章区域" for c in
+                            [check, check.get("local_channel") or {}, check.get("local_evidence") or {}]):
+        local_urls.update(c["original_url"] for c in candidates if c["source"] == "local")
+    preferred = {c["index"] for c in candidates if c["source"] == "local"
+                 and c["can_register"] and c["original_url"] in local_urls}
+    for candidate in candidates:
+        candidate["registration_hidden"] = candidate["source"] == "qingtong" and candidate["index"] in preferred
 
 
 def seal_candidates(result):
@@ -38,7 +61,9 @@ def seal_candidates(result):
                       artifact.get("combined_text")])
         texts.extend(artifact.get("matching_texts") or [])
         texts.extend(read.get("text") for read in artifact.get("reads") or []
-                     if isinstance(read, dict) and read.get("matching") is not False)
+                     if isinstance(read, dict) and read.get("matching") is not False
+                     and read.get("channel") != "serial")
+        texts.extend(serial_matching_texts(requirement, artifact))
         texts.extend(artifact.get("color_isolated_texts") or [])
         # Remote OCR belongs only to the explicitly identified API stamp.
         if artifact.get("source") == "清瞳印章区域":
@@ -48,6 +73,7 @@ def seal_candidates(result):
         comparison = compare_seal_text_strict(requirement, texts, mismatch_over_partial=True)
         candidates.append({
             "id": hashlib.sha256(identity.encode()).hexdigest()[:24],
+            "source": "qingtong" if artifact.get("source") == "清瞳印章区域" else "local",
             "index": artifact.get("index", len(candidates)),
             "image_url": clean, "original_url": original,
             "shape": shape if shape in SHAPES else "", "shape_label": SHAPES.get(shape, "未知形状"),
@@ -57,6 +83,7 @@ def seal_candidates(result):
             "text_match_message": comparison["message"] if comparison.get("field_comparison") else "",
             "can_register": bool(clean and shape in SHAPES and artifact.get("color") in {"red", "blue"}),
         })
+    _registration_preferences(result, candidates)
     return candidates
 
 

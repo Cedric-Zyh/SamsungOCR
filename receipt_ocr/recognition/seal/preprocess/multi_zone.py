@@ -53,7 +53,7 @@ def _inner_rows(image, rho, axes):
     return sorted(rows, key=lambda row: row['box'][1])
 
 
-def _arc_maps(masked, rho, guide, *, allow_empty_lower=False):
+def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower=False):
     (cx, cy), (a, b), _ = guide.annulus[0][2]
     ink = ((255-masked[:, :, 1].astype(float)) > 35) & (rho < .93)
     _, labels, stats, centers = cv2.connectedComponentsWithStats(
@@ -80,6 +80,10 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False):
         if key == 'lower' and not group and allow_empty_lower:
             continue
         if len(group) < 3:
+            # Optional lower arc on a verified phone + purpose layout: isolated
+            # remnants do not invalidate its complete upper company-name arc.
+            if key == 'lower' and allow_sparse_lower:
+                continue
             return None
         ys = np.concatenate([p[0] for p in group])
         xs = np.concatenate([p[1] for p in group])
@@ -114,13 +118,18 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False):
 def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
     """Separate contact layouts, retaining the established multi-row route.
 
-    Two interior seeds require verified whole-image rows; three or more use
-    the measured-border component route. Ordinary one-row stamps fall back.
+    Prefer complete detector rows over fragmented component groups. Keep the
+    component route for other multi-row layouts; ordinary one-row stamps fall back.
     Required wording never chooses geometry.
     """
     image = cv2.imread(str(source))
     if image is None:
         return None
+    if reader is not None:
+        from .station_layout import prepare_station_layout
+        station_plan = prepare_station_layout(image, directory, index, reader=reader, provider=provider)
+        if station_plan is not None:
+            return station_plan
     guide = trace_ellipse_border(source, color='red')
     measured = guide is not None
     if guide is None and reader is not None:
@@ -135,11 +144,13 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
     rho = np.hypot((dx*np.cos(t)+dy*np.sin(t))/(a/2),
                    (-dx*np.sin(t)+dy*np.cos(t))/(b/2))
     rows = _inner_rows(image, rho, (a, b))
-    if len(rows) == 2 and reader is not None:
+    if 2 <= len(rows) <= 6 and reader is not None:
         from .detected_layout import prepare_detected_layout
-        return prepare_detected_layout(
+        detected = prepare_detected_layout(
             source, directory, index, image, guide, rho, reader=reader, provider=provider,
         )
+        if detected is not None:
+            return detected
     if not measured:
         return None
     if not 3 <= len(rows) <= 6:

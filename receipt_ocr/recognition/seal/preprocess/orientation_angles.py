@@ -13,6 +13,17 @@ def _is_business_acceptance_marker(text):
     return re.sub(r"\s+", "", str(text or "")) in {"业务受理", "业务受理章"}
 
 
+def _is_registered_shop_row(text):
+    # Explicitly registered horizontal shop rows. Require the complete OCR
+    # reading; never complete a fragment from the requested seal text.
+    return re.sub(r"\s+", "", str(text or "")) in {"东城星河城"}
+
+
+def _is_service_type_row(text):
+    # Only complete standalone rows, not company names containing these words.
+    return re.sub(r"\s+", "", str(text or "")) in {"业务章", "业务专章", "客户服务中心"}
+
+
 def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN_CONFIDENCE):
     """Choose a round-stamp rotation from a detected ``用章`` text polygon.
 
@@ -36,6 +47,8 @@ def choose_round_stamp_angle(boxes, *, minimum_confidence=ROUND_STAMP_ANCHOR_MIN
             or "专用" in text
             or ("收货" in text and "章" in text)
             or _is_business_acceptance_marker(text)
+            or _is_registered_shop_row(text)
+            or _is_service_type_row(text)
         )
         if not is_stamp_type:
             continue
@@ -212,13 +225,15 @@ def _round_stamp_type_texts(boxes, decision):
 def _stamp_type_marker_strength(text):
     """How strongly a reading looks like the closed-set stamp-type row.
 
-    Deliberately generic: it never looks at the requested seal text, so the
-    same signal is available for every candidate angle.
+    Uses type markers and explicitly registered horizontal shop rows, never
+    the requested seal text, so every candidate angle gets the same signal.
     """
     text = str(text or "")
     if "收货" in text and "章" in text:
         return 3
-    if ("专用" in text and "章" in text) or "用章" in text or _is_business_acceptance_marker(text):
+    if (("专用" in text and "章" in text) or "用章" in text
+            or _is_business_acceptance_marker(text) or _is_registered_shop_row(text)
+            or _is_service_type_row(text)):
         return 2
     if "章" in text:
         return 1

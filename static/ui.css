@@ -22,3 +22,7 @@
 @import url('./styles/original_preview.css');
 
 @import url('./styles/samples.css');
+/* Shared shell rules come last so feature pages cannot shift navigation. */
+@import url('./styles/shell.css');
+
+@import url('./styles/standard_dialog.css');

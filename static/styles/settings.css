@@ -108,8 +108,6 @@
 .settings-rule-list>div:last-child { padding-bottom:0; }
 .settings-rule-list strong { color:var(--archive-text); font-size:12px; font-weight:500; }
 .settings-page .settings-rule-list p { margin:5px 0 0; color:var(--archive-muted); font-size:12px; }
-.settings-sample-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-.settings-page .settings-sample-heading p { margin:0; font-size:12px; color:var(--archive-muted); }
 .settings-page .sample-buttons { margin-top:15px; }
 .settings-page .sample-button { font-family:inherit; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
 .settings-page .sample-button.accent { color:var(--archive-ink); background:var(--archive-accent-wash); border-color:#c9b491; }

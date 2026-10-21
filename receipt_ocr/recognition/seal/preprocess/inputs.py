@@ -19,11 +19,16 @@ from .doc_orientation import prepare_round_stamp_doc_ori
 from .combined_orientation import prepare_round_stamp_combined
 from .rectangle_orientation import prepare_rectangular_stamp
 from .rectangle_rows import prepare_fixed_rectangle_rows
+from .rectangle_layout import prepare_frame_layout
 from .ellipse import prepare_ellipse_stamp
 from .number import prepare_number_input
+from .number_mask import white_verified_number
 from .number_recovery import recover_number_punctuation
 from .red_enhancement import enhance_oriented_red_seal
+from .oval_ring import prepare_oval_ring
 from .multi_zone import prepare_multi_zone
+from .local_type_row import prepare_local_type_row
+from .horizontal_consensus import prepare_horizontal_consensus, protect_consensus_border
 from ..ocr.interface import OcrReader
 
 SHAPE_LABELS = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
@@ -37,6 +42,7 @@ def _white_detected_type_region(
     polygons: list[list[list[int]]] | None = None,
     mask_destination: Path | None = None,
     verified_interior: list | None = None,
+    verified_coverage: np.ndarray | None = None,
 ) -> Path:
     """White observed row ink, protecting the border and outside pixels.
 
@@ -60,12 +66,17 @@ def _white_detected_type_region(
     else:
         raise ValueError("横向文字覆盖区域为空")
     ink = np.any(image < 255, axis=2).astype(np.uint8)
-    if verified_interior is not None:
-        # This branch is only for a glyph-measured, OCR-verified full row.
+    if verified_interior is not None or verified_coverage is not None:
+        # This branch is only for a measured/detected, OCR-verified full row.
         # A stroke joined to an outside table remnant must not retain the
         # whole glyph. Clip at the measured row and protect the observed rim.
-        interior = np.zeros_like(mask)
-        cv2.fillPoly(interior, [np.rint(verified_interior).astype(np.int32)], 255)
+        if verified_coverage is not None:
+            if verified_coverage.shape != mask.shape:
+                raise ValueError("横排文字覆盖范围与旋正图尺寸不一致")
+            interior = verified_coverage
+        else:
+            interior = np.zeros_like(mask)
+            cv2.fillPoly(interior, [np.rint(verified_interior).astype(np.int32)], 255)
         selected = (ink > 0) & (mask > 0) & (interior > 0)
         image[selected] = 255
         if mask_destination is not None:
@@ -138,7 +149,21 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
     shape = classify_shape(source, region)
     artifact["shape"] = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}[shape]
     artifact["shape_code"] = shape
+    if (shape == "rectangle" and region.color == "red" and orientation_mode != "none"
+            and variant_of(provider) == "v6"):
+        try:
+            metadata, frame_inputs, jobs = prepare_frame_layout(
+                color, directory, index, url_prefix, provider, orientation_mode, OcrReader(),
+            )
+        except Exception as exc:
+            # Missing/broken rims retain the existing text-box path.
+            artifact["rectangular_frame_fallback"] = str(exc)
+        else:
+            artifact.update(metadata)
+            inputs.extend(frame_inputs)
+            return artifact, jobs
     working = color
+    consensus = None
     orientation = {"mode": orientation_mode, "status": "保留原方向", "confidence": 0.0, "rotation_steps": []}
     if orientation_mode != "none":
         try:
@@ -154,7 +179,38 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             elif orientation_mode == "doc_ori":
                 corrected, orientation = prepare_round_stamp_doc_ori(color, target)
             elif orientation_mode == "combined":
-                corrected, orientation = prepare_round_stamp_combined(color, target, model_variant=variant_of(provider) or "v6")
+                model_variant = variant_of(provider) or "v6"
+                corrected, orientation = prepare_round_stamp_combined(color, target, model_variant=model_variant)
+                if shape == "round" and region.color == "red" and model_variant == "v6":
+                    try:
+                        consensus = prepare_horizontal_consensus(
+                            original, color, path("consensus-oriented"), reader=OcrReader(), provider=provider,
+                            model_variant=model_variant, prior=orientation,
+                        )
+                    except Exception as exc:
+                        artifact["horizontal_consensus_fallback"] = str(exc)
+                if consensus is not None:
+                    corrected, orientation = consensus["working"], consensus["orientation"]
+                    artifact["horizontal_row_consensus"] = consensus["audit"]
+                elif region.color == "red" and not orientation.get("type_band_text"):
+                    # The usual cleaned view can lose a slanted row even when
+                    # native source chroma still carries it. Retry only failures,
+                    # retaining the existing geometry and full-row verification.
+                    try:
+                        orientation_source = enhance_oriented_red_seal(
+                            source, region, color, path("orientation-source"), {"rotation_steps": []})
+                        if orientation_source is not None:
+                            retry_image, retry = prepare_round_stamp_combined(
+                                orientation_source, path("source-oriented"),
+                                model_variant=model_variant, retry_large_angles=True)
+                            artifact["source_orientation_attempt"] = retry
+                            if retry.get("type_band_text"):
+                                artifact["orientation_before_source_retry"] = orientation
+                                artifact["orientation_source_url"] = add(
+                                    "orientation-source", orientation_source, "方向检测 · 原图章色增强")
+                                corrected, orientation = retry_image or orientation_source, retry
+                    except Exception as exc:
+                        artifact["source_orientation_fallback"] = str(exc)
             else:
                 prepare = prepare_ellipse_stamp if shape == "ellipse" else prepare_round_stamp
                 corrected, orientation = prepare(color, target, model_variant=variant_of(provider) or "v6")
@@ -164,25 +220,34 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
         except Exception as exc:
             artifact["errors"].append({"step": "orientation", "message": str(exc)})
     artifact["orientation"] = orientation
-    if shape != "rectangle" and artifact.get("color_isolated_oriented_url") and region.color == "red":
+    unrotated_round = shape == "round" and working == color
+    if (consensus is None and shape != "rectangle" and region.color == "red"
+            and (artifact.get("color_isolated_oriented_url") or unrotated_round)):
         try:
+            # A ring-only stamp may have no horizontal orientation anchor.
+            # Keeping its direction must not skip source-chroma cleanup:
+            # the old enhanced dark remnants otherwise become false glyphs.
+            # The untouched color canvas has a known identity mapping even
+            # when the failed orientation search omits rotation_steps.
+            enhancement_orientation = {"rotation_steps": []} if unrotated_round else orientation
             enhanced = enhance_oriented_red_seal(
-                source, region, working, path("enhanced"), orientation,
+                source, region, working, path("enhanced"), enhancement_orientation,
             )
             if enhanced is not None:
                 working = enhanced
                 artifact["color_isolated_oriented_url"] = add(
-                    "enhanced", working, "旋正红章 · 原色结合增强",
+                    "enhanced", working, "红章 · 原色结合增强" if unrotated_round else "旋正红章 · 原色结合增强",
                 )
                 artifact["red_enhancement"] = {
                     "method": "source_chroma_supported_blend",
                     "chroma_gain": 2.0,
                     "previous_strength_weight": 0.15,
+                    "coordinate_frame": "unrotated" if unrotated_round else "oriented",
                 }
         except Exception as exc:
             artifact["errors"].append({"step": "red_enhancement", "message": str(exc)})
     if shape == "ellipse":
-        artifact["ring_geometry"] = "ellipse_direct_normals"
+        artifact["ring_geometry"] = "ellipse_proportional"
 
     # Always read the final color-safe geometry, never the original form crop.
     body_input = inputs[-1]
@@ -277,12 +342,32 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 # Full-row localization and whole-stamp rotation are already
                 # complete. Cropping and masking now share that final frame.
                 refined = orientation.get("horizontal_row_localization")
+                local_row = None
+                if refined is None and consensus is None:
+                    try:
+                        local_row = prepare_local_type_row(
+                            working, center, orientation, reader=OcrReader(),
+                            provider=provider, color=region.color,
+                        )
+                    except Exception as exc:
+                        artifact["horizontal_row_refinement_error"] = str(exc)
+                if local_row:
+                    points = np.asarray(local_row["polygon"])
+                    mask_box = [*points.min(0), *points.max(0)]
+                    mask_polygons = [local_row["polygon"]]
+                    focus = mask_box
+                    artifact["horizontal_row_localization"] = {
+                        key: value for key, value in local_row.items() if key != "coverage"
+                    }
                 if refined is not None:
                     artifact["horizontal_row_localization"] = {
                         key: value for key, value in refined.items() if key != "protected_interior"
                     }
-                save_round_seal_type_band(working, center, orientation_aligned=aligned,
-                                          focus_box=orientation.get("oriented_type_row_read_box") or focus)
+                if consensus is not None:
+                    shutil.copyfile(consensus["center"], center)
+                elif local_row is None:
+                    save_round_seal_type_band(working, center, orientation_aligned=aligned,
+                                              focus_box=orientation.get("oriented_type_row_read_box") or focus)
                 box = tuple(int(round(value)) for value in mask_box)
                 center_url = add("center", center, "检测到的横向文字区域（仅定位/章型 OCR）", "center")
                 jobs.append((inputs[-1], center))
@@ -310,7 +395,10 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     working, ring_input, box, polygons=mask_polygons,
                     mask_destination=mask_path,
                     verified_interior=refined["protected_interior"] if refined else None,
+                    verified_coverage=local_row["coverage"] if local_row else None,
                 )
+                if consensus is not None:
+                    protect_consensus_border(working, ring_input, mask_path, consensus["guide"])
                 artifact["ring_input_mask_url"] = add("type-mask", mask_path, "横排文字实际填白范围")
                 ring_input_label = "旋正章色图 · 仅横排文字笔画填白（环形展开来源）"
                 artifact["ring_input_operation"] = "仅填白检测文字多边形内的独立笔画，保留跨边界的外圈和相邻文字，再展开读取环字"
@@ -321,8 +409,29 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     artifact["ring_input_mask_method"] = "verified_glyph_row"
                     artifact["ring_input_operation"] = "按实测字高和基线定位完整横排文字，识别验证后仅填白该行笔画，保护外边框，再展开读取环字"
                     artifact["ring_input_box_source"] = "完整横排文字范围（按字形实测，外边框保护）"
+                if local_row:
+                    artifact["ring_input_mask_method"] = "verified_local_row"
+                    artifact["ring_input_operation"] = "局部定位并验证完整横排，按同一文字范围读取和填白；可测量时按字形收紧并保护外边框，再展开读取环字"
+                    artifact["ring_input_box_source"] = "验证后的完整横排文字范围"
                 if mask_polygons:
                     artifact["ring_input_polygons"] = mask_polygons
+                # A separate number read remains an independent field, but
+                # must not be read again as part of the circular company name.
+                number_mask_path = path("number-mask")
+                try:
+                    number_mask = white_verified_number(
+                        ring_input, path("number"), artifact.get("stamp_number_detection") or {},
+                        number_mask_path, mask_path, reader=OcrReader(), provider=provider,
+                    )
+                    artifact["ring_number_mask"] = number_mask
+                    if number_mask["status"] == "applied":
+                        artifact["ring_number_mask_url"] = add(
+                            "number-mask", number_mask_path, "编号实际填白笔画"
+                        )
+                        ring_input_label = "旋正章色图 · 横排文字与已确认编号笔画填白（环形展开来源）"
+                        artifact["ring_input_operation"] += "；已确认的章内编号也按独立紧框填白"
+                except Exception as exc:
+                    artifact["errors"].append({"step": "number_mask", "message": str(exc)})
             else:
                 # A stamp may contain only circular company lettering. There is
                 # no horizontal type row to mask in that case, so the corrected
@@ -349,7 +458,9 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             # image.  Use the ellipse-aware sampler for both round and oval
             # stamps: the outer border remains visible after the cover, while
             # the inner border may be missing and must be estimated.
-            ring_guide = None
+            ring_guide = consensus["guide"] if consensus is not None else None
+            if consensus is not None:
+                artifact["ring_geometry"] = "fixed_pre_mask_ellipse"
             if shape == "ellipse":
                 # Measure the intact ring before the centre-row white mask can
                 # cut through it. All downstream images reuse these coordinates.
@@ -365,7 +476,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                         "method": "ellipse_estimate", "note": "可见边框不足，使用椭圆几何估计"
                     }
             ring_band = path("ring-text-band")
-            save_ring_text_band_preview(ring_input, ring_band, color=region.color, ring_guide=ring_guide)
+            save_ring_text_band_preview(ring_input, ring_band, color=region.color,
+                                        ring_guide=ring_guide, proportional=shape == "ellipse")
             artifact["ring_text_band_url"] = add(
                 "ring-text-band",
                 ring_band,
@@ -374,6 +486,33 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
                                 elliptical=True, normalized=True, single_line=True,
                                 direct_ellipse=shape == "ellipse", ring_guide=ring_guide)
+            if shape == "ellipse" and consensus is None:
+                try:
+                    oval = prepare_oval_ring(
+                        source, region, working,
+                        path("type-mask") if artifact.get("ring_input_mask_url") else None,
+                        ring_guide, [] if working == color else orientation.get("rotation_steps"),
+                        path("ring-native"), reader=OcrReader(), provider=provider,
+                    )
+                    if oval is not None:
+                        artifact["unwrapped_radial_url"] = add(
+                            "ring-radial", ring, "原展开图（对照）")
+                        ring = oval["ring"]
+                        ring_guide = oval["guide"]
+                        artifact["ring_source_chroma"] = oval["evidence"]
+                        artifact["ring_geometry"] = "fitted_ellipse_normals"
+                        artifact["ring_input_source_url"] = add(
+                            "ring-native-source", oval["source"], "原图淡红笔画增强")
+                        artifact["ring_input_url"] = add(
+                            "ring-native-input", oval["input"], "原图章色 · 横排笔画填白（环形展开来源）")
+                        save_ring_text_band_preview(
+                            oval["input"], ring_band, color=region.color,
+                            ring_guide=ring_guide, proportional=True)
+                        artifact["ring_border_detection"].update(
+                            sampling="fitted_ellipse_normals",
+                            unwrap_size=list(ring_guide.map_x.shape[::-1]))
+                except Exception as exc:
+                    artifact["errors"].append({"step": "oval_source_chroma", "message": str(exc)})
             if shape == "round":
                 company_ring = path("ring-company")
                 selection = save_company_ring_input(ring, company_ring)

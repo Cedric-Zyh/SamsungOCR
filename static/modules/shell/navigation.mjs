@@ -1,7 +1,7 @@
 import {localToday} from '../core/ui.mjs';
 export function createNavigation({
-  environment, ui, navigationState, recordsState, reportState, reviewState, canLeaveReview, dismissReview,
-  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadReport, loadSealCenter, loadSamples
+  environment, ui, navigationState, recordsState, reviewState, canLeaveReview, dismissReview,
+  openReview, showReviewEmpty, showImportDialog, loadReviewQueue, loadDailyResults, loadRecords, loadSealCenter, loadSamples
 }) {
   const {document, window, location, history} = environment;
   const {$, $$, toast} = ui;
@@ -11,7 +11,6 @@ export function createNavigation({
     'seal-center': ['印章中心', '维护标准印章，让每一次核验都有据可依。'],
     records: ['回单管理', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
-    quality: ['质量统计', '查看识别准确率、错误分布与样单评测结果。'],
     settings: ['设置', '选择识别内容与方式，让每次测试更有针对性。'],
     progress: ['工作台', '处理待办，跟进回单识别进度。'],
     review: ['人工复核', '对照原图核验信息，确认后保存结果。'],
@@ -84,7 +83,7 @@ export function createNavigation({
   }
   function routePage() {
     let route = location.hash.slice(1) || 'records';
-    if (route === 'progress') {
+    if (route === 'progress' || route === 'quality') {
       route = 'records';
       history.replaceState(null, '', '#records');
     }
@@ -116,7 +115,6 @@ export function createNavigation({
       }
       if (route === 'samples' && loadSamples) loadSamples();
       if (route === 'seal-center' && loadSealCenter) loadSealCenter().catch(error => toast(error.message, 'danger'));
-      if (route === 'quality' && (reportState.reportStale || !reportState.reportLoadedAt || Date.now() - reportState.reportLoadedAt >= 30000)) loadReport().catch(error => toast(error.message, 'danger'));
     }
   }
 

@@ -38,7 +38,16 @@ function harness({mode = 'review', standard = null, sampleView = false} = {}) {
     calls.push(args); return new Promise((resolve,reject) => {resolveSave=resolve;rejectSave=reject;});
   };
   const services = {sealStandards:{save:save('receipt')},samples:{saveStandard:save('sample')}};
-  createReviewStandard({ui:{$,$$,toast(){}},reviewState,services,onSaved:value=>saved=value})(item,{},mode);
+  let picker, selected = candidates[0];
+  createReviewStandard({ui:{$,$$,toast(){}},reviewState,services,onSaved:value=>saved=value,
+    openPicker: options => picker=options})(item,{},mode);
+  $('[data-open-standard-picker]').fire('click');
+  buttons.forEach((b,i)=>b.addEventListener('click',()=>selected=candidates[i]));
+  $('[data-standard-save]').addEventListener('click',async()=>{
+    if(reviewState.reviewSaving)return;
+    try {const response=await picker.onSave({candidate:selected,rotation:Number($('[data-standard-rotation]').value)});picker.onSaved(response);}
+    catch(error){$('[data-standard-feedback]').textContent=error.message;}
+  });
   return {$,buttons,controls,unrelated,reviewState,calls,routes,resolve:value=>resolveSave(value),reject:error=>rejectSave(error),saved:()=>saved};
 }
 
@@ -110,4 +119,12 @@ test('OCR text and source filename are escaped, while unknown shapes remain unav
   const markup=candidateCard({id:'one',recognized:'<img src=x onerror=1>',can_register:false,original_url:'/stamp.png',index:0},{filename:'<script>bad</script>'});
   assert.doesNotMatch(markup,/<script>|<img src=x/);assert.match(markup,/&lt;img/);assert.match(markup,/disabled/);
   assert.match(standardCard(null),/不会自动加入/);
+});
+
+test('picker hides remote duplicates per receipt without merging different receipts', () => {
+  const {registrationEntries} = require('../static/modules/seals/standard_dialog.mjs');
+  const local={id:'local',can_register:true}, duplicate={id:'remote',registration_hidden:true};
+  const sources=[{id:1,candidates:[local,duplicate]},{id:2,candidates:[{id:'remote',can_register:false}]}];
+  const entries=registrationEntries(sources);
+  assert.deepEqual(entries.map(e=>[e.source.id,e.candidate.id]),[[1,'local'],[2,'remote']]);
 });

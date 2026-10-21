@@ -1,0 +1,32 @@
+/* Shared navigation geometry must not depend on the selected workspace. */
+html {scrollbar-gutter:stable}
+:root body .app-sidebar {padding:26px 12px}
+:root body .app-brand {padding:0 6px 30px;gap:9px;font-size:14px}
+
+/* Keep the primary pages on the same title baseline. Feature pages own
+ * their content and scrolling, but not the surrounding workspace header. */
+:root body:is([data-active-page="records"],[data-active-page="samples"],[data-active-page="seal-center"],[data-active-page="settings"]) .hero {
+  display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
+  gap:16px;margin:0;max-width:none;min-height:94px;padding:0 0 26px;
+}
+:root body .hero .records-breadcrumb {display:none}
+:root body .hero h1 {margin:0;line-height:1.4;letter-spacing:1px}
+:root body .hero .subtitle {margin:8px 0 0;line-height:1.6}
+:root body .hero .toolbar-actions {gap:10px}
+:root body .hero :is(.primary-button,.secondary-button) {
+  height:38px;padding:0 16px;border:1px solid var(--archive-line);
+  border-radius:2px;background:transparent;color:var(--archive-text);
+}
+:root body .hero .primary-button {background:var(--brand);border-color:var(--brand);color:var(--archive-paper)}
+:root body .hero .primary-button:hover {background:var(--brand-dark);border-color:var(--brand-dark)}
+
+@media(max-width:1100px) {
+  :root body:is([data-active-page="records"],[data-active-page="samples"],[data-active-page="seal-center"],[data-active-page="settings"]) .hero {
+    grid-template-columns:minmax(0,1fr);grid-template-rows:auto 38px;gap:16px;min-height:148px;
+  }
+  :root body .hero .toolbar-actions {justify-content:flex-start;align-self:start}
+}
+@media(max-width:760px) {
+  :root body .app-sidebar {position:static;width:auto;padding:15px}
+  :root body .app-brand {padding:0 0 15px}
+}

@@ -29,6 +29,26 @@ def test_width_and_spacing_differences_are_ignored(expected, actual):
     assert (result['status'], result['reliable'], result['score']) == ('匹配', True, 1.0)
 
 
+@pytest.mark.parametrize('bar', ['|', '｜'])
+def test_stamp_border_bar_is_ignored_without_changing_raw_evidence(bar):
+    expected = '北京三星电子技术服务站维修专用章0004754613'
+    actual = f'北京三星电子技术服务站维修专用章{bar}0004754613'
+    result = compare_seal_text_strict(expected, [actual])
+    assert result['status'] == '匹配'
+    assert result['recognized'] == actual
+    assert result['all_recognized'] == [actual]
+
+
+@pytest.mark.parametrize('actual,status', [
+    ('客户维修专用章|0004754618', '不匹配'),
+    ('客户维修专用章|000475461', '部分匹配'),
+    ('客户维修专用章/0004754613', '不匹配'),
+    ('客户维修专用章I0004754613', '不匹配'),
+])
+def test_ignoring_bar_keeps_digits_and_other_characters_strict(actual, status):
+    assert compare_seal_text_strict('客户维修专用章0004754613', [actual])['status'] == status
+
+
 @pytest.mark.parametrize('expected,texts,status', [
     ('', ['客户收货章'], '无法判断'),
     ('客户收货章', [], '未识别'),

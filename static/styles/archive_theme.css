@@ -87,7 +87,7 @@
 }
 
 /* The import dialog keeps the archive palette regardless of its opening page. */
-#import-dialog {
+:is(#import-dialog,#sample-import-dialog) {
   --paper:var(--archive-paper,#f2efe9);
   --ink:var(--archive-ink,#161812);
   --muted:var(--archive-muted,#73756a);
@@ -101,8 +101,8 @@
   color:var(--ink);
   box-shadow:0 24px 80px #302c2533;
 }
-#import-dialog::backdrop { background:#35382f66; backdrop-filter:blur(3px); }
-#import-dialog .modal-header {
+:is(#import-dialog,#sample-import-dialog)::backdrop { background:#35382f66; backdrop-filter:blur(3px); }
+:is(#import-dialog,#sample-import-dialog) .modal-header {
   align-items:flex-start;
   gap:20px;
   padding:26px 28px 22px;
@@ -110,15 +110,15 @@
   border-radius:0;
   background:transparent;
 }
-#import-dialog .modal-header h2 { margin:0; font-size:20px; font-weight:600; letter-spacing:.5px; line-height:1.5; }
-#import-dialog .modal-header p { margin:6px 0 0; color:var(--muted); font-size:12px; line-height:1.6; }
-#import-dialog .import-close { display:grid; place-items:center; flex:none; width:32px; height:32px; padding:7px; border:0; border-radius:6px; background:transparent; color:var(--muted); cursor:pointer; }
-#import-dialog .import-close:hover { background:#e5e1d8; color:var(--ink); }
-#import-dialog svg { fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
-#import-dialog .import-close svg { width:18px; height:18px; }
-#import-dialog .workspace { border-radius:0; background:transparent; box-shadow:none; }
-#import-dialog .upload-panel { padding:0 28px 0; }
-#import-dialog .drop-zone {
+:is(#import-dialog,#sample-import-dialog) .modal-header h2 { margin:0; font-size:20px; font-weight:600; letter-spacing:.5px; line-height:1.5; }
+:is(#import-dialog,#sample-import-dialog) .modal-header p { margin:6px 0 0; color:var(--muted); font-size:12px; line-height:1.6; }
+:is(#import-dialog,#sample-import-dialog) .import-close { display:grid; place-items:center; flex:none; width:32px; height:32px; padding:7px; border:0; border-radius:6px; background:transparent; color:var(--muted); cursor:pointer; }
+:is(#import-dialog,#sample-import-dialog) .import-close:hover { background:#e5e1d8; color:var(--ink); }
+:is(#import-dialog,#sample-import-dialog) svg { fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+:is(#import-dialog,#sample-import-dialog) .import-close svg { width:18px; height:18px; }
+:is(#import-dialog,#sample-import-dialog) .workspace { border-radius:0; background:transparent; box-shadow:none; }
+:is(#import-dialog,#sample-import-dialog) .upload-panel { padding:0 28px 0; }
+:is(#import-dialog,#sample-import-dialog) .drop-zone {
   min-height:250px;
   padding:26px 18px 22px;
   border:1px dashed #bfc3b3;
@@ -127,40 +127,40 @@
   transform:none;
   transition:background-color .16s ease,border-color .16s ease;
 }
-#import-dialog .drop-zone:hover { border-color:#8b967b; background:#f0f2e9; transform:none; }
-#import-dialog .drop-zone.dragging { border-color:#626f4f; background:#e3e8d9; transform:none; }
-#import-dialog .upload-icon { width:48px; height:48px; border:0; border-radius:0; background:none; color:#687558; }
-#import-dialog .upload-icon svg { width:48px; height:48px; }
-#import-dialog .upload-icon rect { fill:#f7f6f0; }
-#import-dialog .upload-sheet-back { fill:#e2e7d8; stroke:#adb69d; }
-#import-dialog .drop-zone h2 { margin:14px 0 6px; color:var(--ink); font-size:18px; font-weight:600; line-height:1.5; }
-#import-dialog .drop-zone p { max-width:100%; margin:0 0 20px; color:var(--muted); font-size:12px; line-height:1.7; }
-#import-dialog .button-row { gap:10px; margin:0; }
-#import-dialog :is(.primary-button,.secondary-button) { display:inline-flex; align-items:center; justify-content:center; min-height:38px; min-width:112px; padding:9px 18px; border:1px solid var(--line); border-radius:5px; font-size:13px; font-weight:500; box-shadow:none; }
-#import-dialog .primary-button { border-color:#4f5744; background:#4f5744; color:var(--paper); }
-#import-dialog .primary-button:hover:not(:disabled) { border-color:#414735; background:#414735; }
-#import-dialog .primary-button:active:not(:disabled) { background:#343b2b; }
-#import-dialog .secondary-button { background:transparent; color:#52564c; }
-#import-dialog .secondary-button:hover:not(:disabled) { border-color:#a3ab94; background:#e3e7da; color:#343b2b; }
-#import-dialog .secondary-button:active:not(:disabled) { background:#dce2d0; }
-#import-dialog :is(.primary-button,.secondary-button):disabled { border-color:#d8d5cc; background:#e5e2da; color:#888a7c; opacity:1; cursor:not-allowed; }
-#import-dialog :is(a,button,[tabindex]):focus-visible { outline:2px solid #697557; outline-offset:3px; }
-#import-dialog .import-formats { margin-top:16px; color:#818477; font-size:10px; letter-spacing:1px; }
-#import-dialog .import-hint { color:var(--muted); line-height:1.8; }
-#import-dialog #folder-scan-status { padding:10px 12px; margin:12px 0 0; border-radius:5px; background:#e5eadc; text-align:left; }
-#import-dialog #folder-scan-status:empty { display:none; }
-#import-dialog .import-guidance { display:flex; align-items:flex-start; gap:9px; padding:18px 0; color:#626859; }
-#import-dialog .import-guidance svg { flex:none; width:16px; height:16px; margin-top:2px; }
-#import-dialog .import-guidance p { margin:0; font-size:12px; line-height:1.7; }
-#import-dialog .import-guidance span { display:block; margin-top:3px; font-size:11px; color:var(--muted); }
-#import-dialog .toast { border-radius:5px; background:#30352a; color:var(--paper); }
+:is(#import-dialog,#sample-import-dialog) .drop-zone:hover { border-color:#8b967b; background:#f0f2e9; transform:none; }
+:is(#import-dialog,#sample-import-dialog) .drop-zone.dragging { border-color:#626f4f; background:#e3e8d9; transform:none; }
+:is(#import-dialog,#sample-import-dialog) .upload-icon { width:48px; height:48px; border:0; border-radius:0; background:none; color:#687558; }
+:is(#import-dialog,#sample-import-dialog) .upload-icon svg { width:48px; height:48px; }
+:is(#import-dialog,#sample-import-dialog) .upload-icon rect { fill:#f7f6f0; }
+:is(#import-dialog,#sample-import-dialog) .upload-sheet-back { fill:#e2e7d8; stroke:#adb69d; }
+:is(#import-dialog,#sample-import-dialog) .drop-zone h2 { margin:14px 0 6px; color:var(--ink); font-size:18px; font-weight:600; line-height:1.5; }
+:is(#import-dialog,#sample-import-dialog) .drop-zone p { max-width:100%; margin:0 0 20px; color:var(--muted); font-size:12px; line-height:1.7; }
+:is(#import-dialog,#sample-import-dialog) .button-row { gap:10px; margin:0; }
+:is(#import-dialog,#sample-import-dialog) :is(.primary-button,.secondary-button) { display:inline-flex; align-items:center; justify-content:center; min-height:38px; min-width:112px; padding:9px 18px; border:1px solid var(--line); border-radius:5px; font-size:13px; font-weight:500; box-shadow:none; }
+:is(#import-dialog,#sample-import-dialog) .primary-button { border-color:#4f5744; background:#4f5744; color:var(--paper); }
+:is(#import-dialog,#sample-import-dialog) .primary-button:hover:not(:disabled) { border-color:#414735; background:#414735; }
+:is(#import-dialog,#sample-import-dialog) .primary-button:active:not(:disabled) { background:#343b2b; }
+:is(#import-dialog,#sample-import-dialog) .secondary-button { background:transparent; color:#52564c; }
+:is(#import-dialog,#sample-import-dialog) .secondary-button:hover:not(:disabled) { border-color:#a3ab94; background:#e3e7da; color:#343b2b; }
+:is(#import-dialog,#sample-import-dialog) .secondary-button:active:not(:disabled) { background:#dce2d0; }
+:is(#import-dialog,#sample-import-dialog) :is(.primary-button,.secondary-button):disabled { border-color:#d8d5cc; background:#e5e2da; color:#888a7c; opacity:1; cursor:not-allowed; }
+:is(#import-dialog,#sample-import-dialog) :is(a,button,[tabindex]):focus-visible { outline:2px solid #697557; outline-offset:3px; }
+:is(#import-dialog,#sample-import-dialog) .import-formats { margin-top:16px; color:#818477; font-size:10px; letter-spacing:1px; }
+:is(#import-dialog,#sample-import-dialog) .import-hint { color:var(--muted); line-height:1.8; }
+:is(#import-dialog,#sample-import-dialog) #folder-scan-status { padding:10px 12px; margin:12px 0 0; border-radius:5px; background:#e5eadc; text-align:left; }
+:is(#import-dialog,#sample-import-dialog) #folder-scan-status:empty { display:none; }
+:is(#import-dialog,#sample-import-dialog) .import-guidance { display:flex; align-items:flex-start; gap:9px; padding:18px 0; color:#626859; }
+:is(#import-dialog,#sample-import-dialog) .import-guidance svg { flex:none; width:16px; height:16px; margin-top:2px; }
+:is(#import-dialog,#sample-import-dialog) .import-guidance p { margin:0; font-size:12px; line-height:1.7; }
+:is(#import-dialog,#sample-import-dialog) .import-guidance span { display:block; margin-top:3px; font-size:11px; color:var(--muted); }
+:is(#import-dialog,#sample-import-dialog) .toast { border-radius:5px; background:#30352a; color:var(--paper); }
 @media(max-width:480px) {
-  #import-dialog .modal-header { padding:20px 18px 18px; }
-  #import-dialog .upload-panel { padding:0 18px; }
-  #import-dialog .drop-zone { padding:22px 12px; }
-  #import-dialog .drop-zone h2 { font-size:17px; }
-  #import-dialog :is(.primary-button,.secondary-button) { min-width:100px; padding:9px 12px; }
+  :is(#import-dialog,#sample-import-dialog) .modal-header { padding:20px 18px 18px; }
+  :is(#import-dialog,#sample-import-dialog) .upload-panel { padding:0 18px; }
+  :is(#import-dialog,#sample-import-dialog) .drop-zone { padding:22px 12px; }
+  :is(#import-dialog,#sample-import-dialog) .drop-zone h2 { font-size:17px; }
+  :is(#import-dialog,#sample-import-dialog) :is(.primary-button,.secondary-button) { min-width:100px; padding:9px 12px; }
 }
 @media(prefers-reduced-motion:reduce) {
-  #import-dialog .drop-zone { transition:none; }
+  :is(#import-dialog,#sample-import-dialog) .drop-zone { transition:none; }
 }

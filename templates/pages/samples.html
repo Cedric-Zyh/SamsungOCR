@@ -1,16 +1,29 @@
 <section data-page="samples" class="sample-center-page hidden">
-  <div class="sample-center-heading"><p>按回单上的客户名称归类 · 测试记录独立保存</p><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-history-open">测试记录</button><button type="button" class="secondary-button" id="sample-statistics-open">统计结果</button></div></div>
+  <div class="sample-center-heading"><p>按回单上的客户名称归类 · 测试记录独立保存</p><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-import-open">＋ 导入样单</button><button type="button" class="secondary-button" id="sample-history-open">测试记录</button><button type="button" class="secondary-button" id="sample-statistics-open">统计结果</button></div></div>
   <div class="sample-center-layout">
     <aside class="sample-companies" aria-label="客户公司目录">
       <header><h2>客户公司</h2><span id="sample-company-count">—</span></header>
       <input id="sample-company-search" type="search" placeholder="搜索公司名称" aria-label="搜索客户公司">
+      <div id="sample-company-mark-filter" class="sample-company-filters" role="group" aria-label="按人工标记筛选">
+        <button type="button" data-company-mark-filter="" aria-pressed="true">全部</button>
+        <button type="button" data-company-mark-filter="pending" aria-pressed="false">待检查</button>
+        <button type="button" data-company-mark-filter="checked" aria-pressed="false">已检查</button>
+        <button type="button" data-company-mark-filter="issue" aria-pressed="false">有问题</button>
+        <button type="button" data-company-mark-filter="unmarked" aria-pressed="false">未标记</button>
+      </div>
+      <p class="sample-company-legend">✓ 已有标准章 <span>绿底 · 全部测试完成</span></p>
       <div id="sample-company-list" class="sample-company-list"></div>
     </aside>
     <div class="sample-library">
       <header class="sample-library-heading"><div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p></div><button type="button" class="primary-button" id="sample-run-company" disabled>运行全部样单</button></header>
+      <section id="sample-company-mark-panel" class="sample-company-mark-panel" aria-label="当前公司的标记与备注" hidden>
+        <div class="sample-company-mark-line"><span id="sample-company-header-seal" class="sample-company-header-seal"></span><span class="sample-company-mark-label">人工标记</span><span id="sample-company-header-mark" class="sample-company-human-mark" data-mark="unmarked">未标记</span><span id="sample-company-header-new" class="sample-company-new-results" hidden>有新测试结果</span><button type="button" id="sample-company-mark-edit" class="text-button">添加标记与备注</button></div>
+        <p id="sample-company-header-note" class="sample-company-header-note" hidden></p>
+      </section>
       <div class="sample-tools">
         <input type="search" id="sample-search" placeholder="搜索样单编号" aria-label="搜索样单编号">
         <button type="button" class="secondary-button" id="sample-run-selected" disabled>运行所选</button>
+        <button type="button" class="secondary-button sample-delete-button" id="sample-delete-selected" disabled>删除所选</button>
         <label><input type="checkbox" id="sample-select-page"> 本页</label>
         <button type="button" class="text-button" id="sample-clear-selection" disabled>已选 0 张</button>
       </div>
@@ -28,6 +41,40 @@
     </div>
   </div>
 </section>
+{% from "partials/import_dropzone.html" import import_dropzone %}
+<dialog id="sample-import-dialog" class="workspace-dialog import-dialog sample-import-dialog" aria-labelledby="sample-import-title">
+  <header class="modal-header"><div><h2 id="sample-import-title">导入样单</h2><p>添加用于预览和测试的样单图片</p></div><button type="button" class="import-close" aria-label="关闭导入样单" data-dismiss-dialog><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header>
+  <form id="sample-import-form" class="upload-panel">
+    {{ import_dropzone(prefix="sample-", noun="样单") }}
+    <p id="sample-import-files-summary" class="import-hint" role="status" aria-live="polite"></p>
+    <div class="sample-import-company-field">
+      <label for="sample-import-company">客户公司 <span>选填</span></label>
+      <input id="sample-import-company" type="text" list="sample-import-companies" maxlength="200" placeholder="选择已有公司或填写新公司名称">
+      <datalist id="sample-import-companies"></datalist>
+      <p class="sample-import-help">填写回单上的客户名称；留空归入“未分类”。</p>
+    </div>
+    <div class="import-guidance"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg><p>导入后，在样单中心点击“运行测试”<span>每次最多 100 张，单张 20 MB，总计 100 MB。同名图片自动重命名。</span><span>上传期间请保持页面打开</span></p></div>
+    <p id="sample-import-error" role="alert"></p>
+    <footer><button type="button" class="secondary-button" data-dismiss-dialog>取消</button><button type="submit" class="primary-button" id="sample-import-submit" disabled>导入样单</button></footer>
+  </form>
+</dialog>
+<dialog id="sample-company-mark-dialog" class="workspace-dialog sample-company-mark-dialog" aria-labelledby="sample-company-mark-title">
+  <header><h2 id="sample-company-mark-title">标记与备注</h2><button type="button" class="sample-company-dialog-close" aria-label="关闭公司标记" data-dismiss-dialog>×</button></header>
+  <p id="sample-company-mark-name"></p>
+  <form id="sample-company-mark-form">
+    <fieldset id="sample-company-mark-state" class="sample-company-state-options"><legend>检查状态</legend>
+      <label data-state="unmarked"><input type="radio" name="company-mark-state" value="unmarked" checked><span>未标记</span></label>
+      <label data-state="pending"><input type="radio" name="company-mark-state" value="pending"><span>待检查</span></label>
+      <label data-state="checked"><input type="radio" name="company-mark-state" value="checked"><span>已检查</span></label>
+      <label data-state="issue"><input type="radio" name="company-mark-state" value="issue"><span>有问题</span></label>
+    </fieldset>
+    <label class="sample-company-note-label"><span>备注 <small id="sample-company-note-count">0 / 500</small></span><textarea id="sample-company-mark-note" maxlength="500" rows="4" placeholder="记录需要复查的地方…" autofocus></textarea></label>
+    <label id="sample-company-reviewed-row" class="sample-company-reviewed" hidden><input id="sample-company-reviewed" type="checkbox">确认已检查当前结果</label>
+    <p id="sample-company-mark-hint"></p>
+    <p id="sample-company-mark-error" role="alert"></p>
+    <footer><button type="button" class="secondary-button" data-dismiss-dialog>取消</button><button type="submit" class="primary-button">保存</button></footer>
+  </form>
+</dialog>
 <dialog id="sample-history-dialog" class="workspace-dialog sample-history-dialog" aria-labelledby="sample-history-title">
   <header><div><h2 id="sample-history-title">样单测试记录</h2><p>最近 200 次单张测试</p></div><div><button type="button" class="secondary-button" id="sample-history-refresh">刷新</button> <button type="button" class="secondary-button" data-dismiss-dialog>关闭 ×</button></div></header>
   <div id="sample-history-body" aria-live="polite"></div>

@@ -10,7 +10,7 @@ from .seal_information_fields import compare_information_fields
 
 
 def normalize_seal_text_strict(text: str) -> str:
-    """Ignore OCR spacing, parentheses and full-width ASCII typography.
+    """Ignore OCR spacing, parentheses, vertical bars and ASCII width.
 
     Do not use the general receipt normalizer: it drops other punctuation,
     which could hide a wrong character or change a station identifier.
@@ -20,7 +20,7 @@ def normalize_seal_text_strict(text: str) -> str:
     return "".join(
         chr(ord(character) - 0xFEE0) if "\uff01" <= character <= "\uff5e" else character
         for character in text
-        if not character.isspace() and character not in "()（）"
+        if not character.isspace() and character not in "()（）|｜"
     )
 
 
@@ -90,6 +90,23 @@ def compare_seal_text_strict(
         if not actual:
             continue
         field_match = compare_information_fields(expected, actual) if actual != expected else None
+        if actual != expected and not field_match:
+            # A printed, parenthesized short number after the purpose is an
+            # extra field when the requirement omits it. Preserve the full
+            # observed text and never strip station IDs or long ring serials.
+            numbers = list(re.finditer(
+                r"(?:专用章|收货章|业务受理)\s*(?P<number>[（(]\s*[0-9０-９]{1,3}\s*[）)])", text
+            ))
+            if len(numbers) == 1:
+                start, end = numbers[0].span("number")
+                reduced = normalize_seal_text_strict(text[:start]+text[end:])
+                contact_match = compare_information_fields(expected, reduced)
+                if reduced == expected or contact_match:
+                    field_match = {
+                        "matched_fields": (contact_match or {}).get("matched_fields", ["名称及用途"]),
+                        "additional_fields": ["章内编号"] + (contact_match or {}).get("additional_fields", []),
+                        "message": "签章要求文字一致；章内编号为要求未列出的附加信息",
+                    }
         candidates.append({
             "recognized": text,
             "status": "匹配" if field_match else _strict_seal_text_status(expected, actual),

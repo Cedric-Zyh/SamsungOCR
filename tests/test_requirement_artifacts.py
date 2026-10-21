@@ -35,11 +35,12 @@ def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monk
     directory = tmp_path / "artifacts" / "requirements"
     assert (directory / "signature-requirement.jpg").read_bytes() == observed[0]
     with Image.open(directory / "signature-requirement-original.png") as original:
-        assert original.size == (625, 19)
+        assert original.size == (323, 19)  # Detected field edge plus breathing room.
         assert original.getpixel((20, 8)) == (255, 0, 0)
     with Image.open(directory / "signature-requirement.jpg") as clean:
         assert clean.getextrema() == (255, 255)  # Red removed; next row excluded.
     assert artifact["ocr_text"] == "签章要求：" + value
+    assert artifact["crop_boundary"] == "detected_requirement_row"
     assert artifact["original_url"].startswith("/files/artifacts/test/requirements/")
 
 

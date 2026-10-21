@@ -349,3 +349,35 @@ def test_sample_registration_rejects_missing_artifacts_and_path_escape(app_store
                    review_revision=detail["review_revision"])
     assert client.post(f"/api/samples/results/{other}/seal-standard", json=payload).status_code == 400
     assert db.list_seal_standards() == []
+
+
+def test_picker_prefers_local_only_when_proven_to_reuse_remote_region():
+    local = artifact()
+    remote = {"index": 0, "api_index": 4, "source": "清瞳印章区域", "shape": "圆形", "color": "red",
+              "original_url": "/files/artifacts/qingtong-0.png"}
+    other = {**remote, "index": 1, "api_index": 7, "original_url": "/files/artifacts/qingtong-1.png"}
+    item = receipt(local, remote, other)
+    # Equal ordinal numbers alone never prove two crops describe the same stamp.
+    assert not any(c["registration_hidden"] for c in seal_candidates(item))
+    item["recognition_variants"] = {"seal": [{"details": {
+        "seal_check": {"region_source": "清瞳印章区域"},
+        "processing_artifacts": {"seals": [local]},
+    }}]}
+    candidates = seal_candidates(item)
+    assert len(candidates) == 3  # Automatic comparisons still see all OCR evidence.
+    assert [c["registration_hidden"] for c in candidates] == [False, True, False]
+    assert candidates[0]["original_url"] == local["original_url"]
+    # Incomplete local evidence must not suppress the remote fallback.
+    local["shape_code"] = "unknown"
+    assert not any(c["registration_hidden"] for c in seal_candidates(item))
+
+
+def test_picker_never_borrows_provenance_from_another_local_crop():
+    local = artifact()
+    remote = {"index": 0, "source": "清瞳印章区域", "original_url": "/remote.png"}
+    item = receipt(local, remote)
+    item["recognition_variants"] = {"seal": [{"details": {
+        "seal_check": {"region_source": "清瞳印章区域"},
+        "processing_artifacts": {"seals": [{**local,"original_url":"/different-run.png"}]},
+    }}]}
+    assert not any(c["registration_hidden"] for c in seal_candidates(item))

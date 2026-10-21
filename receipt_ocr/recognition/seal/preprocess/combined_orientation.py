@@ -16,6 +16,7 @@ from receipt_ocr.recognition.seal.preprocess.orientation_angles import (
 from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _map_box_to_source, _oriented_type_anchor_box, _oriented_type_row_exact_box, _oriented_type_row_polygons, _rotation_geometry, _transform_points, rotate_stamp_image
 from .horizontal_rows import grouped_type_candidate, polygon_bounds
 from .row_extent import verify_row_extent
+from .detection_scale import detect_orientation_boxes
 
 
 def _orient_complete_row(source, best, scratch, band_dir, *, model_variant):
@@ -112,7 +113,7 @@ def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None
     confidence = sum(float(getattr(row, "confidence", 0.0) or 0.0) for row in rows) / len(rows)
     return text, confidence
 
-def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
+def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant, observed_boxes=None):
     """Coarse-rotate to ``angle``, fine-tune on the type polygon, read the row.
 
     ``scratch`` holds the rotated canvases, which are working state only; the
@@ -120,8 +121,6 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
     reviewer can see why one angle won without keeping four full-size crops
     per seal.
     """
-    from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
-
     scratch, band_dir = Path(scratch), Path(band_dir)
     candidate_path = Path(source) if not angle else scratch / f"coarse-{angle}.png"
     if angle:
@@ -136,7 +135,8 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant):
     anchor_points = []
     error = ""
     try:
-        boxes = detect_boxes(candidate_path, model_variant=model_variant)
+        boxes = (detect_orientation_boxes(candidate_path, scratch, model_variant=model_variant)
+                 if observed_boxes is None else observed_boxes)
     except Exception as exc:  # a broken angle must not abort the comparison
         error = str(exc)
     try:
@@ -239,7 +239,49 @@ def _select_four_way_candidate(candidates):
     return min(equivalent, key=lambda item: (abs(item["fine_rotation"]), item["angle"])) if equivalent else best
 
 
-def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
+def _rebase_large_angle(source, scratch, band_dir, item, *, model_variant):
+    """Reuse an observed polygon in a new coarse frame, then re-read pixels.
+
+    A nearly vertical detected row need not be detectable again at the next
+    right angle. Transform its polygon instead; its old OCR text is only a
+    locator, never evidence that the newly rendered final row is readable.
+    """
+    fine = float(item["fine_rotation"])
+    if (not math.isfinite(fine) or not 45 < abs(fine) <= 90
+            or _stamp_type_marker_strength(item["band_text"]) < 2
+            or not math.isfinite(item["band_confidence"])
+            or item["band_confidence"] < FOUR_WAY_FINAL_ROW_MIN_CONFIDENCE
+            or not item.get("boxes")):
+        return None
+    old_angle = float(item["angle"])
+    shift = 90 if fine > 0 else -90
+    new_angle = (old_angle + shift) % 360
+    with Image.open(source) as image:
+        width, height = image.size
+    old_matrix, _, _ = _rotation_geometry(width, height, old_angle)
+    new_matrix, _, _ = _rotation_geometry(width, height, new_angle)
+    mapping = (np.vstack((new_matrix, [0, 0, 1])) @
+               np.linalg.inv(np.vstack((old_matrix, [0, 0, 1]))))[:2]
+    boxes = []
+    for box in item["boxes"]:
+        mapped = dict(box)
+        mapped["points"] = _transform_points(box.get("points") or [], mapping)
+        if len(mapped["points"]) < 4:
+            continue
+        mapped["angle"] = (float(box.get("angle", 0)) - shift + 90) % 180 - 90
+        boxes.append(mapped)
+    trial_dir = Path(scratch) / f"rebase-{old_angle:g}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir = Path(band_dir) / f"rebase-{old_angle:g}"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    trial = _four_way_candidate(source, trial_dir, evidence_dir, new_angle,
+                                model_variant=model_variant, observed_boxes=boxes)
+    trial["angle_rebase"] = {"from_coarse": old_angle, "from_fine": fine,
+                             "to_coarse": new_angle, "to_fine": trial["fine_rotation"]}
+    return trial
+
+
+def prepare_round_stamp_combined(source, destination, *, model_variant="v6", retry_large_angles=False):
     """Find the observed type row at right angles, then diagonals if needed.
 
     A text polygon cannot resolve the quarter-turn: the detector normalises
@@ -252,7 +294,9 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
     The polygon locates the type row, including rows below the star. Selection
     then requires a readable type marker in the final rotated crop. A good
     pre-rotation detection cannot rescue a failed final row or a fine rotation
-    beyond 45 degrees.
+    beyond 45 degrees. With ``retry_large_angles``, an otherwise readable
+    large-angle row may be transferred to a new coarse frame and re-read;
+    that new candidate must satisfy the same small-angle verification.
 
     The comparison never consults the requested seal text.  It rewards only
     the generic ``收货/专用/用章…章`` markers that every receipt stamp carries,
@@ -313,6 +357,19 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
                     continue
             best = _select_four_way_candidate(candidates)
 
+        if retry_large_angles and not best["post_rotation_verified"]:
+            # Only retry otherwise readable large-angle rows. The ordinary
+            # post-rotation text, confidence and <=45-degree checks still apply.
+            for item in list(candidates):
+                try:
+                    trial = _rebase_large_angle(source, scratch, band_dir, item,
+                                               model_variant=model_variant)
+                    if trial is not None:
+                        candidates.append(trial)
+                except Exception:
+                    continue
+            best = _select_four_way_candidate(candidates)
+
         decision = {
             "mode": "combined",
             "model": "整章横排文字检测 + 按需补试斜向角度",
@@ -326,7 +383,8 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
         # Prefer the unrotated view when two angles read equally well; a
         # needless quarter-turn changes the secondary read image for no gain.
         decision["four_way_candidates"] = {
-            str(int(item["angle"])): {
+            (f"rebase-{item['angle_rebase']['from_coarse']:g}"
+             if item.get("angle_rebase") else str(int(item["angle"]))): {
                 "text": item["band_text"],
                 "fine_rotation": round(item["fine_rotation"], 3),
                 "anchor_text": item["anchor_text"],
@@ -335,6 +393,7 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
                 "rejection_reason": item["rejection_reason"],
                 "rank": list(item["rank"]),
                 "error": item["error"],
+                **({"angle_rebase": item["angle_rebase"]} if item.get("angle_rebase") else {}),
             }
             for item in candidates
         }
@@ -344,6 +403,8 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6"):
             decision["status"] = "各候选方向均未找到章型文字的可靠转正结果，保留原方向"
             return None, decision
 
+        if best.get("angle_rebase"):
+            decision["angle_rebase"] = best["angle_rebase"]
         try:
             best = _orient_complete_row(
                 source, best, scratch, band_dir, model_variant=model_variant,

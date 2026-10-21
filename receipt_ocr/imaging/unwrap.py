@@ -8,7 +8,7 @@ from .contracts import SealRegion
 from .io import _read_image
 from .colors import _ocr_color_mask
 from .shapes import seal_region_is_rectangular
-from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ellipse_normal_maps
+from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ellipse_normal_maps, _ellipse_proportional_maps
 
 
 def _robust_round_seal_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -61,6 +61,7 @@ def save_ring_text_band_preview(
     *,
     color: str = "red",
     ring_guide=None,
+    proportional: bool = False,
 ) -> Path:
     """Show exactly the band sampled by the shared border guide or ellipse."""
     image = _read_image(source)
@@ -70,8 +71,9 @@ def save_ring_text_band_preview(
     geometry = ring_guide.annulus if ring_guide is not None else _fit_ellipse_annulus(mask)
     preview = np.full_like(image, 255)
     if geometry is not None:
+        sampler = _ellipse_proportional_maps if proportional else _ellipse_normal_maps
         map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
-                        else _ellipse_normal_maps(*geometry))
+                        else sampler(*geometry))
         band = np.zeros(mask.shape, dtype=np.uint8)
         for row, value in ((0, 255), (-1, 0)):
             polygon = np.rint(np.column_stack((map_x[row], map_y[row]))).astype(np.int32)
@@ -103,12 +105,15 @@ def save_unwrapped_seal(
     single_line: bool = False,
     direct_ellipse: bool = False,
     ring_guide=None,
+    preserve_full_ring: bool = False,
 ) -> bool:
     """Unwrap circular stamp text into a horizontal line for conventional OCR.
 
     ``single_line=True`` produces one revolution for the new ring OCR input.
     The caller may provide an already white-covered center type row; the
     legacy ``exclude_boxes`` path remains available for older evidence.
+    ``preserve_full_ring=True`` retains small outer digits at both seam ends
+    for independent serial OCR; the company input keeps its default trim.
     """
     image = _read_image(source)
     height, width = image.shape[:2]
@@ -167,7 +172,8 @@ def save_unwrapped_seal(
         gray = 255.0 - np.clip(dominance * (255.0 / 160.0), 0.0, 255.0)
         if _save_ellipse_annulus_unwrapped(
             gray.astype(np.uint8), mask, destination, single_line=single_line,
-            ring_guide=ring_guide,
+            ring_guide=ring_guide, trim_whitespace=not preserve_full_ring,
+            proportional=direct_ellipse,
         ):
             return False
         if direct_ellipse:

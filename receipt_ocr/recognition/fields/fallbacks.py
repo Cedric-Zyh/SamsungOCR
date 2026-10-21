@@ -10,6 +10,7 @@ from PIL import Image
 from ...domain.ocr import TextObservation
 from ...domain.parsing import normalize_text
 from ...providers.text import TextRecognizer, current_text_recognizer
+from .requirement_image import requirement_crop_box, clean_and_deskew_requirement
 
 
 def _recover_signature_requirement(
@@ -36,28 +37,13 @@ def _recover_signature_requirement(
         ),
         None,
     )
-    anchor_y = anchor.y if anchor else 0.468
     with Image.open(source) as image, tempfile.TemporaryDirectory(
         prefix="signature-line-"
     ) as temp_dir:
-        width, height = image.size
-        y1 = max(0, round((anchor_y - 0.004) * height))
-        # Keep the retry crop on the signature-requirement row itself.  The
-        # previous fixed downward extension also captured the next footer row
-        # (for example ``实收数量``), allowing its first glyph to be appended
-        # to the requirement value.
-        anchor_bottom = anchor_y + (anchor.height if anchor else 0.013)
-        y2 = min(height, round((anchor_bottom + 0.002) * height))
-        crop = image.crop((round(0.015 * width), y1, round(0.64 * width), y2))
+        box, boundary = requirement_crop_box(image.size, anchor, page_rows)
+        crop = image.crop(box)
         path = Path(temp_dir) / "signature-requirement.jpg"
-        # The requested preprocessing for this region is color suppression;
-        # the OCR text produced from this input is returned without semantic
-        # correction. Seal OCR continues to use the original color image.
-        from PIL import ImageChops, ImageOps
-
-        red, green, blue = crop.convert("RGB").split()
-        color_clean = ImageChops.lighter(red, ImageChops.lighter(green, blue))
-        color_clean = ImageOps.autocontrast(color_clean, cutoff=1)
+        color_clean, geometry = clean_and_deskew_requirement(crop)
         color_clean.save(path, quality=95)
         artifact = {}
         if artifact_dir and artifacts is not None:
@@ -74,6 +60,9 @@ def _recover_signature_requirement(
                 "color_clean_url": f"{prefix}/{path.name}",
                 "backend": page_backend,
                 "ocr_text": "",
+                "crop_box": list(box),
+                "crop_boundary": boundary,
+                **geometry,
             }
             artifacts.append(artifact)
         try:

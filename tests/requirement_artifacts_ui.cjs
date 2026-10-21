@@ -15,6 +15,19 @@ function render(seals, tab = 'seals', requirement = true) {
   return target.innerHTML;
 }
 
+test('normal ring alternative is separate, escaped, and uses the existing image viewer', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '椭圆',
+    unwrapped_url: '/files/artifacts/test/primary.png', unwrapped_text: '原来结果',
+    ring_normal_alternative: {image_url: '/files/artifacts/test/alternative.png', text: '备选<文字>'},
+  }]);
+  assert.match(html, /原来结果/);
+  assert.match(html, /仅供核对，不参与匹配/);
+  assert.match(html, /备选&lt;文字&gt;/);
+  assert.match(html, /href="\/files\/artifacts\/test\/alternative.png\?preview=rgb"/);
+  assert.match(html, /src="\/files\/artifacts\/test\/primary.png\?preview=rgb"/);
+});
+
 test('requirement input images appear in their own tab and escape OCR text', () => {
   const html = render([], 'signature_requirement');
   assert.match(html, /签章要求行原图/);
@@ -167,6 +180,19 @@ test('company-only ring input is distinguished from the complete number band', (
   assert.match(html, /完整环形展开图（含小字号段，仅供核对）/);
   assert.match(html, /环形 OCR 读取已排除小字号段的公司名称展开图/);
   assert.doesNotMatch(html, /环形 OCR 直接读取旋正后的整章图/);
+});
+
+test('ring serial has an independent preview and read label', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '圆形',
+    original_url: '/files/test/original.png', ring_input_url: '/files/test/ring-input.png',
+    ring_serial_url: '/files/test/serial-180.png', ring_serial_text: '211402001045714',
+    reads: [{channel: 'serial', provider: 'paddle_v6', text: '211402001045714', confidence: .99}],
+  }]);
+  assert.match(html, /环形编号（独立识别）/);
+  assert.match(html, /211402001045714/);
+  assert.match(html, /serial-180.png/);
+  assert.match(html, /环形编号.*paddle_v6/);
 });
 
 test('number evidence shows its own crop and raw text without attributing it to the type-only image', () => {

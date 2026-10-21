@@ -4,7 +4,6 @@ The normal recognizer is reused. Tasks, results and generated images are
 stored independently from production receipt data.
 """
 from collections import Counter
-from pathlib import Path
 import json
 import threading
 import uuid
@@ -13,8 +12,7 @@ from flask import Blueprint, abort, jsonify, request, send_file, send_from_direc
 
 from receipt_ocr.application import resolve_recognition_options
 from receipt_ocr.domain.fields.schema import derive_signature_check
-from receipt_ocr.domain.seal_standards import apply_standard_check
-from receipt_ocr.evaluation import load_ground_truth
+from receipt_ocr.domain.seal_standards import apply_standard_check, requirement_key
 from receipt_ocr.jobs.service import ReceiptJobService
 from receipt_ocr.jobs.store import JobStore
 from receipt_ocr.jobs.worker import JobWorker
@@ -23,6 +21,8 @@ from receipt_ocr.recognition.seal.providers.qingtong import render_selected_seal
 from .results import review_revision, with_review_revision
 from .seal_standards import SealStandardDependencies, register_standard
 from .sample_statistics import sample_statistics
+from .sample_company_marks import SampleCompanyMarks, MarkConflict
+from .sample_library import SampleLibrary, LibraryConflict
 
 
 def sample_urls(value):
@@ -56,6 +56,9 @@ class SampleJobStore(JobStore):
         task_id, timestamp = uuid.uuid4().hex, now_iso()
         with self.database.connect() as con:
             con.execute("BEGIN IMMEDIATE")
+            deleted = {row[0] for row in con.execute("SELECT filename FROM sample_library WHERE deleted_at<>''")}
+            if deleted.intersection(names):
+                raise LibraryConflict('部分样单已被删除，请刷新列表')
             busy = {row[0] for row in con.execute(
                 "SELECT filename FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')"
             )}
@@ -96,40 +99,39 @@ class SampleCenter:
         self.database.initialize()
         self.store = SampleJobStore(self.database)
         self.store.initialize()
+        self.company_marks = SampleCompanyMarks(self.database)
+        self.library = SampleLibrary(ctx, self.database)
         self.preview_dir = self.database.path.parent / "previews"
         self.artifact_dir = self.database.path.parent / "artifacts"
         self.preview_dir.mkdir(exist_ok=True)
         self.artifact_dir.mkdir(exist_ok=True)
         service = ReceiptJobService(
-            ctx._configured_analyze, data_dir=ctx.DATA_DIR, upload_dir=ctx.UPLOAD_DIR,
+            ctx._configured_analyze, data_dir=ctx.DATA_DIR, upload_dir=self.library.directory,
             preview_dir=self.preview_dir, artifact_dir=self.artifact_dir)
 
         def execute(job):
+            source = self.library.source(job['filename'])
+            if source.parent == self.library.directory.resolve():
+                job = {**job, 'stored_name': source.name}
             result, preview = service(job)
             return sample_urls(result), preview
 
         self.worker = JobWorker(self.store, execute, logger=ctx.app.logger)
 
     def catalog(self):
-        entries = load_ground_truth(self.ctx.GROUND_TRUTH_PATH)
-        return {name: entry for name, entry in entries.items()
-                if isinstance(name, str) and Path(name).name == name
-                and (self.ctx.DATA_DIR / name).is_file()
-                and (self.ctx.DATA_DIR / name).resolve().parent == self.ctx.DATA_DIR.resolve()
-                and Path(name).suffix.lower() in self.ctx.ALLOWED_EXTENSIONS}
+        return self.library.catalog()
 
-    def source(self, name):
-        if name not in self.catalog():
+    def source(self, name, *, include_deleted=False):
+        try:
+            return self.library.source(name, include_deleted=include_deleted)
+        except KeyError:
             abort(404)
-        source = (self.ctx.DATA_DIR / name).resolve()
-        if source.parent != self.ctx.DATA_DIR.resolve():
-            abort(404)
-        return source
 
     def listing(self):
         catalog = self.catalog()
         # Only the latest job per filename is needed, not full OCR artifacts.
         with self.database.connect() as con:
+            con.execute('BEGIN')
             jobs = {row["filename"]: dict(row) for row in con.execute("""
                 SELECT j.filename,j.status,j.result_id,j.error_message,j.created_at,j.finished_at,
                     json_extract(r.result_json,'$.fields') AS fields,
@@ -140,6 +142,7 @@ class SampleCenter:
                 LEFT JOIN results r ON r.id=j.result_id AND r.deleted_at=''
                 WHERE j.rowid IN (SELECT MAX(rowid) FROM recognition_jobs GROUP BY filename)
             """)}
+            marks, versions = self.company_marks.snapshot(catalog, con)
         items = []
         for name, entry in catalog.items():
             job = jobs.get(name, {})
@@ -160,7 +163,28 @@ class SampleCenter:
         counts = Counter(item["company"] for item in items)
         companies = [{"name": name, "count": count}
                      for name, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))]
-        return {"items": items, "companies": companies, "total": len(items)}
+        # Customer names can differ from the stamp owner. Use the same exact
+        # normalized requirement key as the seal center, never a name substring.
+        with self.ctx.database.connect() as con:
+            standard_keys = {row[0] for row in con.execute('SELECT requirement_key FROM seal_standards')}
+        requirements = {name: set() for name in counts}
+        unlabeled = Counter()
+        for entry in catalog.values():
+            fields = entry.get('fields') or {}
+            name = str(fields.get('客户名称') or '').strip() or '未分类'
+            key = requirement_key(fields.get('签章要求'))
+            if key:
+                requirements[name].add(key)
+            else:
+                unlabeled[name] += 1
+        seals = {}
+        for name, keys in requirements.items():
+            matched = len(keys & standard_keys)
+            seals[name] = {'matched': matched, 'total': len(keys), 'unlabeled': unlabeled[name],
+                           'has_standard': matched > 0,
+                           'complete': bool(keys) and matched == len(keys) and not unlabeled[name]}
+        return {"items": items, "companies": companies, "total": len(items),
+                "company_marks": marks, "company_versions": versions, "company_seals": seals}
 
     def project_result(self, item, *, _connection=None):
         """Compare sample evidence against the shared standards, never production result IDs."""
@@ -218,11 +242,41 @@ def register_sample_routes(app, ctx):
             return send_file(output, mimetype="image/jpeg", max_age=3600)
         return send_file(source, conditional=True)
 
+    @bp.post('/api/samples/import')
+    def import_samples():
+        try:
+            return jsonify(center().library.import_files(request.files.getlist('files'),
+                                                         request.form.get('company', ''))), 201
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+    @bp.post('/api/samples/delete')
+    def delete_samples():
+        payload = request.get_json(silent=True)
+        try:
+            return jsonify(center().library.remove(payload.get('filenames') if isinstance(payload, dict) else None))
+        except LibraryConflict as exc:
+            return jsonify(error=str(exc)), 409
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+    @bp.post('/api/samples/company-mark')
+    def company_mark():
+        service = center()
+        try:
+            return jsonify(service.company_marks.save(service.catalog(), request.get_json(silent=True)))
+        except MarkConflict as exc:
+            return jsonify(error=str(exc)), 409
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except KeyError:
+            return jsonify(error='客户公司不存在，请刷新列表'), 404
+
     @bp.get("/files/samples/<kind>/<path:name>")
     def sample_file(kind, name):
         service = center()
         if kind == "original":
-            return send_file(service.source(name), conditional=True)
+            return send_file(service.source(name, include_deleted=True), conditional=True)
         directory = {"previews": service.preview_dir, "artifacts": service.artifact_dir}.get(kind)
         if directory is None:
             abort(404)
@@ -252,7 +306,10 @@ def register_sample_routes(app, ctx):
                 settings=settings, api_enabled=ctx.analyzer.seal_api.enabled).as_dict()
         except (ValueError, RuntimeError) as exc:
             return jsonify(error=str(exc)), 400
-        result = service.store.enqueue(names, options, settings)
+        try:
+            result = service.store.enqueue(names, options, settings)
+        except LibraryConflict as exc:
+            return jsonify(error=str(exc)), 409
         if app.config["BACKGROUND_WORKER"] and result["accepted"]:
             service.worker.start()
         return jsonify(result), 202
@@ -298,7 +355,7 @@ def register_sample_routes(app, ctx):
     def ground_truth(result_id):
         service = center()
         name = service.result(result_id)["filename"]
-        entry = service.catalog().get(name)
+        entry = service.library.catalog(include_deleted=True).get(name)
         return jsonify(filename=name, exists=entry is not None, entry=entry, history=[])
 
     @bp.get("/files/sample-selected-seal/<int:result_id>.png")
@@ -306,7 +363,7 @@ def register_sample_routes(app, ctx):
         service = center()
         item = service.result(result_id)
         try:
-            image = render_selected_seal(service.source(item["filename"]), item.get("seal_check") or {})
+            image = render_selected_seal(service.source(item["filename"], include_deleted=True), item.get("seal_check") or {})
         except (KeyError, ValueError, OSError):
             abort(404)
         return send_file(image, mimetype="image/png", max_age=0)

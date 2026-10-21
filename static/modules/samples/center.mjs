@@ -1,5 +1,7 @@
 import {escapeHtml} from '../core/ui.mjs';
 import {createSampleStatistics} from './statistics.mjs';
+import {createCompanyMarks, companyRowMarkup} from './company_marks.mjs';
+import {createSampleLibrary} from './library.mjs';
 
 const PAGE_SIZE = 6;
 export const sampleImageUrl = (name, thumbnail = false) =>
@@ -9,6 +11,17 @@ export function sampleScope(items, {company = '', search = '', status = ''} = {}
   const query = search.trim().toLocaleLowerCase();
   return items.filter(item => (!company || item.company === company)
     && (!query || item.filename.toLocaleLowerCase().includes(query)) && (!status || item.status === status));
+}
+
+export function sampleCompanyProgress(items) {
+  const total = items.length;
+  const completed = items.filter(item => item.status === '已完成').length;
+  const running = items.filter(item => item.status === '测试中').length;
+  const failed = items.filter(item => item.status === '运行失败').length;
+  const state = total && completed === total ? 'complete' : running ? 'running' : failed ? 'failed' : completed ? 'partial' : 'untested';
+  const label = state === 'complete' ? '✓ 已测完' : running ? `测试中 · 已完成 ${completed}/${total}`
+    : failed ? `已完成 ${completed}/${total} · ${failed} 张失败` : completed ? `已完成 ${completed}/${total}` : '未测试';
+  return {state, label, title: `共 ${total} 张，已完成 ${completed} 张，测试中 ${running} 张，运行失败 ${failed} 张。已测完表示测试执行完成，不代表识别结果全部正确。`};
 }
 
 export function sampleCard(item, selected) {
@@ -26,19 +39,47 @@ export function sampleCard(item, selected) {
 export function createSampleCenter({environment, ui, services, flushSettings, openResult, openOriginal}) {
   const {$, $$, toast} = ui;
   let items = [], companies = [], company = '', status = '', page = 1;
-  let selected = new Set(), loading = false, running = false, loaded = false, lastRender = '';
+  let selected = new Set(), loadPromise = null, running = false, loaded = false, lastRender = '';
   let historyLoading = false, historyMarkup = '';
+  let companyMarkup = '';
+  const companyMarks = createCompanyMarks({environment, ui, services, render: renderCompanies});
   const statistics = createSampleStatistics({environment, ui, services, openResult, openOriginal, imageUrl: sampleImageUrl});
+  const library = createSampleLibrary({environment, ui, services,
+    current: () => ({company, companies, selected, busy: running}),
+    setBusy: busy => { running = busy; syncSelection(); },
+    refresh: async importedCompany => {
+      selected.clear();
+      await load(true);
+      if (importedCompany) {
+        company = importedCompany; status = ''; page = 1;
+        $('#sample-search').value = '';
+        $('#sample-company-search').value = '';
+        $('#sample-company-mark-filter [data-company-mark-filter=""]').click();
+      }
+      renderCompanies(); render();
+    },
+  });
   const scope = () => sampleScope(items, {company, search: $('#sample-search').value, status});
   const companyItems = () => sampleScope(items, {company});
   const visible = () => scope().slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   function renderCompanies() {
     const query = $('#sample-company-search').value.trim().toLocaleLowerCase();
-    const rows = companies.filter(row => row.name.toLocaleLowerCase().includes(query));
-    const markup = [{name: '', count: items.length}, ...rows].map(row => `<button type="button" data-company="${escapeHtml(row.name)}" class="${company === row.name ? 'active' : ''}" aria-pressed="${company === row.name}"><span>${escapeHtml(row.name || '全部样单')}</span><small>${row.count}</small></button>`).join('');
-    $('#sample-company-list').innerHTML = markup + (query && !rows.length ? '<p class="empty-state">没有找到该公司</p>' : '');
-    $('#sample-company-count').textContent = companies.length;
+    const rows = companies.filter(row => row.name.toLocaleLowerCase().includes(query) && companyMarks.matches(row.name));
+    const markup = [{name: '', count: items.length}, ...rows].map(row => {
+      const progress = sampleCompanyProgress(sampleScope(items, {company: row.name}));
+      return companyRowMarkup(row, progress, company === row.name, companyMarks.seal(row.name));
+    }).join('') + (!rows.length ? '<p class="empty-state">没有符合条件的公司</p>' : '');
+    if (markup !== companyMarkup) {
+      const list = $('#sample-company-list'), scrollTop = list.scrollTop;
+      const focused = environment.document.activeElement;
+      const focusedCompany = list.contains(focused) ? focused.dataset.company : undefined;
+      list.innerHTML = markup; companyMarkup = markup;
+      if (focusedCompany !== undefined) $$('#sample-company-list [data-company]').find(button => button.dataset.company === focusedCompany)?.focus({preventScroll: true});
+      list.scrollTop = scrollTop;
+    }
+    $('#sample-company-count').textContent = rows.length === companies.length ? companies.length : `${rows.length} / ${companies.length}`;
+    companyMarks.renderHeader(company);
   }
 
   function syncSelection() {
@@ -47,6 +88,8 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-select-page').indeterminate = available.some(item => selected.has(item.filename)) && !$('#sample-select-page').checked;
     $('#sample-select-page').disabled = !available.length || running;
     $('#sample-run-selected').disabled = running || !selected.size;
+    $('#sample-delete-selected').disabled = running || !selected.size;
+    $('#sample-import-open').disabled = running;
     $('#sample-clear-selection').textContent = `已选 ${selected.size} 张${selected.size ? ' · 清空' : ''}`;
     $('#sample-clear-selection').disabled = !selected.size;
     $('#sample-run-company').disabled = running || !companyItems().some(item => item.status !== '测试中');
@@ -64,10 +107,10 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     const rows = scope(), pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     page = Math.min(page, pages);
     $('#sample-company-title').textContent = company || '全部样单';
-    $('#sample-library-summary').textContent = `${companyItems().length} 张样单 · 使用当前配置`;
+    $('#sample-library-summary').textContent = `${companyItems().length} 张样单 · ${sampleCompanyProgress(companyItems()).label} · 使用当前配置`;
     $('#sample-run-company').textContent = company ? '▶ 运行本公司全部' : '▶ 运行全部样单';
     const markup = visible().map(item => sampleCard(item, selected.has(item.filename))).join('') ||
-      `<div class="empty-state">${items.length ? '当前条件下没有样单，请调整搜索或筛选。' : '暂无已标注样单，请检查样单图片与标注文件。'}</div>`;
+      `<div class="empty-state">${items.length ? '当前条件下没有样单，请调整搜索或筛选。' : '暂无样单，点击右上角「导入样单」添加图片。'}</div>`;
     // Polling must not replace focused controls just because selection changed.
     const renderKey = JSON.stringify(visible()) + Boolean(items.length);
     if (renderKey !== lastRender) { $('#sample-grid').innerHTML = markup; lastRender = renderKey; }
@@ -83,16 +126,20 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     syncSelection();
   }
 
-  async function load() {
-    if (loading) return;
-    loading = true;
+  function load(force = false) {
+    if (loadPromise) return force ? loadPromise.then(() => load()) : loadPromise;
+    loadPromise = loadOnce().finally(() => { loadPromise = null; });
+    return loadPromise;
+  }
+
+  async function loadOnce() {
     try {
       const data = await services.samples.list();
-      const changed = JSON.stringify(companies) !== JSON.stringify(data.companies);
       items = data.items; companies = data.companies;
+      companyMarks.update(data);
       if (company && !companies.some(row => row.name === company)) company = '';
       selected = new Set([...selected].filter(name => items.some(item => item.filename === name && item.status !== '测试中')));
-      if (!loaded || changed) renderCompanies();
+      renderCompanies();
       loaded = true;
       $('#sample-feedback').textContent = '';
       render();
@@ -101,7 +148,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     } catch (error) {
       $('#sample-feedback').textContent = `加载失败：${error.message}，正在等待恢复连接。`;
       if (!loaded) $('#sample-grid').innerHTML = '<div class="empty-state">样单暂时无法加载</div>';
-    } finally { loading = false; }
+    }
   }
 
   async function run(names) {
@@ -116,6 +163,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
         item.status = '测试中'; item.job_status = 'queued'; item.error = '';
         selected.delete(item.filename);
       }
+      renderCompanies();
       render();
       toast(data.accepted.length ? `已开始 ${data.accepted.length} 张样单测试${data.skipped.length ? `，${data.skipped.length} 张已在测试中` : ''}` : '所选样单已在测试中', 'success');
       await load();
@@ -150,6 +198,8 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
 
   function initialize() {
     statistics.initialize();
+    companyMarks.initialize();
+    library.initialize();
     const renderFromTop = () => { render(); $('#sample-grid').scrollTop = 0; };
     $('#sample-company-search').addEventListener('input', renderCompanies);
     $('#sample-company-list').addEventListener('click', event => {
