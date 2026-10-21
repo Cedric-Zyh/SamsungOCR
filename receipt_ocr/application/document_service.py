@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
+from receipt_ocr.storage.artifact_dedup import deduplicate_artifacts
+
 
 @dataclass(frozen=True)
 class DocumentRecognitionService:
@@ -24,6 +26,8 @@ class DocumentRecognitionService:
             artifact_url_prefix=f"/files/artifacts/{token}",
             filename=filename, **options,
         )
+        result = deduplicate_artifacts(result, self.artifact_dir / token,
+                                       f"/files/artifacts/{token}")
         timestamp = self.now_iso()
         result.update(filename=filename, preview_url=f"/files/previews/{preview_name}",
                       created_at=created_at or timestamp, updated_at=timestamp)

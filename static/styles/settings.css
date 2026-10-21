@@ -233,3 +233,10 @@
   .dzt-test-form { flex-wrap:wrap; }
   .service-file-picker { flex-basis:100%; }
 }
+
+/* Portable sample and standard-seal data. */
+.settings-page .bootstrap-data-settings { margin-top: 18px; }
+.bootstrap-data-settings > p { color: var(--archive-muted); line-height: 1.7; }
+.bootstrap-data-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.bootstrap-data-actions select { min-height: 40px; padding: 8px 12px; border: 1px solid var(--archive-line); background: var(--archive-paper); color: var(--archive-ink); font: inherit; }
+.bootstrap-data-actions [hidden] { display: none; }

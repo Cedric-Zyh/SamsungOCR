@@ -65,6 +65,24 @@
           <button type="button" class="secondary-button" data-service-dialog="qingtong-settings-dialog" aria-haspopup="dialog" aria-label="配置清瞳">配置<span aria-hidden="true"> ›</span></button>
         </div>
       </section>
+      <section class="settings-card bootstrap-data-settings" aria-labelledby="bootstrap-data-title">
+        <div class="settings-section-heading"><div><h2 id="bootstrap-data-title">初始化数据</h2><p>将样单和标准章带到另一台电脑，部署后导入即可使用。</p></div></div>
+        <p>包含现有样单原图、标注和当前标准章；不包含测试记录、正式回单或服务密钥。同名样单和同签章要求的标准章保留本机版本，重复导入会自动跳过。</p>
+        <div class="bootstrap-data-actions">
+          <label for="bootstrap-scope">数据范围</label>
+          <select id="bootstrap-scope" aria-label="导出或导入的数据范围">
+            <option value="all">样单和标准章</option>
+            <option value="samples">仅样单</option>
+            <option value="standards">仅标准章</option>
+          </select>
+          <button type="button" id="bootstrap-export" class="secondary-button">导出数据包</button>
+          <button type="button" id="bootstrap-import" class="primary-button">导入数据包</button>
+          <input type="file" id="bootstrap-file" accept=".zip,application/zip" aria-label="选择初始化数据包" hidden>
+          <button type="button" id="bootstrap-refresh" class="secondary-button" hidden>刷新查看</button>
+        </div>
+        <p>先选择数据范围，再导出或导入。已有的合并数据包也可以只导入其中一种。图片保留原文件，不降低清晰度。</p>
+        <p id="bootstrap-status" role="status" aria-live="polite"></p>
+      </section>
       <dialog id="dzt-settings-dialog" class="service-dialog" aria-labelledby="dzt-settings-title">
         <header class="service-dialog-header"><div><h2 id="dzt-settings-title">单证通配置 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h2><p>保存后用于后续识别，密钥留空保留原值。</p></div><button type="button" class="service-dialog-close" data-service-close aria-label="关闭单证通配置" autofocus>×</button></header>
         <div class="service-dialog-body">

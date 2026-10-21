@@ -368,4 +368,6 @@ def register_sample_routes(app, ctx):
             abort(404)
         return send_file(image, mimetype="image/png", max_age=0)
 
+    from .bootstrap_data import register_bootstrap_routes
+    register_bootstrap_routes(bp, ctx, center)
     app.register_blueprint(bp)
