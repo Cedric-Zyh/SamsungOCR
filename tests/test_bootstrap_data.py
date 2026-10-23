@@ -121,6 +121,24 @@ def test_local_standards_and_deleted_samples_are_preserved(samples, tmp_path):
     assert 'one.png' not in service.catalog()
 
 
+def test_package_import_deduplicates_sample_numbers_across_extensions(samples, tmp_path):
+    source, source_client = samples
+    data = package(source, source_client)
+    def change(manifest, files):
+        manifest['samples'][0]['filename'] = '7329228596.jpg'
+        manifest['samples'][1]['filename'] = '7329228596.jpeg'
+    data = rewrite(data, change)
+    ctx, client = target(tmp_path)
+    picture = BytesIO()
+    Image.new('RGB', (20, 20)).save(picture, 'PNG')
+    picture.seek(0)
+    client.post('/api/samples/import', data={'files': (picture, '7329228596.png')})
+    result = post(client, data)
+    assert result.status_code == 200
+    assert result.json['samples_skipped'] == 2
+    assert result.json['samples_added'] == 2
+
+
 @pytest.mark.parametrize('mutation', ['traversal', 'corrupt', 'duplicate', 'version', 'extra'])
 def test_invalid_package_never_partially_imports(samples, tmp_path, mutation):
     source, client = samples

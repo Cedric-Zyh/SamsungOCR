@@ -120,3 +120,60 @@ def test_can_use_alternative_observation_as_an_additional_ring_candidate():
         "公司济南新宇航科技发展有限",
         "济南新宇航科技发展有限公司",
     }
+
+
+def test_fuzhou_warehouse_ring_keeps_its_correct_order_with_centre_requirement():
+    ring = "深圳欧瑞特供应链管理有限公司福州仓库"
+    result = reorder_ring_text(ring, ring + "收货专用章（1）")
+
+    assert result["raw_text"] == result["text"] == ring
+    assert result["changed"] is False
+    assert result["seam_offset"] == 0
+    assert result["reason"] == "kept_raw_order"
+    assert compare_seal_text_strict(ring + "收货专用章(1)", [
+        result["text"] + "收货专用章(1)",
+    ])["status"] == "匹配"
+
+
+@pytest.mark.parametrize("offset", range(len("深圳欧瑞特供应链管理有限公司福州仓库")))
+def test_warehouse_ring_aligns_every_seam_without_copying_centre_text(offset):
+    ring = "深圳欧瑞特供应链管理有限公司福州仓库"
+    raw = ring[offset:] + ring[:offset]
+    result = reorder_ring_text(raw, ring + "收货专用章(1)")
+
+    assert result["raw_text"] == raw
+    assert result["text"] == ring
+    assert result["seam_offset"] == (len(ring) - offset) % len(ring)
+    assert result["changed"] is (offset != 0)
+    assert sorted(result["text"]) == sorted(raw)
+
+
+@pytest.mark.parametrize("unit", ["福州仓库", "天津分公司", "广州服务中心"])
+def test_correct_unit_suffix_with_missing_glyph_is_not_moved(unit):
+    company = "深圳欧瑞特供应链管理有限公司"
+    raw = company.replace("供应链", "供应") + unit
+    result = reorder_ring_text(raw, company + unit + "收货专用章(1)")
+
+    assert result["text"] == raw
+    assert result["changed"] is False
+    assert compare_seal_text_strict(company + unit, [result["text"]])["status"] == "部分匹配"
+
+
+@pytest.mark.parametrize("offset", [0, 4, 14])
+def test_warehouse_name_is_not_moved_ahead_of_company_without_requirement(offset):
+    ring = "深圳欧瑞特供应链管理有限公司福州仓库"
+    raw = ring[offset:] + ring[:offset]
+    result = reorder_ring_text(raw)
+
+    assert result["text"] == ring
+    assert sorted(result["text"]) == sorted(raw)
+
+
+def test_wrong_warehouse_name_is_not_repaired_from_requirement():
+    company = "深圳欧瑞特供应链管理有限公司"
+    raw = company + "泉州仓库"
+    result = reorder_ring_text(raw, company + "福州仓库收货专用章(1)")
+
+    assert result["text"] == raw
+    assert result["changed"] is False
+    assert compare_seal_text_strict(company + "福州仓库", [result["text"]])["status"] == "不匹配"

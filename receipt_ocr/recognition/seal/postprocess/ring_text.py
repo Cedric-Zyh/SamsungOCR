@@ -35,11 +35,13 @@ def _rotations(text: str) -> list[tuple[int, str]]:
 
 
 def _suffix_score(text: str) -> float:
-    # A branch belongs after its parent company. Prefer the complete suffix
-    # over rotating “第二分公司” (or “天津分公司”) ahead of the parent name.
+    # A branch or warehouse belongs after its parent company. Prefer the
+    # complete name over rotating its trailing unit ahead of the parent.
     # This only ranks existing cyclic readings; missing glyphs stay missing.
     if re.search(r"(?:有限责任公司|有限公司)[\u4e00-\u9fff0-9]{0,20}分公司$", text):
         return 1.08
+    if re.search(r"(?:有限责任公司|有限公司)[\u4e00-\u9fff0-9]{0,20}仓库$", text):
+        return 1.12
     if text.endswith("有限责任公司"):
         return 1.0
     if text.endswith("有限公司"):
@@ -65,13 +67,15 @@ def _candidate_score(text: str, requirement_company: str) -> tuple[float, float,
 
 
 def reorder_ring_text(raw_text: str, requirement: str = "", alternatives: list[str] | None = None) -> dict:
-    """Align a complete ring reading, then fall back to company-suffix ordering.
+    """Align a ring reading, then fall back to company-suffix ordering.
 
     Preserve the original order in ``raw_text`` after the same typography
     normalization used by strict seal comparison.  An exact requirement match
     must preserve every character and its count, and only move the circular
     seam.  Never insert a missing glyph or arbitrarily permute characters.
-    Company-suffix structure remains a fallback for incomplete requirements.
+    A ring can be the leading part of a requirement followed by centre text
+    and a seal number. Compare that whole observed ring before applying a
+    company-suffix heuristic, which otherwise truncates trailing unit names.
     """
     raw = normalize_seal_text_strict(str(raw_text or ""))
     sources = [raw, *(normalize_seal_text_strict(str(value or "")) for value in alternatives or [])]
@@ -91,24 +95,45 @@ def reorder_ring_text(raw_text: str, requirement: str = "", alternatives: list[s
 
     expected = normalize_seal_text_strict(str(requirement or ""))
     if expected:
-        expected_counts = Counter(expected)
-        for source in sources:
-            if len(source) != len(expected) or Counter(source) != expected_counts:
-                continue
-            offset = (source + source).find(expected)
-            if not 0 <= offset < len(source):
-                continue
-            selected = source[offset:] + source[:offset]
+        # Try complete requirements first, then the requirement prefix with
+        # exactly the observed character count. No purpose/number characters
+        # are copied into the ring, and no observed glyph may be discarded.
+        for complete in (True, False):
+            for source in sources:
+                target = expected if complete else expected[:len(source)]
+                if len(source) != len(target) or Counter(source) != Counter(target):
+                    continue
+                offset = (source + source).find(target)
+                if not 0 <= offset < len(source):
+                    continue
+                selected = source[offset:] + source[:offset]
+                return {
+                    "raw_text": raw,
+                    "text": selected,
+                    "changed": selected != raw,
+                    "seam_offset": offset,
+                    "source": source,
+                    "requirement_company": requirement_company,
+                    "score": 1.0,
+                    "raw_score": round(SequenceMatcher(None, raw, target).ratio(), 4),
+                    "reason": (
+                        "kept_raw_order" if selected == raw else
+                        "exact_requirement_cyclic_reorder" if complete else
+                        "exact_requirement_prefix_cyclic_reorder"
+                    ),
+                }
+        # An omission-only reading already in the required order is still
+        # incomplete evidence. Do not turn it into a different order merely
+        # to make it end in “有限公司”.
+        remaining = iter(expected)
+        if len(raw) < len(expected) and all(character in remaining for character in raw):
             return {
-                "raw_text": raw,
-                "text": selected,
-                "changed": selected != raw,
-                "seam_offset": offset,
-                "source": source,
+                "raw_text": raw, "text": raw, "changed": False,
+                "seam_offset": 0, "source": raw,
                 "requirement_company": requirement_company,
-                "score": 1.0,
+                "score": round(SequenceMatcher(None, raw, expected).ratio(), 4),
                 "raw_score": round(SequenceMatcher(None, raw, expected).ratio(), 4),
-                "reason": "exact_requirement_cyclic_reorder" if selected != raw else "kept_raw_order",
+                "reason": "kept_raw_order",
             }
 
     candidates = []

@@ -51,14 +51,14 @@ def review_result(ctx: ReviewDependencies, result_id: int):
                 )
             result_to_store = prepare_review_payload(
                 stored_current, updated, review_status=review_status,
-                final_result=final_result, note=str(payload.get("human_note", "")),
-                error_type=str(payload.get("error_type", "")),
+                final_result=final_result, note=str(payload.get("human_note", current.get("human_note", ""))),
+                error_type=str(payload.get("error_type", current.get("error_type", ""))),
             )
             ctx.database.review_result(
                 result_id, result=result_to_store, review_status=review_status,
-                final_result=final_result, note=str(payload.get("human_note", "")),
+                final_result=final_result, note=str(payload.get("human_note", current.get("human_note", ""))),
                 action=str(payload.get("action", "人工复核")),
-                error_type=str(payload.get("error_type", "")), _connection=connection,
+                error_type=str(payload.get("error_type", current.get("error_type", ""))), _connection=connection,
             )
     except KeyError:
         abort(404)

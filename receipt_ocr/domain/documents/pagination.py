@@ -208,7 +208,8 @@ def merge_paginated_results(results: list[dict]) -> list[dict]:
 
         if "review_issues" in merged:
             merged["review_issues"] = [item for item in merged["review_issues"]
-                                      if item["code"] != "awaiting_continuation"]
+                                      if item["code"] != "awaiting_continuation"
+                                      and not (footer is not None and item["code"] == "footer_unconfirmed")]
             reasons = [item["message"] for item in merged["review_issues"]]
         else:
             reasons = list(merged.get("review_reasons") or [])

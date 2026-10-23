@@ -17,7 +17,7 @@ def prepare_fixed_rectangle_rows(color, oriented, orientation, directory, index)
     """
     original = _read_image(color)
     angle = float(orientation.get("applied_rotation") or 0)
-    rotated = abs(angle) >= .01
+    rotated = abs(angle) >= .01 or bool(orientation.get('force_row_read'))
     image = _read_image(oriented) if rotated else original
     height, width = image.shape[:2]
     matrix = None
@@ -26,6 +26,8 @@ def prepare_fixed_rectangle_rows(color, oriented, orientation, directory, index)
         matrix, _, _ = _rotation_geometry(
             original.shape[1] + 2 * pad, original.shape[0] + 2 * pad, angle,
         )
+        if orientation.get('rotation_matrix') is not None:
+            matrix = np.asarray(orientation['rotation_matrix'], np.float64)
     rows = []
     for detection_index, box in enumerate(orientation.get("detected_boxes", [])):
         if float(box.get("confidence") or 0) < .75 or not str(box.get("text") or "").strip():

@@ -103,7 +103,7 @@ def measure_row_extent(source, seed_box, *, color="red"):
     }
 
 
-def save_row_polygon(source, destination, polygon):
+def save_row_polygon(source, destination, polygon, *, padding=20):
     """Save the same polygon used for masking as a single rectified OCR line."""
     image = cv2.imread(str(source))
     points = np.asarray(polygon, np.float32)
@@ -115,7 +115,8 @@ def save_row_polygon(source, destination, polygon):
     matrix = cv2.getPerspectiveTransform(points, target)
     row = cv2.warpPerspective(image, matrix, (width, height), flags=cv2.INTER_CUBIC,
                               borderValue=(255, 255, 255))
-    row = cv2.copyMakeBorder(row, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+    row = cv2.copyMakeBorder(row, padding, padding, padding, padding,
+                             cv2.BORDER_CONSTANT, value=(255, 255, 255))
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(destination), row):

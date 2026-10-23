@@ -22,13 +22,14 @@ from receipt_ocr.imaging.contracts import SealRegion
 
 from receipt_ocr.imaging.detection import classify_seal_role
 
-from receipt_ocr.imaging.io import read_image_size
+from receipt_ocr.imaging.io import _read_image
+from receipt_ocr.imaging.colors import detect_seal_color
+from receipt_ocr.imaging.shapes import seal_region_shape
 
 from receipt_ocr.imaging.crops import save_pixel_region_crop
 
-# The API does not report which ink its box was drawn from, and the colour only
-# steers which derivative crops the local pass prepares.  "red" is the tolerant
-# branch: it keeps the original crop and both colour masks available.
+# The API supplies geometry, not ink colour. Infer colour from the original
+# pixels in each box; use red only when the crop has no colour evidence.
 REMOTE_COLOR = "red"
 REMOTE_SOURCE = "清瞳印章区域"
 
@@ -110,9 +111,10 @@ def qingtong_seal_regions(source, check) -> list[SealRegion]:
     if not boxes:
         return []
     try:
-        width, height = read_image_size(source)
+        image = _read_image(source)
     except (OSError, ValueError):
         return []
+    height, width = image.shape[:2]
     if width <= 0 or height <= 0:
         return []
     regions = []
@@ -129,7 +131,11 @@ def qingtong_seal_regions(source, check) -> list[SealRegion]:
                 y=y1,
                 width=x2 - x1,
                 height=y2 - y1,
-                color=REMOTE_COLOR,
+                color=detect_seal_color(
+                    image[int(y1 * height):int(y2 * height),
+                          int(x1 * width):int(x2 * width)],
+                    default=REMOTE_COLOR,
+                ),
                 role=classify_seal_role((x1 + x2) / 2, (y1 + y2) / 2),
                 pixel_ratio=0.0,
                 qingtong_cls=item["cls"],
@@ -172,7 +178,10 @@ def qingtong_region_artifacts(
                 "api_index": item["api_index"],
                 "color": region.color if region else REMOTE_COLOR,
                 "role": region.role if region else "",
-                "shape": _qingtong_shape_label(item.get("cls")),
+                "shape": ({"circle": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}[
+                    seal_region_shape(source, region)
+                ] if region is not None else _qingtong_shape_label(item.get("cls"))),
+                "qingtong_shape_hint": _qingtong_shape_label(item.get("cls")),
                 "source": REMOTE_SOURCE,
                 "ocr_backend": ocr_backend_label,
                 "note": note,

@@ -7,9 +7,10 @@ import numpy as np
 from ..layout_fields import inner_role
 
 
-def rim_geometry(image):
+def rim_geometry(image, *, color='red'):
     blue, green, red = (c.astype(float) for c in cv2.split(image))
-    ink = (red-np.maximum(blue, green) > 120).astype('uint8')
+    chroma = red-np.maximum(blue, green) if color == 'red' else blue-np.maximum(red, green)
+    ink = (chroma > 120).astype('uint8')
     _, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
     height, width = image.shape[:2]
     keep = ((stats[:, 4] > height*width*.003)
@@ -93,8 +94,8 @@ def proportional_arc(gray, geometry, degrees, radial, *, lower=False):
     return cv2.copyMakeBorder(pixels, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=255)
 
 
-def prepare_station_layout(image, directory, index, *, reader, provider):
-    fitted = rim_geometry(image)
+def prepare_station_layout(image, directory, index, *, reader, provider, color='red'):
+    fitted = rim_geometry(image, color=color)
     if fitted is None:
         return None
     fit, geometry = fitted
@@ -141,7 +142,8 @@ def prepare_station_layout(image, directory, index, *, reader, provider):
     plan.update(overlay=save('regions', overlay), ring_input=save('ring-input', masked),
                 mask=save('mask', mask))
     blue, green, red = (c.astype(float) for c in cv2.split(masked))
-    gray = (255-np.clip((red-np.maximum(blue, green))*255/160, 0, 255)).astype('uint8')
+    chroma = red-np.maximum(blue, green) if color == 'red' else blue-np.maximum(red, green)
+    gray = (255-np.clip(chroma*255/160, 0, 255)).astype('uint8')
     for name, degrees, radial in [('upper', [-200, 20], [.40, .92]),
                                    ('lower', [155, 25], [.68, .98])]:
         pixels = proportional_arc(gray, geometry, degrees, radial, lower=name == 'lower')

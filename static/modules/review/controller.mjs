@@ -8,6 +8,7 @@ import {providerErrorIssues} from '../core/provider_errors.mjs';
 import {createReviewEditors} from './editors.mjs';
 import {createReviewSubmission} from './submission.mjs';
 import {createReviewStandard} from '../seals/review_standard.mjs';
+import {createSampleAnnotationSubmission} from './sample_annotations.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -29,6 +30,9 @@ export function createReview({
   const {submitReview} = createReviewSubmission({
     ui, reviewState, services, currentReadiness, syncReviewReadiness,
     markReviewSaved, continueReview, refreshVisibleResults
+  });
+  const saveSampleAnnotations = createSampleAnnotationSubmission({
+    ui, reviewState, services, renderHistory, refreshVisibleResults,
   });
 
   function currentReadiness() {
@@ -93,13 +97,13 @@ export function createReview({
     renderReview(item, item.id, reviewState.reviewMode);
     $('[data-check-card="seal"]', $('#review-content')).open = true;
     $('[data-seal-standard]', $('#review-content')).scrollIntoView({block: 'nearest'});
-    Promise.allSettled([renderHistory(), renderGroundTruth(), refreshVisibleResults()]);
+    Promise.allSettled([renderHistory(), ...(reviewState.sampleView ? [renderGroundTruth()] : []), refreshVisibleResults()]);
   }});
   const renderReview = createReviewView({
     ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor, renderProductTable,
     setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation, applyReviewMode,
     focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-    renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness, renderStandard
+    renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard
   });
   function showReviewEmpty({loading = false, error = ''} = {}) {
     reviewPreview.cancel();
@@ -194,22 +198,24 @@ export function createReview({
       $('#review-title').setAttribute('tabindex', '-1');
       $('#review-title').focus({preventScroll: true});
     }
-    await Promise.allSettled([renderHistory(), renderGroundTruth(), ...(sample ? [] : [loadReviewQueue(false)])]);
+    await Promise.allSettled([renderHistory(), ...(sample ? [renderGroundTruth()] : [loadReviewQueue(false)])]);
   }
 
   function applyReviewMode(mode, id, content) {
     const view = mode === 'view';
     content.dataset.reviewMode = mode;
     const note = $('[data-review-mode-note]', content);
-    if (note) note.textContent = reviewState.sampleView ? '样单测试结果 · 可直接加入标准章，使用当前配置可重新测试' : view ? '可直接加入或替换标准章 · 修改核验内容请进入复核' : '';
+    if (note) note.textContent = reviewState.sampleView ? '样单标注与备注可编辑保存 · Ctrl / ⌘ + S 保存 · 使用当前配置可重新测试' : view ? '可直接加入或替换标准章 · 修改核验内容请进入复核' : '';
     $('[data-review-readiness]', content).classList.toggle('hidden', view);
     $('[data-review-shortcuts]', content).classList.toggle('hidden', view);
     $('[data-enter-review]', content).classList.toggle('hidden', !view);
+    if (reviewState.sampleView) $('[data-save-sample]', content).classList.remove('hidden');
     for (const selector of ['[data-retry]', '[data-save-pending]', '[data-confirm-fail]', '[data-confirm-pass]']) {
       $(selector, content).classList.toggle('hidden', view);
     }
     if (!view) return;
     for (const element of $$('input, textarea, select', content)) {
+      if (reviewState.sampleView && element.closest('[data-sample-annotations]')) continue;
       if (element !== $('[data-standard-rotation]', content)) element.disabled = true;
     }
     for (const selector of [
@@ -222,6 +228,7 @@ export function createReview({
     const filename = reviewState.current?.filename;
     entry.addEventListener('click', async () => {
       if (reviewState.sampleView) {
+        if (reviewState.reviewDirty) return toast('请先保存标注与备注，再重新测试', 'warning');
         entry.disabled = true;
         try { await retrySample?.(filename); } finally { entry.disabled = false; }
       } else openReview(id, {mode: 'review'});
@@ -263,6 +270,7 @@ export function createReview({
       if (!action) return;
       event.preventDefault();
       if (reviewState.reviewSaving) return;
+      if (reviewState.sampleView && action === 'save') { saveSampleAnnotations(); return; }
       if (reviewState.reviewMode === 'view' && ['save', 'pass'].includes(action)) {
         toast('当前为只读查看模式，请先进入复核。', 'warning');
         return;

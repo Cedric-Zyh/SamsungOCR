@@ -9,7 +9,29 @@ def _provider(check):
         return 'qingtong'
     if check.get('recognition_mode') == 'danzhengtong' or check.get('backend') == '单证通':
         return 'danzhengtong'
+    if check.get('comparison_policy') in {'strict_text', 'strict_information_fields'}:
+        return 'local'
     return ''
+
+
+def _independent_checks(checks):
+    """Unpack local readings without counting a previous winner as QingTong."""
+    sources, seen = [], set()
+    for check in checks:
+        remote = check.get('qingtong_channel') or check
+        for candidate in (remote, check.get('local_channel')):
+            if not isinstance(candidate, dict) or not _provider(candidate):
+                continue
+            if _provider(candidate) == 'local':
+                candidate = {**candidate,
+                             'source': candidate.get('source') or candidate.get('backend') or '本地印章 OCR',
+                             'backend': candidate.get('backend') or candidate.get('source') or '本地印章 OCR'}
+            identity = tuple(str(candidate.get(key) or '') for key in
+                             ('backend', 'source', 'requirement', 'recognized', 'status'))
+            if identity not in seen:
+                sources.append(candidate)
+                seen.add(identity)
+    return sources
 
 
 def _rank(check):
@@ -30,9 +52,10 @@ def combine_seal_provider_checks(checks, policy='any_exact', match_mode='any'):
 
     QingTong already selects its best template/OCR channel. Its full detected
     stamp evidence stays attached even when DanZhengTong supplies the winner.
-    Local fuzzy/geometry results do not add a fourth vote to this policy.
+    Strict local OCR participates independently at every comparison status.
+    Legacy fuzzy/geometry verdicts remain outside strict text arbitration.
     """
-    providers = [check for check in checks if _provider(check)]
+    providers = _independent_checks(checks)
     if not providers:
         return None
     allowed = {'any_exact', 'danzhengtong_exact', 'qingtong_exact'}
@@ -41,14 +64,23 @@ def combine_seal_provider_checks(checks, policy='any_exact', match_mode='any'):
     winner = max(candidates or providers, key=_rank)
     base = next((check for check in providers if check.get('dual_check')), winner)
     result = deepcopy(base)
+    if base.get('dual_check'):
+        result['qingtong_channel'] = deepcopy(base)
+        result['qingtong_channel'].pop('qingtong_channel', None)
+        result['qingtong_channel'].pop('local_channel', None)
+    local = [check for check in providers if _provider(check) == 'local']
+    if local:
+        result['local_channel'] = deepcopy(max(local, key=_rank))
     for key in ('requirement', 'recognized', 'score', 'confidence', 'company_score',
-                'company_conflict', 'status', 'comparison_policy', 'requirement_coverage', 'simulated'):
+                'company_conflict', 'status', 'comparison_policy', 'requirement_coverage', 'simulated',
+                'field_comparison'):
         if key in winner:
             result[key] = deepcopy(winner[key])
         else:
             result.pop(key, None)
     result['source'] = winner.get('source') or winner.get('backend') or ''
     result['backend'] = winner.get('backend') or result['source']
+    result['display_text'] = result.get('recognized', '')
     status = winner.get('status')
     match_mode = 'all' if match_mode == 'all' else 'any'
     provider_matches = [check.get('status') == '匹配' and check.get('reliable') is True
@@ -68,7 +100,9 @@ def combine_seal_provider_checks(checks, policy='any_exact', match_mode='any'):
     ))
     result['message'] = {
         '匹配': f"{result['source']}的印章文字完全符合签章要求，印章匹配",
-        '部分匹配': '没有完全匹配的结果；最匹配的印章文字仅缺少部分字，需人工复核',
+        '部分匹配': ('全部结果匹配模式下，各来源尚未全部匹配，需人工复核'
+                   if match_mode == 'all' and any(provider_matches)
+                   else '没有完全匹配的结果；最匹配的印章文字仅缺少部分字，需人工复核'),
         '不匹配': '各来源均未完全匹配签章要求，展示其中最匹配的印章文字',
     }.get(status, winner.get('message', '未识别到可比对的印章文字'))
     result['provider_comparison'] = {

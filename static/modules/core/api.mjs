@@ -44,14 +44,18 @@ export function createApiClients(api) {
     samples: {
       list: () => api('/api/samples'),
       run: filenames => api('/api/samples/run', {method: 'POST', json: {filenames}}),
+      classify: scope => api('/api/samples/classify', {method: 'POST', ...(scope ? {json: scope} : {})}),
+      classifyRequirements: (company, scope = {}) => api('/api/samples/classify-requirements', {method: 'POST', json: {company, ...scope}}),
       importFiles: body => api('/api/samples/import', {method: 'POST', body}),
       remove: filenames => api('/api/samples/delete', {method: 'POST', json: {filenames}}),
       history: () => api('/api/samples/history'),
       statistics: taskId => api(query('/api/samples/statistics', {task_id: taskId})),
+      statisticsExportUrl: params => query('/api/samples/statistics/export', params),
       saveCompanyMark: payload => api('/api/samples/company-mark', {method: 'POST', json: payload}),
       get: id => api(`/api/samples/results/${encodeURIComponent(id)}`),
       reviewHistory: id => api(`/api/samples/results/${encodeURIComponent(id)}/review-history`),
       groundTruth: id => api(`/api/samples/results/${encodeURIComponent(id)}/ground-truth`),
+      saveAnnotations: (id, payload) => api(`/api/samples/results/${encodeURIComponent(id)}/annotations`, {method: 'PATCH', json: payload}),
       saveStandard: (id, payload) => api(`/api/samples/results/${encodeURIComponent(id)}/seal-standard`, {method:'POST', json:payload}),
     },
     sealStandards: {

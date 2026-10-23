@@ -65,6 +65,19 @@ def test_confirming_overall_does_not_imply_confirmation_of_date_or_seal(database
     assert database.history(result_id) == []
 
 
+def test_review_without_removed_note_controls_preserves_existing_notes(database):
+    result_id = insert(database, uncertain_receipt())
+    client = web.app.test_client()
+    first = client.patch(f'/api/results/{result_id}/review', json={
+        'human_note': '已有备注', 'error_type': '印章识别错误', 'review_status': '待复核'})
+    assert first.status_code == 200
+    saved = client.patch(f'/api/results/{result_id}/review', json={
+        'review_status': '待复核', 'review_revision': first.json['review_revision']})
+    assert saved.status_code == 200
+    assert saved.json['human_note'] == '已有备注'
+    assert saved.json['error_type'] == '印章识别错误'
+
+
 def test_explicit_unchanged_evidence_can_be_confirmed(database):
     result = uncertain_receipt()
     result_id = insert(database, result)

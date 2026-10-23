@@ -68,7 +68,9 @@ export function createSampleStatistics({environment, ui, services, openResult, o
   const {$, $$, toast} = ui;
   let data = null, company = '', taskId = '', tab = 'seal', filter = '', page = 1;
   let revision = 0, loading = false, rendered = '', knownCompanies = [];
+  let exporting = false;
   const dialog = () => $('#sample-statistics-dialog');
+  const syncExport = () => { $('#sample-statistics-export').disabled = !data || loading || exporting; };
 
   function render() {
     if (!data) return;
@@ -124,6 +126,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     if (!dialog().open || (loading && !reset)) return;
     const token = ++revision;
     loading = true;
+    syncExport();
     if (reset) {
       data = null; rendered = '';
       $('#sample-statistics-body').innerHTML = '<p class="empty-state">正在加载统计结果…</p>';
@@ -143,7 +146,35 @@ export function createSampleStatistics({environment, ui, services, openResult, o
       if (token !== revision || !dialog().open) return;
       $('#sample-statistics-feedback').textContent = `统计加载失败：${error.message}。请点击刷新重试。`;
       if (!data) $('#sample-statistics-body').innerHTML = '';
-    } finally { if (token === revision) loading = false; }
+    } finally { if (token === revision) { loading = false; syncExport(); } }
+  }
+
+  async function exportExcel() {
+    if (!data || loading || exporting) return;
+    const params = {company, task_id: taskId, tab, filter};
+    const title = tab === 'seal' ? '印章结果' : '日期结果';
+    exporting = true; syncExport();
+    $('#sample-statistics-export').textContent = '导出中…';
+    try {
+      const response = await environment.window.fetch(services.samples.statisticsExportUrl(params));
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || '导出失败，请重试');
+      }
+      const url = environment.window.URL.createObjectURL(await response.blob());
+      const link = environment.document.createElement('a');
+      link.href = url;
+      link.download = `样单统计-${params.company || '全部公司'}-${title}.xlsx`;
+      environment.document.body.appendChild(link);
+      link.click(); link.remove();
+      environment.window.setTimeout(() => environment.window.URL.revokeObjectURL(url), 60000);
+      toast('Excel 已生成，包含当前筛选下的全部记录', 'success');
+    } catch (error) { toast(error.message, 'danger'); }
+    finally {
+      exporting = false;
+      $('#sample-statistics-export').textContent = '导出 Excel';
+      syncExport();
+    }
   }
 
   function show(context) {
@@ -161,6 +192,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     $('#sample-statistics-company').addEventListener('change', event => { company = event.target.value; page = 1; render(); });
     $('#sample-statistics-batch').addEventListener('change', event => { taskId = event.target.value; page = 1; refresh({reset: true}); });
     $('#sample-statistics-refresh').addEventListener('click', () => refresh());
+    $('#sample-statistics-export').addEventListener('click', exportExcel);
     $$('[data-stat-tab]').forEach(button => button.addEventListener('click', () => {
       tab = button.dataset.statTab; filter = ''; page = 1; render();
     }));

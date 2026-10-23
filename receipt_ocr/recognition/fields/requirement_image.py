@@ -5,7 +5,10 @@ import re
 
 import cv2
 import numpy as np
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image
+
+from ...domain.ocr import TextObservation
+from ...imaging.printed_page import suppress_stamp_color
 
 
 _NEXT_FIELD = re.compile(r"^(?:实收数量|拒收数量|签收说明|发货单位|承运单位|收货客户)[:：]?")
@@ -95,6 +98,82 @@ def requirement_crop_box(size, anchor, rows):
     return box, boundary
 
 
+def suppress_requirement_color(crop):
+    return suppress_stamp_color(crop)
+
+
+def extend_clean_requirement(image, anchor, page_rows, box, search_path, *, recognizer, backend):
+    """Recover missing row extent after color suppression, before tight cropping.
+
+    An incomplete page detector must not set the final right edge. Search a
+    wider cleaned footer, then accept only an independently located requirement
+    label on the original baseline and its adjacent same-line detections.
+    This expands geometry, never supplies expected words or changes OCR text.
+    """
+    detect = getattr(recognizer, 'detect_boxes', None)
+    if anchor is None or not callable(detect):
+        return box, {'status': 'unavailable'}
+    width, height = image.size
+    margin_y = max(round(anchor.height * height), round(height * .008))
+    search_box = (box[0], max(0, box[1] - margin_y),
+                  min(width, max(box[2], round(width * .98))),
+                  min(height, box[3] + margin_y))
+    clean = suppress_requirement_color(image.crop(search_box))
+    clean.save(search_path)
+    scan_width, scan_height = clean.size
+    rows = []
+    for item in detect(search_path, backend=backend):
+        points = np.asarray(item.get('points', []), dtype=float)
+        confidence = float(item.get('confidence') or 0)
+        if (points.shape != (4, 2) or not np.isfinite(points).all()
+                or not np.isfinite(confidence) or confidence < .80):
+            continue
+        left, top = points.min(axis=0)
+        right, bottom = points.max(axis=0)
+        if left < 0 or top < 0 or right > scan_width or bottom > scan_height:
+            continue
+        rows.append(TextObservation(
+            str(item.get('text', '')), confidence,
+            (search_box[0] + left) / width, (search_box[1] + top) / height,
+            (right-left) / width, (bottom-top) / height,
+        ))
+    candidates = [row for row in rows
+                  if re.match(r'^签[章幸草]要求', row.text.strip())
+                  and abs(row.x-anchor.x) * width <= 2 * anchor.height * height
+                  and abs(row.y+row.height/2-anchor.y-anchor.height/2)
+                  <= max(anchor.height, row.height) * .65]
+    info = {'status': 'kept', 'search_box': list(search_box), 'previous_box': list(box)}
+    if not candidates:
+        info['reason'] = 'requirement_label_not_verified'
+        return box, info
+    # Keep separate page detections such as a phone/number as additional
+    # geometry evidence. The fresh label is essential when its box now spans
+    # the previously missing part of the field.
+    cleaned_rows = [*page_rows, *rows]
+    proposals = []
+    for row in candidates:
+        line = _requirement_line_rows(image.size, row, cleaned_rows)
+        # A short label-only detection can invoke the old template width.
+        # That default is not evidence of additional text: require an actual
+        # verified row box to extend beyond the current reading margin.
+        if max(part.x + part.width for part in line) * width <= box[2]:
+            continue
+        proposals.append(requirement_crop_box(image.size, row, cleaned_rows)[0])
+    if not proposals:
+        info['reason'] = 'no_additional_extent'
+        return box, info
+    proposed = max(proposals, key=lambda value: value[2])
+    # This pass repairs missing extent only. A shorter cleaned detection must
+    # not replace a previously verified station, phone or terminal number.
+    if proposed[2] <= box[2]:
+        info['reason'] = 'no_additional_extent'
+        return box, info
+    expanded = (min(box[0], proposed[0]), min(box[1], proposed[1]),
+                proposed[2], max(box[3], proposed[3]))
+    info.update(status='extended', crop_box=list(expanded))
+    return expanded, info
+
+
 def clean_and_deskew_requirement(crop):
     """Suppress stamp color, fit a supported text baseline, then crop that row.
 
@@ -102,8 +181,7 @@ def clean_and_deskew_requirement(crop):
     nor recognized business text is used to manufacture or truncate a value.
     Without enough baseline evidence retain the bounded original crop.
     """
-    red, green, blue = crop.convert("RGB").split()
-    clean = ImageOps.autocontrast(ImageChops.lighter(red, ImageChops.lighter(green, blue)), cutoff=1)
+    clean = suppress_requirement_color(crop)
     image = np.asarray(clean)
     height, width = image.shape
     meta = {"rotation_degrees": 0.0, "deskew_applied": False}

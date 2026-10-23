@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
-from .colors import _color_masks, _ocr_color_mask, _isolate_red_ink
+from .colors import _color_masks, _isolate_red_ink, _isolate_blue_ink
 
 
 def save_isolated_seal(
@@ -63,18 +63,15 @@ def save_color_isolated_seal(
 
     Binary isolation is useful for faint contours, but it removes the local
     intensity variation that OCR detectors sometimes need to separate curved
-    Chinese glyphs. Red uses colour-supported stroke luminance and rejects
-    neutral black cores/rules while retaining faint grey-red strokes.
-    Blue retains its existing color-mask treatment. Fully obscured ink cannot
-    be recovered from this image alone.
+    Chinese glyphs. Both red and blue use colour-supported stroke luminance
+    and reject neutral black cores/rules while retaining faint coloured
+    strokes. Fully obscured ink cannot be recovered from this image alone.
     """
     crop = _seal_source_crop(source, region)
     if region.color == "red":
         canvas = _isolate_red_ink(crop)
     else:
-        mask = _ocr_color_mask(crop, region.color)
-        canvas = np.full_like(crop, 255)
-        canvas[mask > 0] = crop[mask > 0]
+        canvas = _isolate_blue_ink(crop)
     canvas = _enlarge_seal(canvas)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)

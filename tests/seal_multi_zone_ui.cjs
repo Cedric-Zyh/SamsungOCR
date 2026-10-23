@@ -24,3 +24,39 @@ test('multi-zone evidence shows actual separate inputs and RGB arc previews', ()
   assert.match(target.innerHTML,/lower.png\?preview=rgb/);
   assert.doesNotMatch(target.innerHTML,/无横向文字，直接/);
 });
+
+test('blue department rows and full-ring company input remain visible', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'blue',shape:'椭圆',
+    original_url:'/files/artifacts/test/original.png',
+    color_isolated_oriented_url:'/files/artifacts/test/enhanced.png',
+    ring_input_url:'/files/artifacts/test/masked.png',
+    multi_zone_layout:{method:'ellipse_department_rows',overlay_url:'/files/artifacts/test/zones.png'},
+    inputs:[{id:'department',zone_name:'inner-1',channel:'layout_inner',image_url:'/files/artifacts/test/department.png'},
+      {id:'company',zone_name:'company',channel:'ring',image_url:'/files/artifacts/test/company.png'}],
+    reads:[{input_id:'department',channel:'layout_inner',zone_label:'章内部门',text:'仓储部',confidence:.94},
+      {input_id:'company',channel:'ring',zone_label:'环形公司名称',text:'测试科技有限公司',confidence:.99}]};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/章内部门/);
+  assert.match(target.innerHTML,/仓储部/);
+  assert.match(target.innerHTML,/company.png\?preview=rgb/);
+});
+
+test('mixed ring evidence labels the selected Han input and full audit image', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'red',shape:'圆形',
+    original_url:'/files/artifacts/test/original.png',
+    ring_input_url:'/files/artifacts/test/stamp.png',
+    ring_text_band_url:'/files/artifacts/test/han-band.png',
+    ring_han_selection:{method:'verified_han_company_arc'},
+    unwrapped_url:'/files/artifacts/test/han-line.png',
+    unwrapped_full_url:'/files/artifacts/test/mixed-full.png',
+    unwrapped_text:'某某测试电子有限公司'};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/汉字段展开图（公司名称识别输入）/);
+  assert.match(target.innerHTML,/其他文字与数字仅供核对/);
+  assert.match(target.innerHTML,/不参与公司名称匹配/);
+  assert.doesNotMatch(target.innerHTML,/环形 OCR 直接读取旋正后的整章图/);
+});

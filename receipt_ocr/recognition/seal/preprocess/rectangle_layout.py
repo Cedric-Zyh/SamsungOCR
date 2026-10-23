@@ -1,5 +1,6 @@
 """Prepare measured rectangle rows or one canonical multi-column OCR input."""
 from pathlib import Path
+import re
 
 import cv2
 import numpy as np
@@ -7,6 +8,51 @@ import numpy as np
 from receipt_ocr.imaging.io import _read_image, _write_stage_image
 from .rectangle_frame import geometry_threshold, measure_frame, row_spans
 from .rectangle_columns import bounds, column_groups, reading_order
+
+
+def _empty_form_field(interior, span, boxes, scaled_height):
+    """Confirm an empty caption from independent detection and source ink.
+
+    Row OCR can misread a pale caption. Keep that reading verbatim, but do
+    not turn it into stamp-name text when its cell has a verified caption
+    and no separate value ink. Filled fields never enter this path.
+    """
+    height, width = interior.shape[:2]
+    top, bottom = span
+    selected, labels = [], []
+    for box in boxes:
+        points = np.asarray(box.get('points', []), float)
+        confidence = float(box.get('confidence') or 0)
+        if (points.shape != (4, 2) or not np.isfinite(points).all() or not np.isfinite(confidence)
+                or np.any(points.max(0) <= points.min(0))):
+            continue
+        mapped = (points-32)*[width/960, height/scaled_height]
+        if not top <= mapped[:, 1].mean() < bottom or confidence < .5:
+            continue
+        text = re.sub(r'\s+', '', str(box.get('text') or ''))
+        if re.fullmatch(r'(?:收货人|收货日期|收货时间|签收人|签收日期)[:：]?', text) and confidence >= .90:
+            labels.append(text)
+        elif not re.fullmatch(r'[年月日时分:：]+', text):
+            return None
+        selected.append(mapped)
+    if len(labels) != 1:
+        return None
+    glyph_height = float(np.median([np.ptp(p[:, 1]) for p in selected]))
+    allowed = np.zeros((bottom-top, width), np.uint8)
+    pad = max(3, round(glyph_height * .12))
+    for points in selected:
+        lo = np.floor(points.min(0)).astype(int)-pad
+        hi = np.ceil(points.max(0)).astype(int)+pad+1
+        allowed[max(0,lo[1]-top):min(bottom-top,hi[1]-top), max(0,lo[0]):min(width,hi[0])] = 1
+    from .rectangle_frame import red_ink
+    remaining = red_ink(interior[top:bottom], 25)
+    remaining[allowed > 0] = 0
+    remaining[:, :2] = remaining[:, -2:] = 0
+    _, _, stats, _ = cv2.connectedComponentsWithStats(remaining, 8)
+    if any(s[3] >= glyph_height * .20 and s[4] >= max(12, glyph_height**2 * .02)
+           for s in stats[1:]):
+        return None
+    return {'label': labels[0], 'method': 'detected_caption_and_empty_ink'}
 
 
 def _canonical(interior):
@@ -126,6 +172,10 @@ def prepare_frame_layout(source, directory, index, prefix, provider, mode, reade
             item.update(read_mode="line", rectangle_row_index=row_index)
             rows.append({"crop_box": [left, top + a, right, top + b], "coordinate_space": "oriented",
                          "path": str(path)})
+            if len(spans) >= 3:
+                field = _empty_form_field(interior, (a, b), detected, scaled_height)
+                if field:
+                    rows[-1]['empty_form_field'] = field
             urls.append(item["image_url"])
             jobs.append((item, path))
     metadata = {

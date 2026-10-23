@@ -10,7 +10,9 @@ from PIL import Image
 from ...domain.ocr import TextObservation
 from ...domain.parsing import normalize_text
 from ...providers.text import TextRecognizer, current_text_recognizer
-from .requirement_image import requirement_crop_box, clean_and_deskew_requirement
+from .requirement_image import (
+    requirement_crop_box, clean_and_deskew_requirement, extend_clean_requirement,
+)
 
 
 def _recover_signature_requirement(
@@ -40,7 +42,18 @@ def _recover_signature_requirement(
     with Image.open(source) as image, tempfile.TemporaryDirectory(
         prefix="signature-line-"
     ) as temp_dir:
+        width, height = image.size
         box, boundary = requirement_crop_box(image.size, anchor, page_rows)
+        search_path = Path(temp_dir) / "signature-requirement-search.png"
+        try:
+            box, extent = extend_clean_requirement(
+                image, anchor, page_rows, box, search_path,
+                recognizer=recognizer, backend=page_backend,
+            )
+            if extent["status"] == "extended":
+                boundary = "color_clean_detected_line"
+        except Exception as exc:
+            extent = {"status": "failed", "error": str(exc)}
         crop = image.crop(box)
         path = Path(temp_dir) / "signature-requirement.jpg"
         color_clean, geometry = clean_and_deskew_requirement(crop)
@@ -62,8 +75,12 @@ def _recover_signature_requirement(
                 "ocr_text": "",
                 "crop_box": list(box),
                 "crop_boundary": boundary,
+                "extent_recovery": extent,
                 **geometry,
             }
+            if search_path.is_file():
+                copyfile(search_path, directory / search_path.name)
+                artifact["search_url"] = f"{prefix}/{search_path.name}"
             artifacts.append(artifact)
         try:
             line_rows = recognizer.recognize_line(path, backend=page_backend)
@@ -88,4 +105,8 @@ def _recover_signature_requirement(
         "value": candidate,
         "confidence": round(float(best.confidence), 3),
         "raw": raw,
+        "footer_row": TextObservation(
+            raw, float(best.confidence), box[0] / width, box[1] / height,
+            (box[2] - box[0]) / width, (box[3] - box[1]) / height,
+        ).to_dict(),
     }

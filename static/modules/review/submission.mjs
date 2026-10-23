@@ -7,12 +7,14 @@ export function collectReviewPayload(form, reviewStatus, finalResult, revision, 
   const productRows = [...queryAll('.product-cell-input')].map(input => ({
     row: Number(input.dataset.productRow), column: input.dataset.productColumn, value: input.value
   }));
-  const saveGroundTruth = form.save_ground_truth.checked;
-  const truthValue = form.truth_seal_should_match.value;
+  const saveGroundTruth = form.save_ground_truth?.checked || false;
+  const truthValue = form.truth_seal_should_match?.value || '';
   const payload = {
     fields, product_rows: productRows, actual_date: form.actual_date.value,
-    seal_text: form.seal_text.value, error_type: form.error_type.value,
-    human_note: form.human_note.value, review_status: reviewStatus,
+    seal_text: form.seal_text.value,
+    ...(form.error_type ? {error_type: form.error_type.value} : {}),
+    ...(form.human_note ? {human_note: form.human_note.value} : {}),
+    review_status: reviewStatus,
     final_result: finalResult, action: reviewStatus, save_ground_truth: saveGroundTruth,
     truth_seal_should_match: truthValue === '' ? null : truthValue === 'true',
     review_revision: revision,

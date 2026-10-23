@@ -1,11 +1,12 @@
 /** Review form rendering and form-local event binding. */
 import {filenameParts, statusPill, escapeHtml} from '../core/ui.mjs';
 import {dateAuditText, sealEvidenceMarkup} from './review_provider_evidence.mjs';
+import {syncSampleDate} from './sample_annotations.mjs';
 
 export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor,
   renderProductTable, setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation,
   applyReviewMode, focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-  renderArtifacts, canLeaveReview, retryOne, submitReview, setReviewDirty, syncReviewReadiness, renderStandard}) {
+  renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard}) {
   const {$, $$} = ui;
   return function renderReview(item, id, mode) {
     $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
@@ -55,6 +56,14 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     setupSignatureConfirmation(item, content);
     $('[name=human_note]', content).value = item.human_note || '';
     $('[name=error_type]', content).value = item.error_type || '';
+    reviewState.sampleAnnotationRevision = null;
+    if (reviewState.sampleView) {
+      $('[name=truth_date_present]', content).addEventListener('change', () => syncSampleDate(ui, content));
+      $('[data-save-sample]', content).addEventListener('click', saveSampleAnnotations);
+    } else {
+      $('[data-sample-annotations]', content)?.remove?.();
+      $('[data-save-sample]', content)?.remove?.();
+    }
     applyReviewMode(mode, id, content);
     reviewState.reviewImages = ReceiptWorkbench.imageSources(item);
     $$('[data-image-source-group]', content).forEach(button => {

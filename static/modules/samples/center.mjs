@@ -1,15 +1,16 @@
 import {escapeHtml} from '../core/ui.mjs';
 import {createSampleStatistics} from './statistics.mjs';
-import {createCompanyMarks, companyRowMarkup} from './company_marks.mjs';
+import {createCompanyMarks, companyRowMarkup, requirementRowMarkup} from './company_marks.mjs';
 import {createSampleLibrary} from './library.mjs';
 
 const PAGE_SIZE = 6;
 export const sampleImageUrl = (name, thumbnail = false) =>
   `/api/samples/image/${encodeURIComponent(name)}${thumbnail ? '?thumbnail=1' : ''}`;
 
-export function sampleScope(items, {company = '', search = '', status = ''} = {}) {
+export function sampleScope(items, {company = '', search = '', status = '', requirement = null} = {}) {
   const query = search.trim().toLocaleLowerCase();
   return items.filter(item => (!company || item.company === company)
+    && (requirement === null || (item.requirement_key || '') === requirement)
     && (!query || item.filename.toLocaleLowerCase().includes(query)) && (!status || item.status === status));
 }
 
@@ -39,6 +40,8 @@ export function sampleCard(item, selected) {
 export function createSampleCenter({environment, ui, services, flushSettings, openResult, openOriginal}) {
   const {$, $$, toast} = ui;
   let items = [], companies = [], company = '', status = '', page = 1;
+  let requirement = null, requirementGroups = {}, expanded = new Set();
+  let classificationRequirement = null;
   let selected = new Set(), loadPromise = null, running = false, loaded = false, lastRender = '';
   let historyLoading = false, historyMarkup = '';
   let companyMarkup = '';
@@ -51,7 +54,9 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       selected.clear();
       await load(true);
       if (importedCompany) {
-        company = importedCompany; status = ''; page = 1;
+        company = importedCompany; requirement = company === '未分类' ? null : ''; status = ''; page = 1;
+        classificationRequirement = null;
+        if (company !== '未分类') expanded.add(company);
         $('#sample-search').value = '';
         $('#sample-company-search').value = '';
         $('#sample-company-mark-filter [data-company-mark-filter=""]').click();
@@ -59,26 +64,41 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       renderCompanies(); render();
     },
   });
-  const scope = () => sampleScope(items, {company, search: $('#sample-search').value, status});
+  const scope = () => sampleScope(items, {company, requirement, search: $('#sample-search').value, status});
   const companyItems = () => sampleScope(items, {company});
+  const groupItems = () => sampleScope(items, {company, requirement});
   const visible = () => scope().slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   function renderCompanies() {
     const query = $('#sample-company-search').value.trim().toLocaleLowerCase();
-    const rows = companies.filter(row => row.name.toLocaleLowerCase().includes(query) && companyMarks.matches(row.name));
-    const markup = [{name: '', count: items.length}, ...rows].map(row => {
+    const rows = companies.filter(row => row.name !== '未分类' && row.name.toLocaleLowerCase().includes(query) && companyMarks.matches(row.name));
+    const unclassified = {name: '未分类', count: items.filter(item => item.company === '未分类').length};
+    const markup = [{name: '', count: items.length}, unclassified, ...rows].map((row, index) => {
       const progress = sampleCompanyProgress(sampleScope(items, {company: row.name}));
-      return companyRowMarkup(row, progress, company === row.name, companyMarks.seal(row.name));
+      const groups = requirementGroups[row.name] || [];
+      const parent = companyRowMarkup(row, progress, company === row.name,
+        {matched: groups.filter(group => group.key && group.has_standard).length}, expanded.has(row.name));
+      const heading = index === 1 ? '<div class="sample-company-directory-heading"><span>公司目录</span><span>绿点 · 已测完</span></div>' : '';
+      if (!row.name || row.name === '未分类' || !expanded.has(row.name)) return parent + heading;
+      const ungrouped = groups.find(group => !group.key) || {key: '', name: '未归类', count: 0};
+      const children = [ungrouped, ...groups.filter(group => group.key)];
+      return parent + `<div class="sample-requirement-groups" aria-label="${escapeHtml(row.name)}的签章要求">${children.map(group =>
+        requirementRowMarkup(row.name, group, company === row.name && requirement === group.key,
+            sampleCompanyProgress(sampleScope(items, {company: row.name, requirement: group.key}))))
+        .join('')}</div>`;
     }).join('') + (!rows.length ? '<p class="empty-state">没有符合条件的公司</p>' : '');
     if (markup !== companyMarkup) {
       const list = $('#sample-company-list'), scrollTop = list.scrollTop;
       const focused = environment.document.activeElement;
       const focusedCompany = list.contains(focused) ? focused.dataset.company : undefined;
+      const focusedRequirement = focused?.dataset?.requirement;
       list.innerHTML = markup; companyMarkup = markup;
-      if (focusedCompany !== undefined) $$('#sample-company-list [data-company]').find(button => button.dataset.company === focusedCompany)?.focus({preventScroll: true});
+      if (focusedCompany !== undefined) $$('#sample-company-list [data-company]').find(button => button.dataset.company === focusedCompany
+        && button.dataset.requirement === focusedRequirement)?.focus({preventScroll: true});
       list.scrollTop = scrollTop;
     }
-    $('#sample-company-count').textContent = rows.length === companies.length ? companies.length : `${rows.length} / ${companies.length}`;
+    const shown = rows.length + (unclassified.count ? 1 : 0);
+    $('#sample-company-count').textContent = `${shown === companies.length ? companies.length : `${shown} / ${companies.length}`} 家`;
     companyMarks.renderHeader(company);
   }
 
@@ -90,6 +110,12 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-run-selected').disabled = running || !selected.size;
     $('#sample-delete-selected').disabled = running || !selected.size;
     $('#sample-import-open').disabled = running;
+    const classificationItems = selected.size ? items.filter(item => selected.has(item.filename))
+      : sampleScope(items, {company, requirement: classificationRequirement});
+    $('#sample-classify').disabled = running || !classificationItems.some(item => item.status === '已完成' && item.result_id);
+    const classificationLabel = selected.size ? '所选' : !company ? '全部'
+      : classificationRequirement === null ? '本公司全部' : '当前签章要求下的';
+    $('#sample-classify').title = `按最新结果归类${classificationLabel}已完成样单，可更正已有分组`;
     $('#sample-clear-selection').textContent = `已选 ${selected.size} 张${selected.size ? ' · 清空' : ''}`;
     $('#sample-clear-selection').disabled = !selected.size;
     $('#sample-run-company').disabled = running || !companyItems().some(item => item.status !== '测试中');
@@ -107,8 +133,10 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     const rows = scope(), pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     page = Math.min(page, pages);
     $('#sample-company-title').textContent = company || '全部样单';
-    $('#sample-library-summary').textContent = `${companyItems().length} 张样单 · ${sampleCompanyProgress(companyItems()).label} · 使用当前配置`;
+    const groupLabel = requirement === null ? '' : requirementGroups[company]?.find(group => group.key === requirement)?.name || '未归类';
+    $('#sample-library-summary').textContent = `${groupLabel ? `签章要求：${groupLabel} · ` : ''}${groupItems().length} 张样单 · ${sampleCompanyProgress(groupItems()).label} · 使用当前配置`;
     $('#sample-run-company').textContent = company ? '▶ 运行本公司全部' : '▶ 运行全部样单';
+    $('#sample-classify').hidden = false;
     const markup = visible().map(item => sampleCard(item, selected.has(item.filename))).join('') ||
       `<div class="empty-state">${items.length ? '当前条件下没有样单，请调整搜索或筛选。' : '暂无样单，点击右上角「导入样单」添加图片。'}</div>`;
     // Polling must not replace focused controls just because selection changed.
@@ -136,8 +164,12 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     try {
       const data = await services.samples.list();
       items = data.items; companies = data.companies;
+      requirementGroups = data.requirement_groups || {};
       companyMarks.update(data);
-      if (company && !companies.some(row => row.name === company)) company = '';
+      if (company && company !== '未分类' && !companies.some(row => row.name === company)) { company = ''; requirement = null; classificationRequirement = null; }
+      if (requirement && !requirementGroups[company]?.some(group => group.key === requirement)) {
+        requirement = ''; classificationRequirement = '';
+      }
       selected = new Set([...selected].filter(name => items.some(item => item.filename === name && item.status !== '测试中')));
       renderCompanies();
       loaded = true;
@@ -148,6 +180,28 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     } catch (error) {
       $('#sample-feedback').textContent = `加载失败：${error.message}，正在等待恢复连接。`;
       if (!loaded) $('#sample-grid').innerHTML = '<div class="empty-state">样单暂时无法加载</div>';
+    }
+  }
+
+  async function classify() {
+    if (running) return;
+    running = true; syncSelection();
+    $('#sample-classify').textContent = '归类中…';
+    const targetCompany = company;
+    const classificationScope = {requirement: selected.size ? null : classificationRequirement,
+      ...(selected.size ? {filenames: [...selected]} : {})};
+    try {
+      const data = !targetCompany || targetCompany === '未分类'
+        ? await services.samples.classify({company: targetCompany, ...classificationScope})
+        : await services.samples.classifyRequirements(targetCompany, classificationScope);
+      selected.clear();
+      await load(true);
+      toast(`已归类 ${data.classified.length} 张 · 检查 ${data.processed ?? data.classified.length} 张已完成样单 · 新建 ${data.created_companies?.length || 0} 家公司、${data.created_groups?.length || 0} 个签章要求${data.skipped ? ` · 跳过 ${data.skipped} 张未完成样单` : ''}`, 'success');
+    } catch (error) { toast(error.message, 'danger'); }
+    finally {
+      running = false;
+      $('#sample-classify').textContent = '自动归类';
+      syncSelection();
     }
   }
 
@@ -205,7 +259,18 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-company-list').addEventListener('click', event => {
       const button = event.target.closest('[data-company]');
       if (!button) return;
-      company = button.dataset.company; page = 1; selected.clear();
+      const nextCompany = button.dataset.company;
+      const isGroup = button.dataset.requirement !== undefined;
+      if (isGroup) {
+        requirement = button.dataset.requirement;
+        classificationRequirement = requirement;
+      } else if (nextCompany && nextCompany !== '未分类') {
+        if (expanded.has(nextCompany)) expanded.delete(nextCompany);
+        else expanded.add(nextCompany);
+        requirement = '';
+        classificationRequirement = null;
+      } else { requirement = null; classificationRequirement = null; }
+      company = nextCompany; page = 1; selected.clear();
       renderCompanies(); renderFromTop();
     });
     $('#sample-search').addEventListener('input', () => { page = 1; renderFromTop(); });
@@ -240,6 +305,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     });
     $('#sample-run-selected').addEventListener('click', () => run([...selected]));
     $('#sample-run-company').addEventListener('click', () => run(companyItems().map(item => item.filename)));
+    $('#sample-classify').addEventListener('click', classify);
     $('#sample-history-open').addEventListener('click', showHistory);
     $('#sample-statistics-open').addEventListener('click', () => statistics.show({company, companies}));
     $('#sample-history-refresh').addEventListener('click', refreshHistory);

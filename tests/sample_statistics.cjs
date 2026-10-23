@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {summarizeCells, filterStatistics, statisticsCell} = require('../static/modules/samples/statistics.mjs');
 const {createApiClients} = require('../static/modules/core/api.mjs');
+const {createSampleStatistics} = require('../static/modules/samples/statistics.mjs');
 
 const cell = (state, decision = '') => ({state, decision, value:'章'});
 const row = (company, template, ocr, local) => ({company, date:cell('正确'),
@@ -42,4 +43,48 @@ test('batch scope uses sample endpoint and URL encoding', async () => {
   await clients.samples.statistics();
   await clients.samples.statistics('batch & 2');
   assert.deepEqual(urls, ['/api/samples/statistics','/api/samples/statistics?task_id=batch+%26+2']);
+});
+
+test('Excel export uses current scope, downloads XLSX and recovers from failure', async () => {
+  const nodes = new Map(), urls = [], downloads = [], notices = [];
+  const $ = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, {
+      value:'', innerHTML:'', textContent:'', open:false, handlers:{}, dataset:{},
+      classList:{toggle() {}}, setAttribute() {},
+      addEventListener(type, fn) { this.handlers[type] = fn; },
+      showModal() { this.open = true; },
+    });
+    return nodes.get(selector);
+  };
+  const dateTab = $('[date-tab]'); dateTab.dataset.statTab = 'date';
+  let failed = false;
+  const environment = {
+    document:{activeElement:null, body:{appendChild() {}},createElement:()=>({
+      click() { downloads.push(this.download); },remove() {},
+    })},
+    window:{addEventListener() {},setTimeout(fn) { fn(); },
+      URL:{createObjectURL:()=> 'blob:test',revokeObjectURL() {}},
+      fetch:async url=>{ urls.push(url); return failed
+        ? {ok:false,json:async()=>({error:'导出失败示例'})}
+        : {ok:true,blob:async()=>new Blob(['xlsx'])}; },
+    },
+  };
+  const services = createApiClients(async()=>({items:[],columns:[],batches:[]}));
+  const stats = createSampleStatistics({environment,ui:{$,$$:selector=>selector === '[data-stat-tab]' ? [dateTab] : [],
+    toast:message=>notices.push(message)},services});
+  stats.initialize();
+  await stats.show({company:'客户 & 甲',companies:[]});
+  dateTab.handlers.click();
+  await $('#sample-statistics-export').handlers.click();
+  const url = new URL(urls[0], 'http://localhost');
+  assert.equal(url.pathname, '/api/samples/statistics/export');
+  assert.equal(url.searchParams.get('company'), '客户 & 甲');
+  assert.equal(url.searchParams.get('tab'), 'date');
+  assert.equal(downloads[0], '样单统计-客户 & 甲-日期结果.xlsx');
+  assert.equal($('#sample-statistics-export').disabled, false);
+  failed = true;
+  await $('#sample-statistics-export').handlers.click();
+  assert.equal(notices.at(-1), '导出失败示例');
+  assert.equal($('#sample-statistics-export').textContent, '导出 Excel');
+  assert.equal($('#sample-statistics-export').disabled, false);
 });

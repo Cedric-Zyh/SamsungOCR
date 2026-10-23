@@ -47,13 +47,59 @@ def _inner_rows(image, rho, axes):
         if right-left < .8*(bottom-top):
             continue
         pad = max(5, round((bottom-top)*.08))
-        rows.append({'box': [left, top, right, bottom], 'read_box': [
+        rows.append({'box': [left, top, right, bottom], 'component_boxes': group, 'read_box': [
             max(0, left-pad), max(0, top-pad), min(image.shape[1], right+pad),
             min(image.shape[0], bottom+pad)]})
     return sorted(rows, key=lambda row: row['box'][1])
 
 
-def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower=False):
+def _rows_overlap(left, right):
+    """Reject shared component bounds, not empty corners of whole-row boxes.
+
+    Components come from the same connected-ink grouping that located the
+    rows. Missing component evidence retains the conservative row-box check.
+    A stroke joining two rows is grouped before this check, rather than
+    being assigned independently to both rows.
+    """
+    def intersects(a, b):
+        return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+
+    if not intersects(left['box'], right['box']):
+        return False
+    left_parts, right_parts = left.get('component_boxes'), right.get('component_boxes')
+    if not left_parts or not right_parts:
+        return True
+    return any(intersects(a, b) for a in left_parts for b in right_parts)
+
+
+def _continuous_arc_seam(group, cx, cy):
+    """Find a single name arc from ink gaps, including its low side glyphs.
+
+    An upright continuous name has one dominant blank at the bottom, with
+    ordinary character gaps elsewhere. Separate lower text breaks that blank
+    and must retain the two-arc route. No OCR or required wording is used.
+    """
+    if len(group) < 6:
+        return None
+    ys = np.concatenate([part[0] for part in group])
+    xs = np.concatenate([part[1] for part in group])
+    angles = np.mod(np.arctan2(ys - cy, xs - cx), 2 * np.pi)
+    bins = np.unique((angles * 720 / (2 * np.pi)).astype(int) % 720)
+    if len(bins) < 3:
+        return None
+    gaps = np.diff(np.r_[bins, bins[0] + 720]) / 2
+    index = int(np.argmax(gaps))
+    largest = float(gaps[index])
+    second = float(np.partition(gaps, -2)[-2])
+    middle = float((bins[index] / 2 + largest / 2) % 360)
+    if not (largest >= 40 and largest >= 4 * second and second <= 15
+            and 45 <= middle <= 135):
+        return None
+    return np.deg2rad(middle)
+
+
+def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower=False,
+              allow_continuous_name=False):
     (cx, cy), (a, b), _ = guide.annulus[0][2]
     ink = ((255-masked[:, :, 1].astype(float)) > 35) & (rho < .93)
     _, labels, stats, centers = cv2.connectedComponentsWithStats(
@@ -68,6 +114,12 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
             continue
         key = 'lower' if centers[i, 1] > cy+min(a, b)*.15 else 'upper'
         parts[key].append((ys, xs))
+    seam = None
+    if allow_continuous_name:
+        combined = parts['upper'] + parts['lower']
+        seam = _continuous_arc_seam(combined, cx, cy)
+        if seam is not None:
+            parts = {'company': combined}
     points = guide.points
     angles = np.mod(np.arctan2(points[:, 1]-cy, points[:, 0]-cx), 2*np.pi)
     order = np.argsort(angles)
@@ -88,16 +140,22 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
         ys = np.concatenate([p[0] for p in group])
         xs = np.concatenate([p[1] for p in group])
         theta = np.arctan2(ys-cy, xs-cx)
-        theta = (np.mod(theta-np.pi/2, 2*np.pi)+np.pi/2 if key == 'upper'
-                 else np.mod(theta, 2*np.pi))
-        lo, hi = float(np.quantile(theta, .002)-.035), float(np.quantile(theta, .998)+.035)
-        # This branch represents separated upper/lower arcs, not a continuous name.
+        if key == 'company':
+            theta = np.mod(theta - seam, 2 * np.pi) + seam
+            # Preserve every observed end stroke; the margin lies inside
+            # the measured blank rather than cutting a glyph by its height.
+            lo, hi = float(theta.min() - .035), float(theta.max() + .035)
+        else:
+            theta = (np.mod(theta-np.pi/2, 2*np.pi)+np.pi/2 if key == 'upper'
+                     else np.mod(theta, 2*np.pi))
+            lo, hi = float(np.quantile(theta, .002)-.035), float(np.quantile(theta, .998)+.035)
         span = np.rad2deg(hi-lo)
-        if not (100 <= span <= 240 if key == 'upper' else 45 <= span <= 160):
+        minimum, maximum = (45, 160) if key == 'lower' else (100, 300 if key == 'company' else 240)
+        if not minimum <= span <= maximum:
             return None
-        start, end = (lo, hi) if key == 'upper' else (hi, lo)
-        inner = max(.38, float(np.quantile(rho[ys, xs], .005))-.035)
-        outer = min(.96, float(np.quantile(rho[ys, xs], .995))+.035)
+        start, end = (hi, lo) if key == 'lower' else (lo, hi)
+        inner = max(.38, float(np.quantile(rho[ys, xs], 0 if key == 'company' else .005))-.035)
+        outer = min(.96, float(np.quantile(rho[ys, xs], 1 if key == 'company' else .995))+.035)
         if outer-inner < .12:
             return None
         theta = np.mod(np.linspace(start, end, 2400), 2*np.pi)
@@ -105,7 +163,7 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
         distance = np.r_[0, np.cumsum(np.hypot(np.diff(bx), np.diff(by)))]
         samples = np.linspace(0, distance[-1], round(distance[-1]))
         bx, by = np.interp(samples, distance, bx), np.interp(samples, distance, by)
-        radial = np.linspace(outer, inner, 200) if key == 'upper' else np.linspace(inner, outer, 200)
+        radial = np.linspace(inner, outer, 200) if key == 'lower' else np.linspace(outer, inner, 200)
         maps[key] = {
             'x': (cx+(bx-cx)*radial[:, None]).astype('float32'),
             'y': (cy+(by-cy)*radial[:, None]).astype('float32'),
@@ -115,7 +173,7 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
     return maps
 
 
-def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
+def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, color='red', ring_guide=None):
     """Separate contact layouts, retaining the established multi-row route.
 
     Prefer complete detector rows over fragmented component groups. Keep the
@@ -127,14 +185,22 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
         return None
     if reader is not None:
         from .station_layout import prepare_station_layout
-        station_plan = prepare_station_layout(image, directory, index, reader=reader, provider=provider)
+        station_plan = prepare_station_layout(image, directory, index, reader=reader,
+                                              provider=provider, color=color)
         if station_plan is not None:
             return station_plan
-    guide = trace_ellipse_border(source, color='red')
-    measured = guide is not None
-    if guide is None and reader is not None:
+    guide = None
+    if ring_guide is not None and ring_guide.source_shape == image.shape[:2]:
         from .detected_layout import fitted_guide
-        guide = fitted_guide(image)
+        guide = fitted_guide(image, color=color, geometry=ring_guide.annulus)
+    if guide is None:
+        guide = trace_ellipse_border(source, color=color)
+    if guide is None:
+        from .detected_layout import fitted_guide
+        # The same bounded fit is also usable by the component-row route.
+        # Broken table-overlapped rims should not discard otherwise separate
+        # rows; fitted_guide still enforces its size and residual limits.
+        guide = fitted_guide(image, color=color)
     if guide is None:
         return None
     (cx, cy), (a, b), angle = guide.annulus[0][2]
@@ -144,25 +210,26 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
     rho = np.hypot((dx*np.cos(t)+dy*np.sin(t))/(a/2),
                    (-dx*np.sin(t)+dy*np.cos(t))/(b/2))
     rows = _inner_rows(image, rho, (a, b))
-    if 2 <= len(rows) <= 6 and reader is not None:
+    if reader is not None:
         from .detected_layout import prepare_detected_layout
         detected = prepare_detected_layout(
-            source, directory, index, image, guide, rho, reader=reader, provider=provider,
+            source, directory, index, image, guide, rho, reader=reader,
+            provider=provider, color=color,
         )
         if detected is not None:
             return detected
-    if not measured:
-        return None
     if not 3 <= len(rows) <= 6:
         return None
-    # Ambiguous overlapping rows must not erase one another or ring glyphs.
-    if any(left['read_box'][3] > right['read_box'][1]
-           for left, right in zip(rows, rows[1:])):
+    # Tilted rows can have intersecting outer boxes even though their actual
+    # components sit in different columns. Check every pair, including rows
+    # separated by a short number row, before allowing the masking operation.
+    if any(_rows_overlap(left, right)
+           for i, left in enumerate(rows) for right in rows[i+1:]):
         return None
     masked, overlay = image.copy(), image.copy()
     mask = np.zeros(image.shape[:2], np.uint8)
     for row in rows:
-        l, top, r, bottom = row['read_box']
+        l, top, r, bottom = row['box']
         if np.max(rho[top:bottom, l:r]) >= .85:
             return None
         mask[top:bottom, l:r] = np.any(image[top:bottom, l:r] < 255, axis=2).astype('uint8')*255
@@ -190,7 +257,8 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None):
         plan['rows'].append({**row, 'name': name})
         plan['jobs'].append((name, path, 'layout_inner', f'内部文字 {i+1}'))
     blue, green, red = (c.astype(float) for c in cv2.split(masked))
-    gray = (255-np.clip((red-np.maximum(blue, green))*255/160, 0, 255)).astype('uint8')
+    chroma = red-np.maximum(blue, green) if color == 'red' else blue-np.maximum(red, green)
+    gray = (255-np.clip(chroma*255/160, 0, 255)).astype('uint8')
     for key, mapping in maps.items():
         out = cv2.remap(gray, mapping['x'], mapping['y'], cv2.INTER_CUBIC,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=255)

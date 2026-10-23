@@ -25,6 +25,7 @@ def test_retry_saves_exact_input_even_when_original_value_is_kept(tmp_path, monk
         return [TextObservation("签章要求：" + value, .99, 0, 0, 1, 1)]
 
     monkeypatch.setattr(paddle_ocr, "recognize_line", recognize)
+    monkeypatch.setattr(paddle_ocr, "detect_text_boxes", lambda *a, **kw: [])
     artifacts = []
     result = _recover_signature_requirement(
         source, rows, value, "paddle_v6", artifact_dir=tmp_path / "artifacts",

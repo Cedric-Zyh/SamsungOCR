@@ -19,7 +19,7 @@ def finalize_multi_zone(artifact):
     if not artifact.get('multi_zone_layout'):
         return []
     rows = artifact.get('reads', [])
-    centers, stations, numbers, names = [], [], [], []
+    centers, stations, numbers, names, departments = [], [], [], [], []
     phones, observed_roles = [], []
     unknown_lower = False
     station_layout = artifact['multi_zone_layout'].get('method') == 'ellipse_station_rows'
@@ -32,7 +32,9 @@ def finalize_multi_zone(artifact):
         role = '待核对文字'
         row['matching'] = False
         if channel == 'ring':
-            role = '上弧名称'
+            role = ('环形公司名称' if artifact['multi_zone_layout'].get('method') in {
+                        'ellipse_department_rows', 'ellipse_continuous_name'}
+                    else '上弧名称')
             if trusted:
                 names.append(text)
         elif channel == 'layout_lower':
@@ -59,6 +61,10 @@ def finalize_multi_zone(artifact):
             role = '站点编号'
             stations.append(text)
             artifact.update(station_text=row['text'], station_url=row['image_url'])
+        elif trusted and inner_role(text) == 'department':
+            role = '章内部门'
+            departments.append(text)
+            artifact.update(department_text=row['text'], department_url=row['image_url'])
         elif trusted and (text.endswith('章') or text in {'业务受理', '业务受理章'}):
             role = '章型文字'
             centers.append(text)
@@ -71,7 +77,32 @@ def finalize_multi_zone(artifact):
     # Number remains separately visible; phone never enters the company name.
     matching = []
     layout = artifact['multi_zone_layout']
-    if layout.get('method') == 'ellipse_detected_rows':
+    if layout.get('method') == 'ellipse_department_rows':
+        detected_departments = [row.get('detected_text') for row in layout.get('rows', [])
+                                if row.get('role') == 'department'
+                                and float(row.get('detected_confidence') or 0) >= .80]
+        complete = (
+            observed_roles == ['department', 'type']
+            and layout.get('expected_inner_roles') == observed_roles
+            and detected_departments == departments
+            and len(names) == len(departments) == len(centers) == 1
+            and not phones and not stations and not numbers and not unknown_lower
+        )
+        if complete:
+            matching.append(names[0]+departments[0]+centers[0])
+        artifact['combined_text'] = matching[0] if matching else ''
+    elif layout.get('method') == 'ellipse_continuous_name':
+        complete = (
+            observed_roles == layout.get('expected_inner_roles') == ['type', 'number']
+            and set(layout.get('arcs', {})) == {'company'}
+            and len(names) == len(centers) == len(numbers) == 1
+            and not phones and not stations and not departments and not unknown_lower
+            and not any(row.get('channel') == 'layout_lower' for row in rows)
+        )
+        if complete:
+            matching.append(names[0] + centers[0] + numbers[0])
+        artifact['combined_text'] = matching[0] if matching else ''
+    elif layout.get('method') == 'ellipse_detected_rows':
         expected = layout.get('expected_inner_roles') or []
         lower_expected = 'lower' in layout.get('arcs', {})
         complete = (

@@ -29,7 +29,7 @@ def test_frontend_request_selection_confirmation_and_pagination_behaviors():
 
 def test_review_readiness_keyboard_and_image_interactions():
     run_node("--test", "tests/review_ui_behaviors.cjs", "tests/review_modal_navigation.cjs",
-             "tests/artifact_images.cjs", "tests/requirement_artifacts_ui.cjs")
+             "tests/artifact_images.cjs", "tests/requirement_artifacts_ui.cjs", "tests/sample_annotations_ui.cjs")
 
 
 def test_standard_seal_selection_registration_replacement_and_review_guards():

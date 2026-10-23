@@ -426,6 +426,14 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
             oriented = destination
             decision["oriented_path"] = str(destination)
 
+        # Retain the actual winning OCR pixels before the scratch canvas is
+        # removed. A later cleaned crop must not discard a more complete read.
+        if best["focus_box"]:
+            verified_row = destination.with_name(destination.stem + "-verified-type-row.png")
+            with Image.open(best["path"]) as image:
+                image.convert("RGB").crop(tuple(round(v) for v in best["focus_box"])).save(verified_row)
+            decision["type_band_path"] = str(verified_row)
+
     decision.update(
         applied_rotation=coarse_angle,
         coarse_rotation=coarse_angle,
@@ -443,6 +451,8 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
     )
     if best["focus_box"]:
         decision["oriented_type_row_box"] = best["focus_box"]
+        # Reading context and the exact ink mask serve different purposes.
+        decision["oriented_type_row_read_box"] = best["focus_box"]
         decision["oriented_type_row_exact_box"] = best.get("exact_box") or _oriented_type_row_exact_box(
             best["boxes"], best["decision"], best["fine_matrix"],
             best["final_width"], best["final_height"],

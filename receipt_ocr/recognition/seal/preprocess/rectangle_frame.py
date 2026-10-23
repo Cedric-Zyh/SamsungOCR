@@ -93,6 +93,29 @@ def measure_frame(image):
     return rotated, crop, angle
 
 
+def _ruled_cell_spans(mask):
+    """Separate a measured grid by its rules, without treating rules as text."""
+    height, width = mask.shape
+    joined = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                             np.ones((1, max(3, round(width * .025))), np.uint8))
+    rules = cv2.morphologyEx(joined, cv2.MORPH_OPEN,
+                            np.ones((1, max(15, round(width * .65))), np.uint8))
+    bands = [(a, b) for a, b in _runs(rules.mean(1) > .50)
+             if a > height * .05 and b < height * .95 and b-a < height * .06]
+    # One incidental long stroke is insufficient evidence of a grid.
+    if len(bands) < 2:
+        return []
+    bounds = [(0, 0), *bands, (height, height)]
+    margin = max(1, round(height * .003))
+    spans = [(left[1] + (margin if left[1] else 0),
+              right[0] - (margin if right[0] < height else 0))
+             for left, right in zip(bounds, bounds[1:])]
+    if any(b-a < max(10, height * .09) for a, b in spans):
+        return []
+    return [(int(a), int(b)) for a, b in spans
+            if mask[a:b].sum() > width * max(2, height * .002)]
+
+
 def row_spans(interior):
     """Find whitespace between rows, retaining the entire interior width."""
     threshold = geometry_threshold(interior)
@@ -110,6 +133,9 @@ def row_spans(interior):
         return list(zip(bounds, bounds[1:]))
     mask = red_ink(interior, 8)
     height, width = mask.shape
+    cells = _ruled_cell_spans(mask)
+    if cells:
+        return cells
     horizontal = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
                                   np.ones((1, max(15, int(width * .65))), np.uint8))
     # Remove rules only from the measurement, never from recognition pixels.

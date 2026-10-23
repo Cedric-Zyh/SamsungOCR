@@ -3,17 +3,25 @@ from contextlib import nullcontext
 from io import BytesIO
 import json
 from pathlib import Path
+import re
+import shutil
+import tempfile
 import uuid
 import warnings
 
 from PIL import Image, UnidentifiedImageError
 
 from receipt_ocr.evaluation import load_ground_truth
-from receipt_ocr.persistence.database import now_iso
 
 
 class LibraryConflict(ValueError):
     pass
+
+
+def sample_number(name):
+    """Ignore image extensions and legacy numeric copy suffixes for deduplication."""
+    stem = Path(name).stem.strip().casefold()
+    return re.sub(r'^(\d+)\s*\(\d+\)$', r'\1', stem)
 
 
 class SampleLibrary:
@@ -38,7 +46,8 @@ class SampleLibrary:
                    and Path(name).suffix.lower() in self.ctx.ALLOWED_EXTENSIONS}
         with (nullcontext(connection) if connection is not None else self.database.connect()) as con:
             for row in con.execute('SELECT * FROM sample_library'):
-                if row['storage_name'] and (self.directory / row['storage_name']).is_file():
+                if ((row['storage_name'] and (self.directory / row['storage_name']).is_file())
+                        or (not row['storage_name'] and row['filename'] in entries)):
                     entries[row['filename']] = json.loads(row['entry_json'])
                 if row['deleted_at'] and not include_deleted:
                     entries.pop(row['filename'], None)
@@ -85,19 +94,21 @@ class SampleLibrary:
                     Image.DecompressionBombWarning) as exc:
                 raise ValueError(f'{name}：无法读取图片，请选择完整的 JPG、PNG、BMP 或 WebP 图片') from exc
             prepared.append((name, data))
-        created, imported = [], []
+        created, imported, skipped = [], [], []
         try:
             with self.database.connect() as con:
                 con.execute('BEGIN IMMEDIATE')
                 reserved = set(self.catalog(include_deleted=True, connection=con))
                 reserved.update(row[0] for row in con.execute('SELECT filename FROM sample_library'))
                 reserved.update(row[0] for row in con.execute('SELECT DISTINCT filename FROM recognition_jobs'))
+                numbers = {sample_number(name) for name in reserved}
                 for original, data in prepared:
-                    name, index = original, 2
-                    while name in reserved:
-                        name = f'{Path(original).stem} ({index}){Path(original).suffix}'
-                        index += 1
-                    reserved.add(name)
+                    number = sample_number(original)
+                    if number in numbers:
+                        skipped.append({'filename': original, 'number': number})
+                        continue
+                    name = original
+                    numbers.add(number)
                     storage_name = uuid.uuid4().hex + Path(name).suffix.lower()
                     target = self.directory / storage_name
                     created.append(target)
@@ -110,24 +121,74 @@ class SampleLibrary:
             for target in created:
                 target.unlink(missing_ok=True)
             raise
-        return {'imported': imported, 'company': company.strip() or '未分类'}
+        return {'imported': imported, 'skipped': skipped, 'company': company.strip() or '未分类'}
+
+    def classify(self, *, company='未分类', requirement=None, filenames=None):
+        from .sample_requirement_groups import classify_sample_groups
+        return classify_sample_groups(self, company=company, requirement=requirement, filenames=filenames)
 
     def remove(self, names):
         if (not isinstance(names, list) or not 1 <= len(names) <= 5000
                 or any(not isinstance(name, str) for name in names)):
             raise ValueError('请选择要删除的样单')
         names = list(dict.fromkeys(names))
-        with self.database.connect() as con:
-            con.execute('BEGIN IMMEDIATE')
-            catalog = self.catalog(connection=con)
-            if any(name not in catalog for name in names):
-                raise LibraryConflict('部分样单已被删除，请刷新列表')
-            busy = {row[0] for row in con.execute(
-                "SELECT filename FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')")}
-            if busy.intersection(names):
-                raise LibraryConflict('所选样单中有正在测试的图片，请等待测试结束后再删除')
-            for name in names:
-                con.execute('''INSERT INTO sample_library(filename,entry_json,deleted_at) VALUES(?,?,?)
-                    ON CONFLICT(filename) DO UPDATE SET deleted_at=excluded.deleted_at''',
-                    (name, json.dumps(catalog[name], ensure_ascii=False), now_iso()))
+        # Move files aside while the write transaction is open. Restore them
+        # on failure; discard the temporary directory only after commit.
+        moved = []
+        with tempfile.TemporaryDirectory(prefix='sample-delete-', dir=self.database.path.parent) as trash:
+            try:
+                with self.database.connect() as con:
+                    con.execute('BEGIN IMMEDIATE')
+                    catalog = self.catalog(include_deleted=True, connection=con)
+                    library = {row['filename']: row for row in con.execute('SELECT * FROM sample_library')}
+                    if any(name not in catalog and name not in library for name in names):
+                        raise LibraryConflict('部分样单已被删除，请刷新列表')
+                    busy = {row[0] for row in con.execute(
+                        "SELECT filename FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')")}
+                    if busy.intersection(names):
+                        raise LibraryConflict('所选样单中有正在测试的图片，请等待测试结束后再删除')
+                    targets, tasks = set(), set()
+
+                    def own_path(root, name):
+                        root = Path(root).resolve()
+                        target = root / name
+                        if Path(name).name == name and target.resolve().parent == root and target.exists():
+                            targets.add(target)
+
+                    for name in names:
+                        row = library.get(name)
+                        if row and row['storage_name']:
+                            own_path(self.directory, row['storage_name'])
+                        # Legacy samples are files in the sample dataset, not
+                        # production uploads. Remove their source as well so
+                        # ground-truth labels cannot republish them on restart.
+                        own_path(self.ctx.DATA_DIR, name)
+                        for result in con.execute('SELECT preview_name FROM results WHERE filename=?', (name,)):
+                            preview = result['preview_name']
+                            if preview:
+                                own_path(self.database.path.parent / 'previews', preview)
+                                own_path(self.database.path.parent / 'artifacts', Path(preview).stem)
+                        tasks.update(row[0] for row in con.execute(
+                            'SELECT DISTINCT task_id FROM recognition_jobs WHERE filename=?', (name,)))
+                    for target in sorted(targets):
+                        staged = Path(trash) / str(len(moved))
+                        shutil.move(str(target), str(staged))
+                        moved.append((target, staged))
+                    for name in names:
+                        # Foreign keys cascade job events and result audits.
+                        con.execute('DELETE FROM recognition_jobs WHERE filename=?', (name,))
+                        con.execute('DELETE FROM results WHERE filename=?', (name,))
+                        con.execute('DELETE FROM sample_library WHERE filename=?', (name,))
+                    from receipt_ocr.jobs.store import JobStore
+                    for task in tasks:
+                        count = con.execute('SELECT COUNT(*) FROM recognition_jobs WHERE task_id=?', (task,)).fetchone()[0]
+                        if count:
+                            con.execute('UPDATE batch_tasks SET total=? WHERE id=?', (count, task))
+                            JobStore(self.database)._refresh(con, task)
+                        else:
+                            con.execute('DELETE FROM batch_tasks WHERE id=?', (task,))
+            except Exception:
+                for target, staged in reversed(moved):
+                    shutil.move(str(staged), str(target))
+                raise
         return {'deleted': names}

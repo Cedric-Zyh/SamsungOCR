@@ -125,10 +125,12 @@ class ReviewOperationsMixin:
         before: dict | None,
         after: dict,
         note: str = "",
+        action: str | None = None,
+        _connection: sqlite3.Connection | None = None,
     ) -> dict:
         timestamp = now_iso()
-        action = "更新评测真值" if before is not None else "新增评测真值"
-        with self.connect() as connection:
+        action = action or ("更新评测真值" if before is not None else "新增评测真值")
+        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
             cursor = connection.execute(
                 """INSERT INTO ground_truth_history(
                     filename,result_id,changed_at,action,before_json,after_json,note

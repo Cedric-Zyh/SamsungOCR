@@ -10,6 +10,71 @@ from receipt_ocr.recognition.seal.preprocess.orientation_geometry import _rotati
 from receipt_ocr.providers.orientation import classify_lines
 
 
+def _check_rectangle_direction(image, boxes, matrix, padding, destination, model_variant):
+    """Compare the same first-detected rows; digits alone never choose 180°."""
+    from .rectangle_layout import _direction_score
+    from ..ocr.interface import read_line
+
+    initial_score = _direction_score(boxes)
+    result = {"method": "fixed_rows_0_180", "initial_score": initial_score,
+              "selected_rotation": 0, "reads": {}}
+    if initial_score >= 4:
+        result["reason"] = "confident_original_chinese"
+        return boxes, result
+    if not any(sum('\u4e00' <= c <= '\u9fff' for c in str(b.get('text') or '')) >= 2 for b in boxes):
+        result["reason"] = "no_chinese_direction_anchor"
+        return boxes, result
+    height, width = image.shape[:2]
+    readings = {0: {}, 180: {}}
+    for i, box in enumerate(boxes):
+        points = np.asarray(box.get("points", []), np.float32)
+        if points.shape != (4, 2) or not np.isfinite(points).all():
+            continue
+        mapped = cv2.transform((points + padding)[None], matrix)[0]
+        low = np.maximum(0, np.floor(mapped.min(0)).astype(int) - 3)
+        high = np.minimum([width, height], np.ceil(mapped.max(0)).astype(int) + 4)
+        if np.any(high <= low) or high[0]-low[0] < 2*(high[1]-low[1]):
+            continue
+        crop = cv2.copyMakeBorder(image[low[1]:high[1], low[0]:high[0]],
+                                  16, 16, 16, 16, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+        for coarse in (0, 180):
+            path = destination.with_name(f"{destination.stem}-direction-{i}-{coarse}.png")
+            pixels = crop if coarse == 0 else cv2.rotate(crop, cv2.ROTATE_180)
+            if not cv2.imwrite(str(path), pixels):
+                raise ValueError("矩形章正反方向判断图保存失败")
+            observations = read_line(path, model_variant=model_variant)
+            if len(observations) != 1:
+                continue
+            observation = observations[0]
+            if not np.isfinite(observation.confidence) or not observation.text.strip():
+                continue
+            readings[coarse][i] = {"text": observation.text.strip(),
+                                    "confidence": float(observation.confidence),
+                                    "points": box['points'], "image_path": str(path)}
+    scores = {coarse: _direction_score(list(values.values())) for coarse, values in readings.items()}
+    selected = 180 if scores[180] >= 3.6 and scores[180] > max(initial_score, scores[0]) + 3 else 0
+    reason = 'opposite_chinese_verified' if selected else 'kept_original_direction'
+    if not selected and scores[180] >= 3.6:
+        reason = 'ambiguous_directions'
+    result.update(selected_rotation=selected, original_score=scores[0], opposite_score=scores[180],
+                  reads={str(k): list(v.values()) for k, v in readings.items()},
+                  reason=reason)
+    if scores[selected] < 3.6:
+        return boxes, result
+    # Geometry remains that of the initial detection; the final-frame crops
+    # will be read again after the whole image has taken the chosen direction.
+    verified = []
+    for i, box in enumerate(boxes):
+        read = readings[selected].get(i)
+        if read and read['confidence'] >= .75:
+            verified.append({**box, "text": read['text'], "confidence": read['confidence'],
+                             "direction_verified": True})
+        else:
+            verified.append(box)
+    result['verified_rows'] = True
+    return verified, result
+
+
 def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
     """Pad and deskew a rectangular stamp before its body OCR pass."""
     from receipt_ocr.recognition.seal.ocr.interface import detect_boxes
@@ -29,6 +94,7 @@ def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
         cv2.BORDER_CONSTANT, value=(255, 255, 255),
     )
     angle = float(decision.get("applied_rotation") or 0.0)
+    matrix = np.array([[1., 0., 0.], [0., 1., 0.]])
     if abs(angle) >= 0.01:
         padded_height, padded_width = padded.shape[:2]
         matrix, new_width, new_height = _rotation_geometry(
@@ -46,10 +112,34 @@ def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
     else:
         output = padded
         decision["status"] = "矩形章保持原方向并加白边"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        verified, direction = _check_rectangle_direction(
+            output, boxes, matrix, padding, destination, model_variant,
+        )
+        decision['direction_check'] = direction
+        decision['detected_boxes'] = verified
+        if direction.get('verified_rows'):
+            decision['force_row_read'] = True
+        if direction['selected_rotation'] == 180:
+            h, w = output.shape[:2]
+            flip = np.array([[-1., 0., w-1], [0., -1., h-1], [0., 0., 1.]])
+            matrix = (flip @ np.vstack([matrix, [0., 0., 1.]]))[:2]
+            output = cv2.rotate(output, cv2.ROTATE_180)
+            angle += 180
+            decision['status'] = '矩形章已验证正反方向，旋转 180° 并校平文字'
+        elif direction.get('reason') == 'ambiguous_directions' or (
+            not direction.get('verified_rows') and direction.get('reason') != 'confident_original_chinese'
+        ):
+            decision['status'] = '矩形章已加白边并校平，正反方向待确认'
+    except Exception as exc:
+        decision['direction_check'] = {'selected_rotation': 0, 'error': str(exc)}
+        decision['status'] = '矩形章已加白边并校平，正反方向判断失败'
+    decision['rotation_matrix'] = matrix.tolist()
+    decision['rotation_steps'] = [angle] if abs(angle) >= .01 else []
     decision["padding"] = padding
     decision["oriented_path"] = str(destination)
     decision["applied_rotation"] = round(angle, 3)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(destination), output):
         raise ValueError(f"矩形章方向校正图写入失败：{destination}")
     return destination, decision

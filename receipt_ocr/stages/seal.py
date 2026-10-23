@@ -100,7 +100,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
     )
     requirement = fields.get("签章要求", "")
     match_mode = request.acceptance.get("seal_match_mode", "any")
-    signature_row = _find_signature_requirement_row(rows)
+    signature_row = _find_signature_requirement_row(rows) or getattr(context, 'footer_anchor', None)
     has_receipt_footer = signature_row is not None
     signature_anchor = signature_row.y if signature_row else 0.47
     regions, recipient_regions, seal_artifacts = [], [], []
@@ -275,13 +275,14 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
             external = {
                 "enabled": False,
                 "requested": selected_seal_mode == "qingtong",
-                "message": "首页无签收页脚，未调用印章 API",
+                "message": "签收页脚尚未确认，未调用印章 API",
             }
             seal_check = {
                 **compare_seal_text(requirement, []),
                 "status": "无法判断",
-                "message": "回单首页未包含签收页脚，等待关联商品续页",
-                "backend": "未执行（等待关联续页）",
+                "message": "签收页脚尚未确认，已跳过印章识别，请核对本页或关联续页",
+                "execution_status": "skipped", "skip_reason": "footer_unconfirmed",
+                "backend": "未执行（页脚尚未确认）",
                 "regions": [],
                 "api": external,
                 "recognition_mode": selected_seal_mode,

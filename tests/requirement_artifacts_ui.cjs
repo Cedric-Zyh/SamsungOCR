@@ -2,13 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
 
-function render(seals, tab = 'seals', requirement = true) {
+function render(seals, tab = 'seals', requirement = true, scope = '') {
   const target = {innerHTML: ''};
   const reviewState = {artifactTab: tab, current: {processing_artifacts: {
     seals, date: [], signature_requirement: requirement ? [{
       original_url: '/files/artifacts/test/requirements/original.png',
       color_clean_url: '/files/artifacts/test/requirements/clean.jpg',
       backend: 'paddle_v6', ocr_text: '签章要求：客户业务章<3>',
+      ocr_scope: scope,
     }] : [],
   }}};
   createReviewEvidence({environment: {}, ui: {$: () => target}, reviewState}).renderArtifacts();
@@ -34,6 +35,14 @@ test('requirement input images appear in their own tab and escape OCR text', () 
   assert.match(html, /签章要求行去印章色图（识别输入）/);
   assert.match(html, /客户业务章&lt;3&gt;/);
   assert.doesNotMatch(html, /没有保存/);
+});
+
+test('page requirement evidence identifies the page input and never claims a second read', () => {
+  const html = render([], 'signature_requirement', true, 'clean_page');
+  assert.match(html, /整页识别结果/);
+  assert.match(html, /去印章色整页识别输入（局部）/);
+  assert.match(html, /客户业务章&lt;3&gt;/);
+  assert.doesNotMatch(html, /二次识别/);
 });
 
 test('evidence images load eagerly and open inside the review window', () => {

@@ -76,6 +76,27 @@ def seal_text_comparison_rank(
     )
 
 
+def _number_option_requirements(expected: str) -> list[tuple[str, str]]:
+    """Expand one explicit circled-number choice after the stamp purpose.
+
+    Other slashes (company codes, fractions, phone numbers) remain literal.
+    Circled digits are not globally equated with plain digits, and separate
+    readings are never joined to supply a missing number.
+    """
+    groups = list(re.finditer(r"[①-⑳](?:/[①-⑳])+", expected))
+    if len(groups) != 1:
+        return []
+    group = groups[0]
+    prefix, suffix = expected[:group.start()], expected[group.end():]
+    if (not prefix.endswith(("专用章", "收货章", "业务受理", "业务受理章"))
+            or suffix.startswith("/") or re.search(r"[①-⑳]", suffix)):
+        return []
+    numbers = list(dict.fromkeys(group.group().split("/")))
+    if len(numbers) < 2:
+        return []
+    return [(prefix + number + suffix, number) for number in numbers]
+
+
 def compare_seal_text_strict(
     requirement: str,
     recognized_texts: list[str],
@@ -84,6 +105,33 @@ def compare_seal_text_strict(
 ) -> dict:
     """Separate exact text, omission-only partial text and incorrect text."""
     expected = normalize_seal_text_strict(requirement)
+    options = _number_option_requirements(expected)
+    if options:
+        comparisons = [(compare_seal_text_strict(
+            variant, recognized_texts, mismatch_over_partial=mismatch_over_partial,
+        ), number, variant) for variant, number in options]
+        selected, number, variant = max(
+            comparisons,
+            key=lambda item: seal_text_comparison_rank(
+                item[0], mismatch_over_partial=mismatch_over_partial),
+        )
+        result = dict(selected, requirement=requirement)
+        if result["status"] == "匹配":
+            fields = dict(result.get("field_comparison") or {})
+            matched = list(fields.get("matched_fields") or ["名称及用途"])
+            if "章内编号" not in matched:
+                matched.append("章内编号")
+            allowed = [value for _, value in options]
+            fields.update(
+                matched_fields=matched,
+                additional_fields=fields.get("additional_fields", []),
+                allowed_numbers=allowed, matched_number=number,
+                matched_requirement=variant,
+                message=(result["message"] + f"；编号{number}符合可选要求（{'或'.join(allowed)}）"),
+            )
+            result.update(field_comparison=fields, comparison_policy="strict_information_fields",
+                          message=fields["message"])
+        return result
     candidates = []
     for text in recognized_texts:
         actual = normalize_seal_text_strict(text)

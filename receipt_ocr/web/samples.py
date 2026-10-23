@@ -23,6 +23,8 @@ from .seal_standards import SealStandardDependencies, register_standard
 from .sample_statistics import sample_statistics
 from .sample_company_marks import SampleCompanyMarks, MarkConflict
 from .sample_library import SampleLibrary, LibraryConflict
+from .sample_annotations import SampleAnnotations
+from .sample_requirement_groups import classify_requirements, group_name
 
 
 def sample_urls(value):
@@ -36,6 +38,10 @@ def sample_urls(value):
 
 
 class SampleJobStore(JobStore):
+    def __init__(self, database, library):
+        super().__init__(database)
+        self.library = library
+
     def claim(self):
         job = super().claim()
         if job:
@@ -56,8 +62,8 @@ class SampleJobStore(JobStore):
         task_id, timestamp = uuid.uuid4().hex, now_iso()
         with self.database.connect() as con:
             con.execute("BEGIN IMMEDIATE")
-            deleted = {row[0] for row in con.execute("SELECT filename FROM sample_library WHERE deleted_at<>''")}
-            if deleted.intersection(names):
+            catalog = self.library.catalog(connection=con)
+            if any(name not in catalog for name in names):
                 raise LibraryConflict('部分样单已被删除，请刷新列表')
             busy = {row[0] for row in con.execute(
                 "SELECT filename FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')"
@@ -97,10 +103,11 @@ class SampleCenter:
         self.database = Database(ctx.database.path.parent / "sample-center" / "results.db")
         self.database.path.parent.mkdir(parents=True, exist_ok=True)
         self.database.initialize()
-        self.store = SampleJobStore(self.database)
+        self.library = SampleLibrary(ctx, self.database)
+        self.annotations = SampleAnnotations(self.library)
+        self.store = SampleJobStore(self.database, self.library)
         self.store.initialize()
         self.company_marks = SampleCompanyMarks(self.database)
-        self.library = SampleLibrary(ctx, self.database)
         self.preview_dir = self.database.path.parent / "previews"
         self.artifact_dir = self.database.path.parent / "artifacts"
         self.preview_dir.mkdir(exist_ok=True)
@@ -153,6 +160,8 @@ class SampleCenter:
             items.append({
                 "filename": name,
                 "company": str((entry.get("fields") or {}).get("客户名称") or "").strip() or "未分类",
+                "requirement": group_name(entry),
+                "requirement_key": requirement_key(group_name(entry)),
                 "status": status, "job_status": job.get("status", ""),
                 "result_id": job.get("result_id"), "error": job.get("error_message", ""),
                 "updated_at": job.get("finished_at") or job.get("created_at", ""),
@@ -183,7 +192,16 @@ class SampleCenter:
             seals[name] = {'matched': matched, 'total': len(keys), 'unlabeled': unlabeled[name],
                            'has_standard': matched > 0,
                            'complete': bool(keys) and matched == len(keys) and not unlabeled[name]}
+        groups = {name: {} for name in counts}
+        for item in items:
+            key = item['requirement_key']
+            group = groups[item['company']].setdefault(key, {
+                'key': key, 'name': item['requirement'] or '未归类', 'count': 0,
+                'has_standard': bool(key and key in standard_keys)})
+            group['count'] += 1
         return {"items": items, "companies": companies, "total": len(items),
+                "requirement_groups": {name: sorted(values.values(), key=lambda group: (bool(group['key']), group['name']))
+                                       for name, values in groups.items()},
                 "company_marks": marks, "company_versions": versions, "company_seals": seals}
 
     def project_result(self, item, *, _connection=None):
@@ -260,6 +278,33 @@ def register_sample_routes(app, ctx):
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
 
+    @bp.post('/api/samples/classify')
+    def classify_samples():
+        payload = request.get_json(silent=True)
+        if payload is not None and not isinstance(payload, dict):
+            return jsonify(error='归类范围无效'), 400
+        payload = payload or {}
+        try:
+            return jsonify(center().library.classify(company=payload.get('company', '未分类'),
+                           requirement=payload.get('requirement'), filenames=payload.get('filenames')))
+        except KeyError:
+            return jsonify(error='客户公司不存在，请刷新列表'), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+    @bp.post('/api/samples/classify-requirements')
+    def classify_company_requirements():
+        payload = request.get_json(silent=True)
+        try:
+            return jsonify(classify_requirements(center().library,
+                           payload.get('company') if isinstance(payload, dict) else None,
+                           requirement=payload.get('requirement') if isinstance(payload, dict) else None,
+                           filenames=payload.get('filenames') if isinstance(payload, dict) else None))
+        except KeyError:
+            return jsonify(error='客户公司不存在，请刷新列表'), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
     @bp.post('/api/samples/company-mark')
     def company_mark():
         service = center()
@@ -329,6 +374,20 @@ def register_sample_routes(app, ctx):
         except KeyError:
             return jsonify(error="这次测试记录不存在，请重新选择"), 404
 
+    @bp.get('/api/samples/statistics/export')
+    def export_statistics():
+        from .sample_statistics_export import export_statistics as build_export
+        try:
+            output = build_export(center(), company=request.args.get('company', ''),
+                                  task_id=request.args.get('task_id', ''),
+                                  tab=request.args.get('tab', 'seal'), selected=request.args.get('filter', ''))
+        except KeyError:
+            return jsonify(error='这次测试记录不存在，请重新选择'), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         as_attachment=True, download_name='样单统计结果.xlsx', max_age=0)
+
     @bp.get("/api/samples/results/<int:result_id>")
     def result(result_id):
         return jsonify(center().result(result_id))
@@ -348,15 +407,26 @@ def register_sample_routes(app, ctx):
     @bp.get("/api/samples/results/<int:result_id>/review-history")
     def review_history(result_id):
         service = center()
-        service.result(result_id)
-        return jsonify(service.database.history(result_id))
+        name = service.result(result_id)['filename']
+        rows = service.database.history(result_id) + service.database.ground_truth_history(name)
+        return jsonify(sorted(rows, key=lambda row: (row['changed_at'], row['id']), reverse=True))
 
     @bp.get("/api/samples/results/<int:result_id>/ground-truth")
     def ground_truth(result_id):
         service = center()
         name = service.result(result_id)["filename"]
-        entry = service.library.catalog(include_deleted=True).get(name)
-        return jsonify(filename=name, exists=entry is not None, entry=entry, history=[])
+        return jsonify(service.annotations.snapshot(name))
+
+    @bp.patch('/api/samples/results/<int:result_id>/annotations')
+    def save_annotations(result_id):
+        try:
+            return jsonify(center().annotations.save(result_id, request.get_json(silent=True)))
+        except LibraryConflict as exc:
+            return jsonify(error=str(exc), code='sample_annotation_conflict'), 409
+        except KeyError:
+            abort(404)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
 
     @bp.get("/files/sample-selected-seal/<int:result_id>.png")
     def selected_seal(result_id):

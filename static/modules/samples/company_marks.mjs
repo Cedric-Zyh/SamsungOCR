@@ -11,9 +11,21 @@ export function companySealDescription(seal) {
     : seal?.total ? '印章中心尚无对应标准章' : '样单未标注签章要求，暂不能关联标准章';
 }
 
-export function companyRowMarkup(row, progress, active, seal) {
-  const badge = row.name && seal?.has_standard ? `<span class="sample-company-seal-check" role="img" aria-label="印章中心已有标准章" title="${esc(companySealDescription(seal))}">✓</span>` : '';
-  return `<button type="button" data-company="${esc(row.name)}" data-progress="${progress.state}" class="sample-company-select${active ? ' active' : ''}" aria-pressed="${active}" title="${esc(progress.title)}"><span class="sample-company-copy">${esc(row.name || '全部样单')}</span><span class="sample-company-indicators">${badge}<small class="sample-company-total">${row.count}</small></span></button>`;
+export function companyRowMarkup(row, progress, active, seal, expanded = null) {
+  const expandable = row.name && row.name !== '未分类';
+  const built = Number(seal?.matched) || 0;
+  const summary = expandable ? `<span class="sample-company-built-count" data-available="${built > 0}">已建章 ${built} 个</span>` : '';
+  const icon = expandable
+    ? `<svg class="sample-company-chevron${expanded ? ' is-expanded' : ''}" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"/></svg>`
+    : `<svg class="sample-scope-icon" viewBox="0 0 24 24" aria-hidden="true">${row.name
+      ? '<path d="M3 7V5h6l2 3h10v12H3z"/>'
+      : '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h5"/>'}</svg>`;
+  return `<button type="button" data-company="${esc(row.name)}" data-progress="${progress.state}" class="sample-company-select${expandable ? ' sample-company-parent' : ' sample-company-scope'}${active ? ' active' : ''}" aria-pressed="${active}" ${expandable ? `aria-expanded="${Boolean(expanded)}"` : ''} title="${esc(progress.title)}">${icon}<span class="sample-company-copy"><span class="sample-company-name">${esc(row.name || '全部样单')}</span>${summary}</span><small class="sample-company-total">${row.count}</small></button>`;
+}
+
+export function requirementRowMarkup(company, group, active, progress) {
+  const badge = group.key && group.has_standard ? '<span class="sample-requirement-standard">✓ 已建章</span>' : '';
+  return `<button type="button" class="sample-requirement-select${active ? ' active' : ''}" data-company="${esc(company)}" data-requirement="${esc(group.key)}" data-progress="${progress.state}" aria-pressed="${active}"><span class="sample-requirement-copy"><span class="sample-requirement-name">${esc(group.name)}</span>${badge}</span><small class="sample-requirement-total">${group.count}</small></button>`;
 }
 
 export function createCompanyMarks({environment, ui, services, render}) {
@@ -39,11 +51,8 @@ export function createCompanyMarks({environment, ui, services, render}) {
     status.dataset.mark = mark.state;
     status.textContent = `${mark.state === 'checked' ? '✓ ' : ''}${COMPANY_MARK_LABELS[mark.state] || '未标记'}`;
     $('#sample-company-header-new').hidden = !mark.has_new_results;
-    const seal = seals[company];
     const sealBadge = $('#sample-company-header-seal');
-    sealBadge.textContent = seal?.has_standard ? seal.complete ? '✓ 已建章' : '✓ 已有部分标准章' : seal?.total ? '尚未建章' : '标准章待关联';
-    sealBadge.dataset.available = String(Boolean(seal?.has_standard));
-    sealBadge.title = companySealDescription(seal);
+    sealBadge.hidden = true;
     const note = $('#sample-company-header-note');
     note.hidden = !mark.note;
     note.textContent = mark.note ? `备注：${mark.note}` : '';

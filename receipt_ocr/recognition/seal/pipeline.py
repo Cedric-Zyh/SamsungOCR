@@ -19,6 +19,8 @@ from .postprocess.ring_text import reorder_ring_text
 from .preprocess.ring_serial import read_ring_serial
 from .preprocess.ring_alternative import read_normal_alternative
 from .postprocess.multi_zone import finalize_multi_zone
+from .postprocess.rectangle_form import mark_empty_receiving_fields
+from .postprocess.type_row import prefer_complete_type_read
 
 
 _RECTANGULAR_COMBINE_MIN_CONFIDENCE = 0.75
@@ -211,6 +213,8 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                         observations = reader.read(path, provider=ocr_backend)
                     else:
                         observations = reader.read_line(path, provider=ocr_backend)
+                    if input_image["channel"] == "center":
+                        observations = prefer_complete_type_read(observations, input_image, artifact)
                     if artifact.get("shape_code") == "rectangle" and input_image["channel"] == "body":
                         body_observations.extend(observations)
                         body_path = path
@@ -221,7 +225,7 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                         read = {"id": f"{input_image['id']}:{position}", "input_id": input_image["id"],
                                 "region_id": artifact["region_id"], "channel": input_image["channel"],
                                 "provider": ocr_backend, "text": row.text, "confidence": row.confidence,
-                                "image_url": input_image["image_url"]}
+                                "image_url": input_image.get("selected_read_image_url", input_image["image_url"])}
                         if artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}:
                             read["rectangle_row_index"] = (
                                 position if "detected_rows" in input_image
@@ -251,11 +255,13 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
             if artifact.get("stamp_number_status") == "merged":
                 texts.append(artifact["round_type_band_text"])
             if artifact.get("shape_code") == "rectangle":
+                mark_empty_receiving_fields(artifact)
                 fixed_layout = artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}
                 if fixed_layout:
                     body_parts = ["" for _ in artifact["rectangular_fixed_rows"]]
                     for read in artifact["reads"]:
-                        if read.get("channel") == "body" and read["confidence"] >= .75:
+                        if (read.get("channel") == "body" and read["confidence"] >= .75
+                                and read.get("rectangle_field_kind") != "empty_receiving_field"):
                             body_parts[read["rectangle_row_index"]] += read["text"]
                     artifact["rectangular_row_texts"] = body_parts
                 else:

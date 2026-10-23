@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {companyMatchesMark, companyRowMarkup} = require('../static/modules/samples/company_marks.mjs');
+const {companyMatchesMark, companyRowMarkup, requirementRowMarkup} = require('../static/modules/samples/company_marks.mjs');
 const {createApiClients} = require('../static/modules/core/api.mjs');
 const {sampleCompanyProgress} = require('../static/modules/samples/center.mjs');
 
@@ -31,14 +31,19 @@ test('company marker writes stay in the sample namespace and carry the observed 
   assert.deepEqual(calls, [['/api/samples/company-mark',{method:'POST',json:payload}]]);
 });
 
-test('seal check is independent of completion and describes partial coverage', () => {
+test('standard seal markers belong to requirements rather than customer rows', () => {
   const row = {name:'甲公司',count:3};
   const completed = companyRowMarkup(row, sampleCompanyProgress([{status:'已完成'}]), false);
   assert(!completed.includes('✓'));
   const registered = companyRowMarkup(row, sampleCompanyProgress([]), false,
     {has_standard:true,matched:1,total:2,unlabeled:1});
-  assert.match(registered, /aria-label="印章中心已有标准章"/);
-  assert.match(registered, /已收录 1\/2 种签章要求；1 张样单未标注签章要求/);
+  assert.match(registered, /已建章 1 个/);
+  assert.match(companyRowMarkup(row, sampleCompanyProgress([]), false), /已建章 0 个/);
+  const requirement = requirementRowMarkup('甲公司', {key:'章',name:'第三方<章>',count:2,has_standard:true}, true, sampleCompanyProgress([]));
+  assert.match(requirement, /✓ 已建章/);
+  assert.match(requirement, /第三方&lt;章&gt;/);
+  const ungrouped = requirementRowMarkup('甲公司', {key:'',name:'未归类',count:1,has_standard:true}, false, sampleCompanyProgress([]));
+  assert(!ungrouped.includes('已建章'));
   const all = companyRowMarkup({name:'',count:3},sampleCompanyProgress([]),false,{has_standard:true});
   assert(!all.includes('✓'));
 });

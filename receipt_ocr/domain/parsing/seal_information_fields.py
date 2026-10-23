@@ -9,6 +9,10 @@ import re
 
 _LABEL = re.compile(r"授权代码:?|地址:|电话:")
 _CONTACT = {"地址", "电话"}
+_LEADING_PHONE = re.compile(
+    r"(?:电话:)?(?P<phone>0[0-9]{2,3}-[0-9]{7,8})"
+    r"(?P<identity>[\u4e00-\u9fff].*)"
+)
 
 # A narrow fallback for OCR rows joined without address/telephone labels.
 # Require a city, street, house number and a complete landline at the end.
@@ -44,6 +48,15 @@ def _unlabelled_information_fields(text):
 
 
 def _fields(text):
+    # QingTong can order the telephone row before the stamp name. Recognize
+    # only a complete, hyphen-delimited landline followed by Chinese identity
+    # text. Never split at an expected station/code length or drop its digits.
+    leading = _LEADING_PHONE.fullmatch(text)
+    if leading:
+        fields = _fields(leading["identity"])
+        if not fields or "电话" in fields:
+            return None
+        return {**fields, "电话": leading["phone"]}
     markers = list(_LABEL.finditer(text))
     if not markers:
         return {"名称": text} if text else None

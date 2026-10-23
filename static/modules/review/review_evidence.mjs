@@ -1,6 +1,7 @@
 import {createApiClients} from '../core/api.mjs';
 import {percent, escapeHtml} from '../core/ui.mjs';
 import {createArtifactImages} from './artifact_images.mjs';
+import {renderSampleAnnotations} from './sample_annotations.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
@@ -55,13 +56,18 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
   function modernSealInputChain(item, typeBandLabel, unwrapLabel) {
     const oriented = item.color_isolated_oriented_url || item.color_isolated_url;
     if (item.multi_zone_layout) {
+      const explanation = item.multi_zone_layout.method === 'ellipse_department_rows'
+        ? '章内部门与章型文字分别识别；填白内部文字后，再展开读取公司名称。'
+        : item.multi_zone_layout.method === 'ellipse_continuous_name'
+        ? '章型和编号分别识别；填白内部文字后，沿连续外环完整展开公司名称，保留首尾文字。'
+        : '自动定位完整横排文字，保留外圈两端；按实际文字分布展开弧段，电话单独记录。';
       const regions = (item.inputs || []).filter(input => input.zone_name).map(input => {
         const reads = (item.reads || []).filter(read => read.input_id === input.id);
         const label = reads.find(read => read.zone_label)?.zone_label || input.label;
         return artifactCard(label, input.image_url, reads.map(read => read.text).join(' | '),
-          input.zone_name === 'upper' || input.zone_name === 'lower');
+          input.channel === 'ring' || input.zone_name === 'upper' || input.zone_name === 'lower');
       }).join('');
-      return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>自动定位完整横排文字，保留外圈两端；按实际文字分布展开弧段，电话单独记录。</small><div class="artifact-grid">${
+      return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>${explanation}</small><div class="artifact-grid">${
         artifactCard('旋正增强图', oriented)
       }${artifactCard('自动文字分区', item.multi_zone_layout.overlay_url)}${
         artifactCard('内部文字填白后', item.ring_input_url)
@@ -78,7 +84,9 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
-    const unwrapCardLabel = item.ring_company_selection
+    const unwrapCardLabel = item.ring_han_selection
+      ? '汉字段展开图（公司名称识别输入）'
+      : item.ring_company_selection
       ? `${unwrapLabel}（公司名称输入，已排除小字号段）`
       : item.ring_geometry === 'fitted_ellipse_normals'
       ? `${unwrapLabel}（沿椭圆垂直方向展开，双档识别一致）`
@@ -98,12 +106,14 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifactCard(numberRecovery ? '旋正后的章色图（已保留编号笔画）' : '旋正后的章色图（未覆盖）', oriented),
       artifactCard('检测到的横向文字区域（仅定位/章型 OCR）', item.round_type_band_url, item.round_type_row_text || item.round_type_band_text || ''),
       artifactCard(ringInputLabel, item.ring_input_url),
-      artifactCard('环形文字带（展开前）', item.ring_text_band_url),
+      artifactCard(item.ring_han_selection ? '自动定位的汉字弧段（展开前）' : '环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || '', true),
       item.ring_normal_alternative?.image_url ? artifactCard(
         '环字备选 · 沿边框垂直方向展开（仅供核对，不参与匹配）',
         item.ring_normal_alternative.image_url, item.ring_normal_alternative.text || '', true) : '',
-      item.unwrapped_full_url ? artifactCard('完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
+      item.unwrapped_full_url ? artifactCard(item.ring_han_selection
+        ? '完整环形展开图（其他文字与数字仅供核对）'
+        : '完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
       item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
       item.stamp_number_url ? artifactCard(numberLabel, item.stamp_number_url, item.stamp_number_text || '') : '',
       item.ring_serial_url ? artifactCard('环形编号（独立识别）', item.ring_serial_url, item.ring_serial_text || '', true) : '',
@@ -114,6 +124,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : '';
     const missing = !item.ring_input_url
       ? '<small class="low-note">当前记录缺少环形 OCR 实际输入图，请重新识别生成新版证据。</small>'
+      : item.ring_han_selection
+        ? '<small>先按外圈位置保留完整字高，再自动分离汉字段；两档增强识别一致后用于公司名称识别。其他文字与数字保留供核对，不参与公司名称匹配。</small>'
       : measuredRow
         ? `<small>按完整横排文字范围识别并填白该行笔画，保留外边框；再从第 3 张图展开读取环字。${escapeHtml(box)}</small>`
       : tightMask
@@ -172,7 +184,12 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     }
     if (reviewState.artifactTab === 'signature_requirement') {
       target.innerHTML = artifacts.length
-        ? artifacts.map(item => `<article class="artifact-group"><h4>签章要求行 <small>${escapeHtml(item.backend || '')} · 二次识别 OCR：${escapeHtml(item.error ? `识别失败：${item.error}` : item.ocr_text || '未识别')}</small></h4><div class="artifact-grid">${artifactCard('签章要求行原图', item.original_url)}${artifactCard('签章要求行去印章色图（识别输入）', item.color_clean_url)}</div></article>`).join('')
+        ? artifacts.map(item => {
+          const pageRead = item.ocr_scope === 'clean_page';
+          const source = pageRead ? '整页识别结果' : '二次识别 OCR';
+          const caption = pageRead ? '去印章色整页识别输入（局部）' : '签章要求行去印章色图（识别输入）';
+          return `<article class="artifact-group"><h4>签章要求行 <small>${escapeHtml(item.backend || '')} · ${source}：${escapeHtml(item.error ? `识别失败：${item.error}` : item.ocr_text || '未识别')}</small></h4><div class="artifact-grid">${artifactCard('签章要求行原图', item.original_url)}${artifactCard(caption, item.color_clean_url)}</div></article>`;
+        }).join('')
         : '<div class="empty-state">没有保存的签章要求区域（旧记录可重新识别生成）</div>';
       return;
     }
@@ -394,17 +411,17 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
   }
 
   async function renderGroundTruth() {
+    if (!reviewState.sampleView) return;
     const id = reviewState.current.id, content = $('#review-content').firstElementChild;
-    const truth = await (reviewState.sampleView ? services.samples.groundTruth(id) : services.records.groundTruth(id));
-    if (reviewState.current?.id !== id || $('#review-content').firstElementChild !== content) return;
-    const root = $('#review-content');
-    $('[data-truth-status]', root).textContent = truth.exists ? (reviewState.sampleView ? '该样本已有标注' : '该样本已有真值，可审计更新') : '尚未标注，可在确认时新增';
-    if (!reviewState.reviewDirty) $('[name=truth_seal_should_match]', root).value = truth.exists
-      ? String(Boolean(truth.entry?.seal_should_match)) : '';
-    const history = truth.history || [];
-    $('[data-truth-history]', root).innerHTML = history.length
-      ? `<small>最近真值记录：${escapeHtml(history[0].action)} · ${escapeHtml(history[0].changed_at)}</small>`
-      : '<small>尚无真值修改历史</small>';
+    try {
+      const truth = await services.samples.groundTruth(id);
+      if (!reviewState.sampleView || reviewState.current?.id !== id || $('#review-content').firstElementChild !== content) return;
+      if (!reviewState.reviewDirty) renderSampleAnnotations(ui, reviewState, truth, $('#review-content'));
+    } catch (_) {
+      if (reviewState.sampleView && reviewState.current?.id === id && $('#review-content').firstElementChild === content) {
+        $('[data-truth-status]', $('#review-content')).textContent = '标注加载失败，请重新打开样单';
+      }
+    }
   }
 
   function historySummary(row) {
@@ -412,10 +429,16 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       const before = JSON.parse(row.before_json || '{}'), after = JSON.parse(row.after_json || '{}'), changed = [];
       const oldFields = before.fields || {}, newFields = after.fields || {};
       fieldSchema.output.filter(key => key !== '签收日期').forEach(key => { if ((oldFields[key] || '') !== (newFields[key] || '')) changed.push(`${key}: ${oldFields[key] || '空'} → ${newFields[key] || '空'}`); });
-      const oldDate = before.date_check?.actual || '', newDate = after.date_check?.actual || '';
+      const oldDate = before.date_check?.actual || before.actual_date || '', newDate = after.date_check?.actual || after.actual_date || '';
       if (oldDate !== newDate) changed.push(`实际日期: ${oldDate || '空'} → ${newDate || '空'}`);
       const oldSeal = before.seal_check?.recognized || '', newSeal = after.seal_check?.recognized || '';
       if (oldSeal !== newSeal) changed.push(`印章: ${oldSeal || '空'} → ${newSeal || '空'}`);
+      const label = value => value === true ? '匹配' : value === false ? '不匹配' : '未标注';
+      if (before.seal_should_match !== after.seal_should_match) changed.push(`印章标注: ${label(before.seal_should_match)} → ${label(after.seal_should_match)}`);
+      const dateLabel = value => value === true ? '已填写' : value === false ? '未填写' : '未标注';
+      if (before.date_present !== after.date_present) changed.push(`日期标注: ${dateLabel(before.date_present)} → ${dateLabel(after.date_present)}`);
+      if (before.human_note !== after.human_note) changed.push(`备注: ${before.human_note || '空'} → ${after.human_note || '空'}`);
+      if (before.error_type !== after.error_type) changed.push(`错误类型: ${before.error_type || '无'} → ${after.error_type || '无'}`);
       const oldProductRows = before.product_table?.rows || [], newProductRows = after.product_table?.rows || [];
       newProductRows.forEach((row, index) => Object.keys(row.values || {}).forEach(column => {
         const oldValue = oldProductRows[index]?.values?.[column] || '', newValue = row.values?.[column] || '';

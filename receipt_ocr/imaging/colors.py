@@ -5,22 +5,25 @@ import cv2
 import numpy as np
 
 
-def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
-    """Retain observed grey-red strokes while suppressing neutral black ink.
+def _seal_ink_strength(crop: np.ndarray, color: str) -> np.ndarray:
+    """Retain observed coloured strokes while suppressing neutral black ink.
 
     Colour establishes stroke membership, not its darkness: faint chroma can
     belong to a dark stamp glyph. Work at native resolution so neighbouring
     support and black-edge rejection do not grow with OCR upscaling.
     """
     b, g, r = (channel.astype(np.float32) for channel in cv2.split(crop))
-    neutral = np.maximum(g, b)
-    signed_difference = r - neutral
+    dominant = r if color == "red" else b
+    neutral = np.maximum(g, b if color == "red" else r)
+    signed_difference = dominant - neutral
     difference = np.maximum(0, signed_difference)
     darkness = 255 - neutral
     hue = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 0]
-    valid = (difference >= 5) & ((hue <= 16) | (hue >= 164))
+    hue_match = ((hue <= 16) | (hue >= 164) if color == "red"
+                 else (hue >= 82) & (hue <= 140))
+    valid = (difference >= 5) & hue_match
 
-    # Keep a continuous chroma baseline for sparse red pixels. The connected
+    # Keep a continuous chroma baseline for sparse coloured pixels. The connected
     # stroke pass below additionally preserves their observed darkness.
     weight = np.clip((difference - 3) / 22, 0, 1)
     weight = weight * weight * (3 - 2 * weight)
@@ -30,8 +33,8 @@ def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
 
     # Find long dark rules in either direction. Chroma-biased JPEG fragments
     # may evade an HSV-neutral mask. Only remove weakly chromatic dark pixels
-    # on these rules; protect pale red and saturated dark-red crossings.
-    dark = (r < 155).astype(np.uint8) * 255
+    # on these rules; protect pale and saturated dark-coloured crossings.
+    dark = (dominant < 155).astype(np.uint8) * 255
     lines = np.zeros_like(dark)
     for kernel_size in ((max(35, crop.shape[1] // 4), 1),
                         (1, max(35, crop.shape[0] // 4))):
@@ -40,13 +43,14 @@ def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
             cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size),
         )
     lines = cv2.dilate(lines, np.ones((3, 3), dtype=np.uint8))
-    rule_ink = ((lines > 0) & (r < 180) & (difference < 30)
-                & (difference / np.maximum(r, 1) < .35))
+    rule_ink = ((lines > 0) & (dominant < 180) & (difference < 30)
+                & (difference / np.maximum(dominant, 1) < .35))
     strength[rule_ink] = 0
 
-    red_hue = (hue <= 20) | (hue >= 160)
-    seed = (signed_difference >= 4) & red_hue & ~rule_ink
-    support = ((signed_difference >= 2) & red_hue
+    stroke_hue = ((hue <= 20) | (hue >= 160) if color == "red"
+                  else (hue >= 78) & (hue <= 144))
+    seed = (signed_difference >= 4) & stroke_hue & ~rule_ink
+    support = ((signed_difference >= 2) & stroke_hue
                & (darkness >= 8) & ~rule_ink)
     nearby = cv2.distanceTransform(
         (~seed).astype(np.uint8), cv2.DIST_L2, 5
@@ -66,16 +70,20 @@ def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
         strength[accepted], np.clip(darkness[accepted] * 1.2, 0, 225)
     )
 
-    # A tiny red bias on dark form text must not turn its black core into a
-    # red glyph. Reject the core and only weakly coloured neighbouring edges;
-    # stronger red crossings and lighter grey-red lettering remain eligible.
-    red_fraction = signed_difference / np.maximum(darkness, 1)
-    black_core = (r < 115) & (red_fraction < .03)
+    # A tiny colour bias on dark form text must not turn its black core into a
+    # stamp glyph. Reject the core and weakly coloured neighbouring edges;
+    # stronger coloured crossings and lighter lettering remain eligible.
+    color_fraction = signed_difference / np.maximum(darkness, 1)
+    black_core = (dominant < 115) & (color_fraction < .03)
     near_black = cv2.distanceTransform(
         (~black_core).astype(np.uint8), cv2.DIST_L2, 5
     ) <= 1.5
-    strength[black_core | (near_black & (red_fraction < .08))] = 0
+    strength[black_core | (near_black & (color_fraction < .08))] = 0
     return strength
+
+
+def _red_ink_strength(crop: np.ndarray) -> np.ndarray:
+    return _seal_ink_strength(crop, "red")
 
 
 def _isolate_red_ink(crop: np.ndarray) -> np.ndarray:
@@ -83,6 +91,14 @@ def _isolate_red_ink(crop: np.ndarray) -> np.ndarray:
     strength = _red_ink_strength(crop)
     result = np.full_like(crop, 255)
     result[:, :, 0] = result[:, :, 1] = np.rint(255 - strength).astype(np.uint8)
+    return result
+
+
+def _isolate_blue_ink(crop: np.ndarray) -> np.ndarray:
+    """Apply the same stroke-preserving separation to blue stamp ink."""
+    strength = _seal_ink_strength(crop, "blue")
+    result = np.full_like(crop, 255)
+    result[:, :, 1] = result[:, :, 2] = np.rint(255 - strength).astype(np.uint8)
     return result
 
 
@@ -100,7 +116,30 @@ def _color_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         (r >= 105) & (r - np.maximum(g, b) >= 5), 255, 0
     ).astype(np.uint8)
     red = cv2.bitwise_or(red, pale_red)
+    pale_blue = np.where(
+        (b >= 105) & (b - np.maximum(g, r) >= 5)
+        & (hsv[:, :, 0] >= 82) & (hsv[:, :, 0] <= 140), 255, 0
+    ).astype(np.uint8)
+    blue = cv2.bitwise_or(blue, pale_blue)
     return red, blue
+
+
+def detect_seal_color(crop: np.ndarray, default: str = "red") -> str:
+    """Choose ink from observed colour inside a located stamp, ignoring black.
+
+    Weight pixels by channel separation so weak opposite-colour JPEG fringes
+    cannot outweigh a clearly coloured stamp. No chromatic evidence retains
+    the caller's fallback colour.
+    """
+    if crop.size == 0:
+        return default
+    red, blue = _color_masks(crop)
+    b, g, r = (channel.astype(np.int16) for channel in cv2.split(crop))
+    red_score = np.maximum(r - np.maximum(g, b), 0)[red > 0].sum()
+    blue_score = np.maximum(b - np.maximum(g, r), 0)[blue > 0].sum()
+    if red_score == blue_score:
+        return default
+    return "blue" if blue_score > red_score else "red"
 
 
 def _ocr_color_mask(crop: np.ndarray, color: str) -> np.ndarray:
@@ -130,13 +169,12 @@ def _ocr_color_mask(crop: np.ndarray, color: str) -> np.ndarray:
         & (saturation >= 45)
         & (value >= 50)
     ).astype(np.uint8) * 255
-    if color == "red":
-        b, g, r = (channel.astype(np.int16) for channel in cv2.split(crop))
-        # Pale red lettering still has chromatic evidence even when its HSV
-        # saturation falls below 45. Keep bright red-biased pixels; neutral
-        # gray/black print has no such channel separation.
-        pale_red = (r >= 180) & (r - np.maximum(g, b) >= 5) & hue_match
-        mask[pale_red] = 255
+    b, g, r = (channel.astype(np.int16) for channel in cv2.split(crop))
+    dominant = r if color == "red" else b
+    neutral = np.maximum(g, b if color == "red" else r)
+    # Faint red and blue strokes remain eligible below the HSV saturation gate.
+    pale_ink = (dominant >= 180) & (dominant - neutral >= 5) & hue_match
+    mask[pale_ink] = 255
 
     if mask.size:
         # Detect only neutral dark lines.  The long horizontal opening avoids

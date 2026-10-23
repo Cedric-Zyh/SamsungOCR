@@ -114,7 +114,8 @@ def ring_evidence_quality(clean, proposed, guide):
             "accepted": retained >= .85 and 0 < density <= .40}
 
 
-def prepare_horizontal_consensus(original, color, destination, *, reader, provider, model_variant, prior=None):
+def prepare_horizontal_consensus(original, color, destination, *, reader, provider,
+                                 model_variant, prior=None, ink_color="red"):
     """Return a verified single-row plan, or leave the existing path in charge."""
     destination = Path(destination)
     base, raw = cv2.imread(str(color)), cv2.imread(str(original))
@@ -152,8 +153,9 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
             b, g, r = cv2.split(reference.astype(float))
             # Continuous source colour evidence: never threshold faint strokes
             # out, and never reconstruct characters from the required string.
-            soft = np.clip(255 - np.maximum(r - np.minimum(b, g), 0) * 3, 0, 255).astype(np.uint8)
-            for mode, source in (("existing", image), ("soft-red", soft), ("raw", reference)):
+            difference = r - np.minimum(b, g) if ink_color == "red" else b - np.minimum(r, g)
+            soft = np.clip(255 - np.maximum(difference, 0) * 3, 0, 255).astype(np.uint8)
+            for mode, source in (("existing", image), (f"soft-{ink_color}", soft), ("raw", reference)):
                 whole = cv2.warpAffine(source, matrix, (fw, fh), flags=cv2.INTER_CUBIC,
                                        borderValue=(255, 255, 255))
                 whole_path = scratch / f"whole-{index}-{mode}.png"
@@ -181,13 +183,14 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
             return None
         seed = seeds[winner["seed"]]
         clean = cv2.imread(str(scratch / f"whole-{winner['seed']}-existing.png"))
-        geometry = _fit_ellipse_annulus(_ocr_color_mask(clean, "red"))
+        geometry = _fit_ellipse_annulus(_ocr_color_mask(clean, ink_color))
         if geometry is None:
             return None
         mx, my = _ellipse_normal_maps(*geometry)
         guide = SimpleNamespace(annulus=geometry, source_shape=clean.shape[:2], map_x=mx, map_y=my)
-        mono = cv2.imread(str(scratch / f"whole-{winner['seed']}-soft-red.png"), 0)
-        working = cv2.merge([mono, mono, np.full_like(mono, 255)])
+        mono = cv2.imread(str(scratch / f"whole-{winner['seed']}-soft-{ink_color}.png"), 0)
+        channels = [mono, mono, np.full_like(mono, 255)]
+        working = cv2.merge(channels if ink_color == "red" else channels[::-1])
         quality = ring_evidence_quality(clean, working, guide)
         if not quality["accepted"]:
             return None

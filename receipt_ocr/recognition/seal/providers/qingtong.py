@@ -85,6 +85,8 @@ def compare_qingtong_seal(requirement, external, match_mode="any"):
     result.update(recognized=comparison['recognized'], all_recognized=all_recognized,
                   score=comparison['score'], confidence=comparison['confidence'],
                   requirement_coverage=comparison['requirement_coverage'],
+                  comparison_policy=comparison['comparison_policy'],
+                  field_comparison=comparison.get('field_comparison'),
                   source='清瞳 · 印章模板识别' if selected['best_channel'] == 'template' else '清瞳 · 印章文字 OCR')
     count = selected['match_count']
     channel_match = count == 2 if match_mode == 'all' else count > 0

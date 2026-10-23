@@ -22,4 +22,6 @@ def inner_role(text):
         return 'station'
     if value.endswith('章') or value == '业务受理':
         return 'type'
+    if re.fullmatch(r'[\u4e00-\u9fff]{2,10}部', value):
+        return 'department'
     return ''

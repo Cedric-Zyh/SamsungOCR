@@ -39,9 +39,9 @@ export function createSampleLibrary({environment, ui, services, current, setBusy
     try {
       const result = await services.samples.importFiles(body);
       dialog().close();
-      const renamed = result.imported.filter(file => file.filename !== file.original_name).length;
-      toast(`已导入 ${result.imported.length} 张样单${renamed ? `，${renamed} 张同名图片已自动重命名` : ''}`, 'success');
-      await refresh(result.company);
+      const skipped = result.skipped?.length || 0;
+      toast(`已导入 ${result.imported.length} 张样单${skipped ? `，跳过 ${skipped} 张重复编号样单` : ''}`, 'success');
+      await refresh(result.imported.length ? result.company : undefined);
     } catch (error) { $('#sample-import-error').textContent = error.message; }
     finally {
       submitting = false; setBusy(false);
@@ -86,7 +86,7 @@ export function createSampleLibrary({environment, ui, services, current, setBusy
     if (state.busy || !names.length) return;
     const accepted = await confirmInline({environment, anchor: $('#sample-delete-selected'),
       title: `删除 ${names.length} 张样单？`, confirmLabel: '确认删除',
-      message: `将从样单库移除所选的 ${names.length} 张图片，后续统计不再包含它们。原图与历史测试记录保留，回单管理不受影响。`});
+      message: `将永久删除所选的 ${names.length} 张样单、原图、处理图片及历史测试记录，并释放样单编号。回单管理不受影响。`});
     if (!accepted) return;
     setBusy(true);
     try {

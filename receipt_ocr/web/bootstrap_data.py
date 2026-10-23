@@ -9,6 +9,7 @@ import zlib
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image
+from .sample_library import sample_number
 from flask import jsonify, request, send_file
 
 from receipt_ocr.domain.seal_standards import requirement_key
@@ -174,10 +175,13 @@ def import_package(ctx, service, stream, *, scope='all'):
                 reserved.update(service.library.catalog(include_deleted=True, connection=con))
                 reserved.update(row[0] for row in con.execute('SELECT filename FROM seed_samples.sample_library'))
                 reserved.update(row[0] for row in con.execute('SELECT filename FROM seed_samples.recognition_jobs'))
+            numbers = {sample_number(name) for name in reserved}
             for item in samples:
-                if item['filename'] in reserved:
+                number = sample_number(item['filename'])
+                if number in numbers:
                     counts['samples_skipped'] += 1
                     continue
+                numbers.add(number)
                 name = uuid4().hex + Path(item['filename']).suffix.lower()
                 target = service.library.directory / name
                 created.append(target)

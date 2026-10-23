@@ -122,7 +122,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
         if stage_backends["date"] != stage_backends["page"]
         else []
     )
-    signature_row = _find_signature_requirement_row(rows)
+    signature_row = _find_signature_requirement_row(rows) or getattr(context, 'footer_anchor', None)
     has_receipt_footer = signature_row is not None
     signature_anchor = signature_row.y if signature_row else 0.47
     date_row, date_rows, date_artifacts = None, [], []
@@ -213,6 +213,9 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_date) -
         _score_business_consensus(evidence, decision, consensus)
         _apply_review_confidence_caps(evidence, decision, consensus)
         date_check, date_row = decision.date_check, decision.date_row
+        if not has_receipt_footer:
+            date_check.update(execution_status='skipped', skip_reason='footer_unconfirmed',
+                              message='签收页脚尚未确认，已跳过日期识别，请核对本页或关联续页')
         if has_receipt_footer and decision.actual_date is None:
             partial_check = _partial_date_check(fields.get("要求到货", ""), date_rows)
             if partial_check.get("actual_display"):

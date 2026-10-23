@@ -22,7 +22,7 @@ def prepare_oval_ring(source, region, working, mask_path, guide, rotations,
     The observed border fit, original pixels and exact centre ink mask are
     reused; neither expected names nor previously recognized names are inputs.
     """
-    if region.color != "red" or guide is None or rotations is None:
+    if region.color not in {"red", "blue"} or guide is None or rotations is None:
         return None
     axes = guide.annulus[0][2][1]
     ratio = min(axes) / max(axes)
@@ -43,10 +43,11 @@ def prepare_oval_ring(source, region, working, mask_path, guide, rotations,
     b, g, r = (channel.astype(np.float32) for channel in cv2.split(original))
     # Difference at native resolution, before interpolation can mix neutral
     # form ink and coloured stamp ink into new coloured edge pixels.
-    chroma = np.maximum(r - np.maximum(g, b), 0)
+    chroma = np.maximum(r - np.maximum(g, b) if region.color == "red"
+                        else b - np.maximum(g, r), 0)
     mx, my = _ellipse_normal_maps(*guide.annulus)
     normal = replace(guide, map_x=mx, map_y=my)
-    ink_mask = _ocr_color_mask(clean, "red")
+    ink_mask = _ocr_color_mask(clean, region.color)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     views = []
@@ -80,10 +81,11 @@ def prepare_oval_ring(source, region, working, mask_path, guide, rotations,
         return None
     # Prefer the gentler gain once both observations corroborate the text.
     for key, image in (("source", first["gray"]), ("input", first["covered"])):
-        red = np.full((*image.shape, 3), 255, dtype=np.uint8)
-        red[:, :, 0] = red[:, :, 1] = image
+        colored = np.full((*image.shape, 3), 255, dtype=np.uint8)
+        other_channels = (0, 1) if region.color == "red" else (1, 2)
+        colored[:, :, other_channels] = image[:, :, None]
         path = destination.with_name(f"{destination.stem}-{key}.png")
-        if not cv2.imwrite(str(path), red):
+        if not cv2.imwrite(str(path), colored):
             raise ValueError("椭圆章原色展开输入保存失败")
         first[key] = path
     return {

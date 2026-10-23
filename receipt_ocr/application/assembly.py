@@ -9,7 +9,6 @@ from ..imaging.contracts import SealRegion
 from ..imaging.page import annotate_image
 from ..recognition.seal.orientation import DEFAULT_SEAL_ORIENTATION_MODE
 from ..recognition.seal.postprocess.providers import combine_seal_provider_checks
-from ..recognition.seal.postprocess.channels import local_seal_full_match, record_local_channel
 from .pipeline import attach_product_fields, complete_result, normalize_result_contract
 
 def _value(stage, result):
@@ -50,6 +49,8 @@ def select_variants(stage, successful, acceptance):
         matching = [v for v in successful if (v['result'].get('seal_check') or {}).get('status') == '匹配'
                     and (v['result'].get('seal_check') or {}).get('reliable') is True]
         decision_variants = matching or successful
+    if stage == 'seal' and provider_seal is not None:
+        decision_variants = successful
     primary = decision_variants[0]["result"]
     return provider_seal, decision_variants, primary
 
@@ -59,7 +60,8 @@ def apply_match_mode(output, stage, variants, successful, provider_seal, accepta
         output['date_check'].update(status='未核对', reliable=True, message='按设置跳过签收日期核对')
     if stage == 'seal' and acceptance.get('seal_match_mode') == 'none':
         output['seal_check'].update(status='未核对', reliable=True, message='按设置跳过客户印章核对')
-    if stage == 'seal' and provider_seal is None and acceptance.get('seal_match_mode') == 'all':
+    if (stage == 'seal' and acceptance.get('seal_match_mode') == 'all'
+            and (provider_seal is None or len(successful) != len(variants))):
         all_checks = [variant.get('result', {}).get('seal_check') for variant in variants]
         all_match = bool(all_checks) and len(all_checks) == len(successful) == len(variants) and all(
             check.get('status') == '匹配' and check.get('reliable') is True
@@ -118,39 +120,30 @@ def merge_primary(output, stage, primary, successful, variants, provider_seal, a
             preview_regions = primary.get("seal_regions", [])
             if provider_seal is not None:
                 output['seal_check'] = provider_seal
-            if stage == 'seal':
-                # A local reading taken inside QingTong's own stamp box is
-                # independent evidence for that same stamp, so an exact
-                # match there decides the verdict under ``any``.
-                local_winner = next(
-                    (
-                        v["result"].get("seal_check")
-                        for v in successful
-                        if local_seal_full_match(v["result"].get("seal_check"))
-                    ),
-                    None,
-                )
-                if local_winner is not None:
-                    output['seal_check'] = record_local_channel(
-                        output['seal_check'], local_winner,
-                        acceptance.get('seal_match_mode', 'any'),
-                    )
         apply_match_mode(output, stage, variants, successful, provider_seal, acceptance)
     return preview_regions, preview_date_box
+
+
+def _variant_skipped(stage, variant):
+    return (variant.get("result", {}).get(f"{stage}_check", {})
+            .get("execution_status") == "skipped")
+
+
+def _recognition_status(stage, selected, variants):
+    if not selected:
+        return "未执行"
+    successful = [variant for variant in variants if "result" in variant]
+    if not successful:
+        return "识别失败"
+    if all(_variant_skipped(stage, variant) for variant in successful):
+        return "已跳过（页脚尚未确认）"
+    return "已执行"
 
 
 def finish_result(output, context, config, results, reasons, issues, stage_reasons, preview_regions, preview_date_box, source, preview_path, kwargs):
     output["recognition_config"] = config
     output["recognition_status"] = {
-        stage: (
-            "未执行"
-            if not config[stage]
-            else (
-                "识别失败"
-                if not any("result" in v for v in results[stage])
-                else "已执行"
-            )
-        )
+        stage: _recognition_status(stage, config[stage], results[stage])
         for stage in STAGES
     }
     reasons = list(dict.fromkeys(reasons))
@@ -160,7 +153,8 @@ def finish_result(output, context, config, results, reasons, issues, stage_reaso
     primary_backends = {"page": context.primary_backend or "skipped"}
     for stage in ("date", "seal"):
         primary_backends[stage] = next(
-            (variant["method"] for variant in results[stage] if "result" in variant),
+            (variant["method"] for variant in results[stage]
+             if "result" in variant and not _variant_skipped(stage, variant)),
             "skipped",
         )
     if (

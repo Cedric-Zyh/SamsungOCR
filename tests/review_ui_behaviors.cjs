@@ -76,6 +76,16 @@ test('strict exact local seal matches display as matched without auxiliary warni
   assert.doesNotMatch(markup, /匹配待确认|单模型辅助证据/);
 });
 
+test('local partial matches display as independent source evidence', () => {
+  const markup = sealEvidenceMarkup({seal_check: {
+    local_channel: {backend: 'PaddleOCR PP-OCRv6 Small', recognized: '客户收货章',
+      status: '部分匹配', reliable: false, comparison_policy: 'strict_text'}
+  }});
+  assert.match(markup, /部分匹配/);
+  assert.match(markup, /独立对照本单签章要求/);
+  assert.doesNotMatch(markup, /单模型辅助证据/);
+});
+
 test('QingTong evidence remains visible when the selected result comes from Danzhengtong', () => {
   const markup = sealEvidenceMarkup({seal_check: {backend: '单证通', recognized: '客户公司', status: '匹配'},
     recognition_variants: {seal: [{method: 'qingtong', details: {seal_check: {dual_check: {selected: {

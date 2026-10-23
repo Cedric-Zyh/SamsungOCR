@@ -17,10 +17,9 @@ from ..domain.parsing import (
 from ..domain.fields.rules import (
     _is_neighboring_label_misread_as_receipt_note,
     _prefer_detail_field,
-    _prefer_detail_requirement,
     _recover_confirmed_template_note,
 )
-from ..recognition.fields.fallbacks import _recover_signature_requirement
+from ..recognition.fields.requirement_page import signature_requirement_from_page
 
 
 from ..domain.results import FieldStageResult
@@ -75,20 +74,6 @@ def recognize(context: DocumentContext, request: StageRequest) -> FieldStageResu
                     "value": detail_customer,
                     "source": f"{stage_labels['date']} 整页回退",
                 }
-            # Long stamp requirements are often split into multiple boxes or
-            # lose one/two glyphs. Prefer the detail pass only when it is a
-            # demonstrably fuller version of the same text, or the primary
-            # value is semantically unusable. Unrelated alternatives are never
-            # substituted.
-            primary_requirement = fields.get("签章要求", "")
-            detail_requirement = detail_fields.get("签章要求", "")
-            if _prefer_detail_requirement(primary_requirement, detail_requirement):
-                fields["签章要求"] = detail_requirement
-                field_fallbacks["签章要求"] = {
-                    "original": primary_requirement,
-                    "value": detail_requirement,
-                    "source": f"{stage_labels['seal']} 整页回退",
-                }
             # The receipt note is a printed fixed-template field.  If Paddle
             # misses the whole line under a stamp, retain the detail OCR
             # reading first; ``standardize_fixed_phrases`` below will only
@@ -107,36 +92,34 @@ def recognize(context: DocumentContext, request: StageRequest) -> FieldStageResu
                     "source": f"{stage_labels['date']} 整页回退",
                 }
         # The signature-requirement field is an OCR transcription. Preserve
-        # the selected OCR text exactly; only the dedicated color-clean crop
-        # below may replace it when that OCR pass succeeds.
+        # the selected page OCR text exactly. Evidence crops never trigger a
+        # second detector or line recognition call.
         signature_requirement_ocr = fields.get("签章要求", "")
-        requirement_line = _recover_signature_requirement(
+        requirement_line = signature_requirement_from_page(
             source,
             rows,
-            fields.get("签章要求", ""),
             stage_backends["page"],
-            customer=fields.get("客户名称", ""),
+            clean_image=context.printed_page_image(),
             artifact_dir=request.artifact_dir,
             artifact_url_prefix=request.artifact_url_prefix,
             artifacts=requirement_artifacts,
-            text_recognizer=context.text_recognizer,
         )
         if requirement_line:
+            context.confirm_requirement_footer(requirement_line)
             original_requirement = fields.get("签章要求", "")
             signature_requirement_ocr = requirement_line["value"]
             fields["签章要求"] = requirement_line["value"]
             field_fallbacks["签章要求"] = {
                 "original": original_requirement,
                 "value": requirement_line["value"],
-                "source": f"{stage_labels['page']} 签章要求行识别",
+                "source": f"{stage_labels['page']} 去印章色整页识别",
                 "confidence": requirement_line["confidence"],
             }
         contextual_corrections = repair_contextual_fields(fields)
-        if signature_requirement_ocr:
-            # Contextual repair may use the requirement as evidence for other
-            # fields, but it must never rewrite this OCR transcription.
-            fields["签章要求"] = signature_requirement_ocr
-            contextual_corrections.pop("签章要求", None)
+        # Contextual repair may use the requirement for other fields; it may
+        # never replace this transcription or invent an absent requirement.
+        fields["签章要求"] = signature_requirement_ocr
+        contextual_corrections.pop("签章要求", None)
         fixed_phrase_corrections = standardize_fixed_phrases(fields)
         if template_note:
             fixed_phrase_corrections["签收说明"] = {
