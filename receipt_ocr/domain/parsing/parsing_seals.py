@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 
 from .parsing_text import normalize_text
 from .seal_information_fields import compare_information_fields
+from .seal_script import simplify_seal_text
 
 
 def normalize_seal_text_strict(text: str) -> str:
@@ -14,14 +15,15 @@ def normalize_seal_text_strict(text: str) -> str:
 
     Do not use the general receipt normalizer: it drops other punctuation,
     which could hide a wrong character or change a station identifier.
+    Convert documented, unambiguous traditional/simplified glyph equivalents.
     Restrict width conversion to ASCII forms so compatibility normalization
-    cannot silently equate different Chinese characters or numeric symbols.
+    cannot silently equate other Chinese characters or numeric symbols.
     """
-    return "".join(
+    return simplify_seal_text("".join(
         chr(ord(character) - 0xFEE0) if "\uff01" <= character <= "\uff5e" else character
         for character in text
         if not character.isspace() and character not in "()（）|｜"
-    )
+    ))
 
 
 def _strict_seal_text_status(expected: str, actual: str) -> str:
@@ -143,7 +145,8 @@ def compare_seal_text_strict(
             # extra field when the requirement omits it. Preserve the full
             # observed text and never strip station IDs or long ring serials.
             numbers = list(re.finditer(
-                r"(?:专用章|收货章|业务受理)\s*(?P<number>[（(]\s*[0-9０-９]{1,3}\s*[）)])", text
+                r"(?:专用章|收货章|业务受理)\s*(?P<number>[（(]\s*[0-9０-９]{1,3}\s*[）)])",
+                simplify_seal_text(text),
             ))
             if len(numbers) == 1:
                 start, end = numbers[0].span("number")

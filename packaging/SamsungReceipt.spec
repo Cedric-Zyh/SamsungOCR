@@ -16,6 +16,7 @@ SPEC_DIR = SPEC_LOCATION if SPEC_LOCATION.is_dir() else SPEC_LOCATION.parent
 ROOT = SPEC_DIR.parent
 
 datas = [
+    (str(ROOT / "licenses"), "licenses"),
     (str(ROOT / "templates"), "templates"),
     (str(ROOT / "static"), "static"),
     (str(ROOT / "数据" / "ground_truth.json"), "数据"),

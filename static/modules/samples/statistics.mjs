@@ -37,9 +37,18 @@ export function filterStatistics(rows, {company = '', tab = 'seal', filter = ''}
 export function statisticsCell(cell, showDecision = true) {
   const tone = cell.state === '正确' ? 'good' : BAD.has(cell.state) ? 'bad' : 'neutral';
   return `<span class="sample-stat-state ${tone}">${esc(cell.state)}</span>
-    <span class="sample-stat-value">${esc(cell.value || (cell.state === '正确' ? '空白' : '—'))}</span>
+    <span class="sample-stat-value" title="${esc(cell.value || '')}">${esc(cell.value || (cell.state === '正确' ? '空白' : '—'))}</span>
     ${showDecision && cell.decision ? `<small>判定：${esc(cell.decision)}</small>` : ''}
     ${cell.note ? `<details><summary>说明</summary>${esc(cell.note)}</details>` : ''}`;
+}
+
+export function statisticsDistribution(stats) {
+  if (!stats.total) return '<div class="sample-stat-distribution-empty">暂无可评测结果</div>';
+  const parts = [['正确', 'good'], ['错误', 'bad'], ['未识别', 'missing'], ['失败', 'failed']];
+  return `<div class="sample-stat-distribution" role="img" aria-label="${parts.map(([state]) => `${state} ${stats[state] || 0}`).join('，')}">${parts.map(([state, tone]) => {
+    const count = stats[state] || 0;
+    return count ? `<span class="${tone}" style="width:${count / stats.total * 100}%" title="${state} ${count} · ${(count / stats.total * 100).toFixed(1)}%"></span>` : '';
+  }).join('')}</div>`;
 }
 
 function card(label, stats, isSeal) {
@@ -47,6 +56,7 @@ function card(label, stats, isSeal) {
   return `<article class="sample-stat-card"><h3>${esc(label)}</h3>
     <p><strong>${percentage}</strong><span>${isSeal ? '判定正确率' : '日期正确率'}</span></p>
     <div>正确 ${stats['正确'] || 0} / 可评测 ${stats.total}</div>
+    ${statisticsDistribution(stats)}
     <footer>错误 ${stats['错误'] || 0} · 未识别 ${stats['未识别'] || 0} · 失败 ${stats['失败'] || 0}</footer>
     <small>待标注 ${stats['待标注'] || 0} · 未运行 ${stats['未运行'] || 0} · 测试中 ${stats['测试中'] || 0}</small></article>`;
 }
@@ -60,19 +70,34 @@ function dateCards(stats) {
     ['未识别 / 失败', (stats['未识别'] || 0) + (stats['失败'] || 0),
       `未识别 ${stats['未识别'] || 0} · 失败 ${stats['失败'] || 0}`],
   ];
-  return entries.map(([title, value, detail]) => `<article class="sample-stat-card"><h3>${title}</h3>
-    <p><strong>${value}</strong></p><div>${detail}</div></article>`).join('');
+  return entries.map(([title, value, detail], index) => `<article class="sample-stat-card"><h3>${title}</h3>
+    <p><strong>${value}</strong></p><div>${detail}</div>${index === 0 ? statisticsDistribution(stats) : ''}</article>`).join('');
 }
 
 export function createSampleStatistics({environment, ui, services, openResult, openOriginal, imageUrl}) {
   const {$, $$, toast} = ui;
   let data = null, company = '', taskId = '', tab = 'seal', filter = '', page = 1;
+  let section = 'overview';
+  const typeFilters = {date: '', seal: ''};
   let revision = 0, loading = false, rendered = '', knownCompanies = [];
   let exporting = false;
   const dialog = () => $('#sample-statistics-dialog');
   const syncExport = () => { $('#sample-statistics-export').disabled = !data || loading || exporting; };
 
-  function render() {
+  function render(resetTableScroll = false) {
+    dialog().dataset.section = section;
+    $$('[data-stat-section]').forEach(button => {
+      const active = button.dataset.statSection === section;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.setAttribute('tabindex', active ? '0' : '-1');
+    });
+    $('#sample-statistics-body').setAttribute('aria-labelledby', `sample-statistics-${section === 'overview' ? 'overview' : 'details'}-tab`);
+    $('#sample-statistics-note').hidden = section !== 'overview';
+    $('#sample-statistics-show-details').hidden = section !== 'overview';
+    $('#sample-statistics-pagination').hidden = section !== 'details' || !data;
+    $('#sample-statistics-export').title = section === 'overview'
+      ? '导出当前公司和测试范围的全部汇总及明细' : '导出当前筛选条件下的全部汇总及明细';
     if (!data) return;
     const scoped = filterStatistics(data.items, {company});
     const rows = filterStatistics(data.items, {company, tab, filter});
@@ -81,7 +106,9 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     const pending = scoped.filter(row => ['queued', 'running', 'awaiting_upload'].includes(row.job_status)).length;
     const tested = scoped.filter(row => ['succeeded', 'failed'].includes(row.job_status)).length;
     const failed = scoped.filter(row => row.job_status === 'failed').length;
-    $('#sample-statistics-summary').textContent = `样单 ${scoped.length} · 已测试 ${tested} · 未测试 ${scoped.filter(row => !row.job_status).length} · 测试中 ${pending} · 运行失败 ${failed}`;
+    $('#sample-statistics-summary').innerHTML = [['样单', scoped.length], ['已测试', tested],
+      ['未测试', scoped.filter(row => !row.job_status).length], ['测试中', pending], ['运行失败', failed]]
+      .map(([label, count]) => `<span>${label} <b>${count}</b></span>`).join('');
     $$('[data-stat-tab]').forEach(button => {
       const active = button.dataset.statTab === tab;
       button.classList.toggle('active', active);
@@ -92,32 +119,37 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     const filters = [['', '全部'], ['errors', tab === 'seal' ? '任一路错误' : '只看错误'],
       ...(tab === 'seal' ? [['remote', '清瞳两路不一致'], ['local', '清瞳与本地不一致']] : []),
       ['missing', '未识别 / 失败']];
-    const markup = `<div class="sample-stat-cards">${tab === 'date' ? dateCards(dateStats) : columns.map(column => card(column.label,
+    const overviewMarkup = `<div class="sample-stat-cards${tab === 'date' ? ' is-date' : ''}">${tab === 'date' ? dateCards(dateStats) : columns.map(column => card(column.label,
       summarizeCells(scoped.map(row => sealCell(row, column.key))), true)).join('')}</div>
-      ${tab === 'date' ? `<p class="sample-stat-date-note">待标注 ${dateStats['待标注'] || 0} · 未运行 ${dateStats['未运行'] || 0} · 测试中 ${dateStats['测试中'] || 0}，不计入正确率</p>` : ''}
-      <div class="sample-stat-filters" role="group" aria-label="筛选统计结果">${filters.map(([key, label]) =>
-        `<button type="button" data-stat-filter="${key}" class="secondary-button${filter === key ? ' active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div>
-      <div class="sample-stat-table-wrap"><table class="sample-stat-table">
+      ${tab === 'date' ? `<p class="sample-stat-date-note">待标注 ${dateStats['待标注'] || 0} · 未运行 ${dateStats['未运行'] || 0} · 未测试 ${dateStats['未测试'] || 0} · 测试中 ${dateStats['测试中'] || 0}，不计入正确率</p>` : ''}`;
+    const detailsMarkup = `<div class="sample-stat-detail-toolbar"><div class="sample-stat-filters" role="group" aria-label="筛选统计结果">${filters.map(([key, label]) =>
+        `<button type="button" data-stat-filter="${key}" class="secondary-button${filter === key ? ' active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div><span>共 ${rows.length} 张</span></div>
+      <div class="sample-stat-table-wrap"><table class="sample-stat-table" style="min-width:${Math.max(850, (columns.length + 3) * 170)}px">
       <thead><tr><th>样单 / 客户公司</th><th>${tab === 'seal' ? '签章要求 / 标注结论' : '标注日期'}</th>
       ${columns.map(column => `<th>${esc(column.label)}</th>`).join('')}<th>操作</th></tr></thead>
       <tbody>${rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(row =>
         `<tr><td><strong>${esc(row.filename)}</strong><small>${esc(row.company)}</small></td>
         <td>${esc(tab === 'seal' ? row.requirement || '未标注签章要求' : row.expected_date === null ? '待标注' : row.expected_date || '空白')}
         ${tab === 'seal' ? `<small>标注：${esc(row.expected_seal ? `应${row.expected_seal}` : '待标注')}</small>` : ''}</td>
-        ${columns.map(column => `<td>${statisticsCell(tab === 'date' ? row.date : sealCell(row, column.key), tab === 'seal')}</td>`).join('')}
+        ${columns.map(column => `<td>${statisticsCell(tab === 'date' ? row.date : sealCell(row, column.key), false)}</td>`).join('')}
         <td><button type="button" class="text-button" data-stat-view="${esc(row.filename)}">${row.result_id ? '查看' : '预览'} ›</button></td></tr>`).join('')
         || `<tr><td colspan="${columns.length + 3}" class="empty-state">当前范围没有符合条件的样单</td></tr>`}</tbody></table></div>`;
+    const markup = section === 'overview' ? overviewMarkup : detailsMarkup;
     if (markup !== rendered) {
       // Preserve keyboard focus during automatic status refresh.
       const focusedFilter = environment.document.activeElement?.dataset?.statFilter;
+      const table = $('#sample-statistics-body').querySelector?.('.sample-stat-table-wrap');
+      const tableTop = resetTableScroll ? 0 : table?.scrollTop || 0, tableLeft = table?.scrollLeft || 0;
       $('#sample-statistics-body').innerHTML = markup;
+      const updatedTable = $('#sample-statistics-body').querySelector?.('.sample-stat-table-wrap');
+      if (updatedTable) { updatedTable.scrollTop = tableTop; updatedTable.scrollLeft = tableLeft; }
       rendered = markup;
       if (focusedFilter !== undefined) $$('[data-stat-filter]').find(button => button.dataset.statFilter === focusedFilter)?.focus();
     }
     $('#sample-statistics-note').textContent = tab === 'seal'
       ? '按人工标注的“应匹配 / 应不匹配”评估各路判定，不代表印章逐字转写准确率。未识别、失败计入分母；未测试、未运行、测试中、待标注不计入。'
       : '识别日期与人工标注日期比较，标注为空白且未读出日期也算正确。未识别、失败计入分母；未测试、未运行、测试中、待标注不计入。';
-    $('#sample-statistics-page').textContent = `共 ${rows.length} 张 · ${page} / ${pages}`;
+    $('#sample-statistics-page').textContent = `显示 ${rows.length ? (page - 1) * PAGE_SIZE + 1 : 0}–${Math.min(page * PAGE_SIZE, rows.length)}，共 ${rows.length} 张 · ${page} / ${pages}`;
     $('#sample-statistics-prev').disabled = page <= 1;
     $('#sample-statistics-next').disabled = page >= pages;
   }
@@ -130,7 +162,8 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     if (reset) {
       data = null; rendered = '';
       $('#sample-statistics-body').innerHTML = '<p class="empty-state">正在加载统计结果…</p>';
-      $('#sample-statistics-summary').textContent = '';
+      $('#sample-statistics-summary').innerHTML = '';
+      render();
     }
     $('#sample-statistics-feedback').textContent = '';
     try {
@@ -151,7 +184,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
 
   async function exportExcel() {
     if (!data || loading || exporting) return;
-    const params = {company, task_id: taskId, tab, filter};
+    const params = {company, task_id: taskId, tab, filter: section === 'details' ? filter : ''};
     const title = tab === 'seal' ? '印章结果' : '日期结果';
     exporting = true; syncExport();
     $('#sample-statistics-export').textContent = '导出中…';
@@ -179,7 +212,8 @@ export function createSampleStatistics({environment, ui, services, openResult, o
 
   function show(context) {
     company = context.company; knownCompanies = context.companies;
-    page = 1; filter = ''; taskId = '';
+    page = 1; filter = ''; taskId = ''; section = 'overview';
+    typeFilters.date = ''; typeFilters.seal = '';
     $('#sample-statistics-batch').value = '';
     $('#sample-statistics-company').innerHTML = '<option value="">全部公司</option>' +
       knownCompanies.map(row => `<option value="${esc(row.name)}">${esc(row.name)}</option>`).join('');
@@ -189,18 +223,35 @@ export function createSampleStatistics({environment, ui, services, openResult, o
   }
 
   function initialize() {
-    $('#sample-statistics-company').addEventListener('change', event => { company = event.target.value; page = 1; render(); });
+    $('#sample-statistics-company').addEventListener('change', event => { company = event.target.value; page = 1; render(true); });
     $('#sample-statistics-batch').addEventListener('change', event => { taskId = event.target.value; page = 1; refresh({reset: true}); });
     $('#sample-statistics-refresh').addEventListener('click', () => refresh());
     $('#sample-statistics-export').addEventListener('click', exportExcel);
     $$('[data-stat-tab]').forEach(button => button.addEventListener('click', () => {
-      tab = button.dataset.statTab; filter = ''; page = 1; render();
+      typeFilters[tab] = filter;
+      tab = button.dataset.statTab; filter = typeFilters[tab]; page = 1; render(true);
     }));
-    $('#sample-statistics-prev').addEventListener('click', () => { page--; render(); });
-    $('#sample-statistics-next').addEventListener('click', () => { page++; render(); });
+    const showSection = next => { section = next; render(); };
+    $$('[data-stat-section]').forEach(button => {
+      button.addEventListener('click', () => showSection(button.dataset.statSection));
+      button.addEventListener('keydown', event => {
+        const buttons = $$('[data-stat-section]');
+        const index = buttons.indexOf(button);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+          : event.key === 'ArrowRight' ? (index + 1) % buttons.length
+          : event.key === 'ArrowLeft' ? (index + buttons.length - 1) % buttons.length : -1;
+        if (next < 0) return;
+        event.preventDefault(); showSection(buttons[next].dataset.statSection); buttons[next].focus();
+      });
+    });
+    $('#sample-statistics-show-details').addEventListener('click', () => {
+      showSection('details'); $('#sample-statistics-details-tab').focus();
+    });
+    $('#sample-statistics-prev').addEventListener('click', () => { page--; render(true); });
+    $('#sample-statistics-next').addEventListener('click', () => { page++; render(true); });
     $('#sample-statistics-body').addEventListener('click', async event => {
       const chip = event.target.closest('[data-stat-filter]');
-      if (chip) { filter = chip.dataset.statFilter; page = 1; render(); return; }
+      if (chip) { filter = chip.dataset.statFilter; page = 1; render(true); return; }
       const button = event.target.closest('[data-stat-view]');
       if (!button || !data) return;
       const row = data.items.find(item => item.filename === button.dataset.statView);

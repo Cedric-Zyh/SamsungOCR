@@ -2,16 +2,18 @@ import {escapeHtml} from '../core/ui.mjs';
 import {createSampleStatistics} from './statistics.mjs';
 import {createCompanyMarks, companyRowMarkup, requirementRowMarkup} from './company_marks.mjs';
 import {createSampleLibrary} from './library.mjs';
+import {createResultFilters, matchesResultFilters} from './result_filters.mjs';
 
 const PAGE_SIZE = 6;
 export const sampleImageUrl = (name, thumbnail = false) =>
   `/api/samples/image/${encodeURIComponent(name)}${thumbnail ? '?thumbnail=1' : ''}`;
 
-export function sampleScope(items, {company = '', search = '', status = '', requirement = null} = {}) {
+export function sampleScope(items, {company = '', search = '', status = '', requirement = null, resultFilters = {}} = {}) {
   const query = search.trim().toLocaleLowerCase();
   return items.filter(item => (!company || item.company === company)
     && (requirement === null || (item.requirement_key || '') === requirement)
-    && (!query || item.filename.toLocaleLowerCase().includes(query)) && (!status || item.status === status));
+    && (!query || item.filename.toLocaleLowerCase().includes(query)) && (!status || item.status === status)
+    && matchesResultFilters(item, resultFilters));
 }
 
 export function sampleCompanyProgress(items) {
@@ -25,7 +27,7 @@ export function sampleCompanyProgress(items) {
   return {state, label, title: `共 ${total} 张，已完成 ${completed} 张，测试中 ${running} 张，运行失败 ${failed} 张。已测完表示测试执行完成，不代表识别结果全部正确。`};
 }
 
-export function sampleCard(item, selected) {
+export function sampleCard(item, selected, evidence = '') {
   const filename = escapeHtml(item.filename), busy = item.status === '测试中';
   const checks = [['日期', item.checks?.date], ['印章', item.checks?.seal], ['签名', item.signature]];
   const detail = item.status === '已完成'
@@ -33,7 +35,7 @@ export function sampleCard(item, selected) {
     : `<p class="${item.error ? 'sample-card-error' : ''}">${escapeHtml(item.error || (busy ? item.job_status === 'queued' ? '等待测试…' : '正在识别…' : '尚无测试结果'))}</p>`;
   return `<article class="sample-card${selected ? ' is-selected' : ''}" data-filename="${filename}">
     <div class="sample-card-image"><button class="sample-thumbnail" type="button" data-sample-preview aria-label="预览 ${filename}"><img src="${sampleImageUrl(item.filename, true)}" loading="lazy" alt="${filename} 样单缩略图"></button><label><input type="checkbox" data-sample-select aria-label="选择 ${filename}" ${selected ? 'checked' : ''} ${busy ? 'disabled' : ''}></label><span class="sample-state" data-status="${escapeHtml(item.status)}">${escapeHtml(item.status)}</span></div>
-    <div class="sample-card-copy"><h3>${filename}</h3>${detail}
+    <div class="sample-card-copy"><h3>${filename}</h3>${detail}${evidence}
     <div class="sample-card-actions"><button type="button" data-sample-preview>预览</button><button type="button" data-sample-result ${item.result_id ? '' : 'disabled'}>测试结果</button><button type="button" data-sample-run ${busy ? 'disabled' : ''}>${busy ? '测试中…' : item.result_id || item.status === '运行失败' ? '重新测试' : '运行测试'}</button></div></div></article>`;
 }
 
@@ -45,6 +47,9 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   let selected = new Set(), loadPromise = null, running = false, loaded = false, lastRender = '';
   let historyLoading = false, historyMarkup = '';
   let companyMarkup = '';
+  const resultFilters = createResultFilters({environment, ui, changed: () => {
+    page = 1; selected.clear(); render(); $('#sample-grid').scrollTop = 0;
+  }});
   const companyMarks = createCompanyMarks({environment, ui, services, render: renderCompanies});
   const statistics = createSampleStatistics({environment, ui, services, openResult, openOriginal, imageUrl: sampleImageUrl});
   const library = createSampleLibrary({environment, ui, services,
@@ -60,11 +65,13 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
         $('#sample-search').value = '';
         $('#sample-company-search').value = '';
         $('#sample-company-mark-filter [data-company-mark-filter=""]').click();
+        resultFilters.reset();
       }
       renderCompanies(); render();
     },
   });
-  const scope = () => sampleScope(items, {company, requirement, search: $('#sample-search').value, status});
+  const scope = () => sampleScope(items, {company, requirement, search: $('#sample-search').value, status,
+    resultFilters: resultFilters.current()});
   const companyItems = () => sampleScope(items, {company});
   const groupItems = () => sampleScope(items, {company, requirement});
   const visible = () => scope().slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -119,6 +126,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-clear-selection').textContent = `已选 ${selected.size} 张${selected.size ? ' · 清空' : ''}`;
     $('#sample-clear-selection').disabled = !selected.size;
     $('#sample-run-company').disabled = running || !companyItems().some(item => item.status !== '测试中');
+    $('#sample-result-filters-run').disabled = running || !scope().some(item => item.status !== '测试中');
     $$('#sample-grid [data-sample-select]').forEach(input => {
       input.checked = selected.has(input.closest('[data-filename]').dataset.filename);
       input.closest('.sample-card').classList.toggle('is-selected', input.checked);
@@ -131,18 +139,22 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
 
   function render() {
     const rows = scope(), pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const names = new Set(rows.map(item => item.filename));
+    selected = new Set([...selected].filter(name => names.has(name)));
     page = Math.min(page, pages);
     $('#sample-company-title').textContent = company || '全部样单';
     const groupLabel = requirement === null ? '' : requirementGroups[company]?.find(group => group.key === requirement)?.name || '未归类';
     $('#sample-library-summary').textContent = `${groupLabel ? `签章要求：${groupLabel} · ` : ''}${groupItems().length} 张样单 · ${sampleCompanyProgress(groupItems()).label} · 使用当前配置`;
     $('#sample-run-company').textContent = company ? '▶ 运行本公司全部' : '▶ 运行全部样单';
     $('#sample-classify').hidden = false;
-    const markup = visible().map(item => sampleCard(item, selected.has(item.filename))).join('') ||
+    const markup = visible().map(item => sampleCard(item, selected.has(item.filename), resultFilters.evidence(item))).join('') ||
       `<div class="empty-state">${items.length ? '当前条件下没有样单，请调整搜索或筛选。' : '暂无样单，点击右上角「导入样单」添加图片。'}</div>`;
     // Polling must not replace focused controls just because selection changed.
-    const renderKey = JSON.stringify(visible()) + Boolean(items.length);
+    const renderKey = JSON.stringify([visible(), resultFilters.current()]) + Boolean(items.length);
     if (renderKey !== lastRender) { $('#sample-grid').innerHTML = markup; lastRender = renderKey; }
     $('#sample-page-info').textContent = rows.length ? `显示 ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, rows.length)}，共 ${rows.length} 张` : '共 0 张';
+    if (rows.length !== groupItems().length) $('#sample-page-info').textContent += `（筛选前 ${groupItems().length} 张）`;
+    resultFilters.render(rows.length, groupItems().length, running, Boolean(status || $('#sample-search').value.trim()));
     $('#sample-page-number').textContent = `${page} / ${pages}`;
     $('#sample-prev').disabled = page <= 1;
     $('#sample-next').disabled = page >= pages;
@@ -164,6 +176,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     try {
       const data = await services.samples.list();
       items = data.items; companies = data.companies;
+      resultFilters.updateSources(data.filter_seal_sources);
       requirementGroups = data.requirement_groups || {};
       companyMarks.update(data);
       if (company && company !== '未分类' && !companies.some(row => row.name === company)) { company = ''; requirement = null; classificationRequirement = null; }
@@ -215,6 +228,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       const accepted = new Set(data.accepted);
       for (const item of items) if (accepted.has(item.filename)) {
         item.status = '测试中'; item.job_status = 'queued'; item.error = '';
+        delete item.result_filters;
         selected.delete(item.filename);
       }
       renderCompanies();
@@ -251,6 +265,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   }
 
   function initialize() {
+    resultFilters.initialize();
     statistics.initialize();
     companyMarks.initialize();
     library.initialize();
@@ -304,6 +319,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       } catch (error) { toast(error.message, 'danger'); }
     });
     $('#sample-run-selected').addEventListener('click', () => run([...selected]));
+    $('#sample-result-filters-run').addEventListener('click', () => run(scope().filter(item => item.status !== '测试中').map(item => item.filename)));
     $('#sample-run-company').addEventListener('click', () => run(companyItems().map(item => item.filename)));
     $('#sample-classify').addEventListener('click', classify);
     $('#sample-history-open').addEventListener('click', showHistory);

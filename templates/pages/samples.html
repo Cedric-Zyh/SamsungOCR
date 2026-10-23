@@ -32,6 +32,7 @@
         <button type="button" data-sample-status="已完成" aria-pressed="false">已完成</button>
         <button type="button" data-sample-status="运行失败" aria-pressed="false">运行失败</button>
       </div>
+      {% include "partials/sample_result_filters.html" %}
       <p id="sample-feedback" role="status" class="sample-feedback"></p>
       <div id="sample-grid" class="sample-grid" aria-label="样单卡片"></div>
       <nav class="sample-pagination" aria-label="样单分页"><span id="sample-page-info"></span><div><button type="button" class="mini-button" id="sample-prev">上一页</button><span id="sample-page-number"></span><button type="button" class="mini-button" id="sample-next">下一页</button></div></nav>
@@ -78,14 +79,15 @@
   <div id="sample-history-body" aria-live="polite"></div>
 </dialog>
 <dialog id="sample-statistics-dialog" class="workspace-dialog sample-statistics-dialog" aria-labelledby="sample-statistics-title">
-  <header class="sample-statistics-heading"><div><h2 id="sample-statistics-title">样单统计结果</h2><p>对照人工标注，分别查看日期和各路印章结果</p></div><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-statistics-refresh">刷新</button><button type="button" class="secondary-button" id="sample-statistics-export" title="导出当前公司、测试范围及筛选条件下的全部记录" disabled>导出 Excel</button><button type="button" class="secondary-button" data-dismiss-dialog autofocus>关闭 ×</button></div></header>
+  <header class="sample-statistics-heading"><div><h2 id="sample-statistics-title">样单统计结果</h2><p>按人工标注评估识别结果</p></div><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-statistics-refresh">刷新</button><button type="button" class="secondary-button" id="sample-statistics-export" title="导出当前统计范围的汇总及明细" disabled>导出 Excel</button><button type="button" class="secondary-button" data-dismiss-dialog autofocus>关闭 ×</button></div></header>
   <div class="sample-statistics-scope">
     <label>客户公司 <select id="sample-statistics-company"><option value="">全部公司</option></select></label>
     <label>统计范围 <select id="sample-statistics-batch"><option value="">每张样单最近一次测试</option></select></label>
-    <p id="sample-statistics-summary" aria-live="polite"></p>
+    <div class="sample-stat-type" role="group" aria-label="统计类型"><button type="button" data-stat-tab="date" aria-pressed="false">日期结果</button><button type="button" data-stat-tab="seal" class="active" aria-pressed="true">印章结果</button></div>
   </div>
-  <div class="sample-tabs" role="group" aria-label="统计类型"><button type="button" data-stat-tab="date" aria-pressed="false">日期结果</button><button type="button" data-stat-tab="seal" class="active" aria-pressed="true">印章结果</button></div>
+  <div class="sample-tabs sample-stat-sections" role="tablist" aria-label="统计视图"><button type="button" id="sample-statistics-overview-tab" data-stat-section="overview" role="tab" aria-selected="true" aria-controls="sample-statistics-body">正确率概览</button><button type="button" id="sample-statistics-details-tab" data-stat-section="details" role="tab" aria-selected="false" aria-controls="sample-statistics-body" tabindex="-1">样单明细</button></div>
+  <div id="sample-statistics-summary" class="sample-stat-summary" aria-live="polite"></div>
   <p id="sample-statistics-feedback" role="alert"></p>
-  <div id="sample-statistics-body"></div>
-  <footer class="sample-statistics-footer"><p id="sample-statistics-note"></p><nav aria-label="统计分页"><span id="sample-statistics-page"></span><button type="button" class="mini-button" id="sample-statistics-prev" aria-label="上一页统计结果" disabled>‹</button><button type="button" class="mini-button" id="sample-statistics-next" aria-label="下一页统计结果" disabled>›</button></nav></footer>
+  <div id="sample-statistics-body" role="tabpanel" aria-labelledby="sample-statistics-overview-tab"></div>
+  <footer class="sample-statistics-footer"><p id="sample-statistics-note"></p><button type="button" id="sample-statistics-show-details" class="text-button">查看样单明细 →</button><nav id="sample-statistics-pagination" aria-label="统计分页" hidden><span id="sample-statistics-page"></span><button type="button" class="mini-button" id="sample-statistics-prev" aria-label="上一页统计结果" disabled>上一页</button><button type="button" class="mini-button" id="sample-statistics-next" aria-label="下一页统计结果" disabled>下一页</button></nav></footer>
 </dialog>

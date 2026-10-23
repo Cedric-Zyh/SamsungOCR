@@ -1,0 +1,29 @@
+<section class="sample-result-filters" aria-label="按识别结果筛选样单">
+  <div class="sample-result-filters-header">
+    <button type="button" id="sample-result-filters-toggle" aria-expanded="false" aria-controls="sample-result-filters-body">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg><span id="sample-result-filters-toggle-label">结果筛选</span>
+    </button>
+    <div id="sample-result-filter-chips" class="sample-result-filter-chips" aria-label="已选筛选条件"></div>
+    <button type="button" id="sample-result-filters-clear" class="text-button" hidden>清空筛选</button>
+    <span id="sample-result-filters-count" role="status" aria-live="polite"></span>
+    <button type="button" id="sample-result-filters-run" class="secondary-button" hidden disabled>▶ 运行筛选结果</button>
+  </div>
+  <div id="sample-result-filters-body" class="sample-result-filters-body" hidden>
+    <div class="sample-result-filter-fields">
+      <label>日期结果<select id="sample-filter-date"></select></label>
+      <label>印章来源<select id="sample-filter-seal-source"></select></label>
+      <label>印章结果<select id="sample-filter-seal"></select></label>
+      <label>签名结果<select id="sample-filter-signature"></select></label>
+    </div>
+    <details class="sample-result-filter-more">
+      <summary>更多筛选</summary>
+      <div class="sample-result-filter-fields">
+        <label>日期识别准确性<select id="sample-filter-date-accuracy" aria-describedby="sample-result-filter-accuracy-note"></select></label>
+        <label>印章判定准确性<select id="sample-filter-seal-accuracy" aria-describedby="sample-result-filter-accuracy-note"></select></label>
+        <label>对照印章来源<select id="sample-filter-compare-source"></select></label>
+        <label>对照印章结果<select id="sample-filter-compare-seal" disabled></select></label>
+      </div>
+      <p id="sample-result-filter-accuracy-note">准确性对照人工标注；印章结果对照本单签章要求。对照来源可同时筛查另一路印章结果，所有条件需同时满足。</p>
+    </details>
+  </div>
+</section>

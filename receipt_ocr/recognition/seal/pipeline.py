@@ -1,7 +1,7 @@
 """One stamp -> prepared inputs -> OCR observations and ring ordering.
 
-The requirement is used only after OCR as a soft ranking signal for circular
-seam ordering. It never supplies missing characters or replaces raw OCR.
+The requirement selects among actual OCR candidates and circular seam orders.
+It never supplies missing characters or rewrites raw observations.
 """
 from contextlib import nullcontext
 from pathlib import Path
@@ -21,6 +21,7 @@ from .preprocess.ring_alternative import read_normal_alternative
 from .postprocess.multi_zone import finalize_multi_zone
 from .postprocess.rectangle_form import mark_empty_receiving_fields
 from .postprocess.type_row import prefer_complete_type_read
+from .postprocess.ring_alternative import select_ring_alternative
 
 
 _RECTANGULAR_COMBINE_MIN_CONFIDENCE = 0.75
@@ -313,11 +314,12 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                         artifact["errors"].append({"step": "ring_serial", "message": str(exc)})
             texts.extend(serial_matching_texts(requirement, artifact))
             if artifact.get("shape_code") == "ellipse" and not artifact.get("multi_zone_layout"):
-                # Keep optional evidence out of reads/texts consumed by matching,
-                # standard registration, and the primary ring result.
+                # A complete observed alternative can beat a wrong primary
+                # reading, even when the primary's confidence is higher.
                 try:
                     artifact["ring_normal_alternative"] = read_normal_alternative(
                         directory, index, prefix, artifact, reader=reader, provider=ocr_backend)
+                    texts.extend(select_ring_alternative(artifact, requirement))
                 except Exception as exc:
                     artifact["ring_normal_alternative"] = {
                         "status": "failed", "matching": False, "error": str(exc)}

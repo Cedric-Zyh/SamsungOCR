@@ -13,8 +13,9 @@ from receipt_ocr.imaging.ring_border import trace_ellipse_border
 
 
 def read_normal_alternative(directory, index, prefix, artifact, *, reader, provider):
-    """Reuse the saved upright/masked input without changing the primary pass."""
+    """Read the same stamp's masked pixels; selection follows after OCR."""
     evidence = {"status": "unavailable", "matching": False,
+                "region_id": artifact.get("region_id"),
                 "method": "ellipse_normals_alternative"}
     if not artifact.get("ring_input_url"):
         return evidence

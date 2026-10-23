@@ -136,6 +136,8 @@ def _recognition_status(stage, selected, variants):
     if not successful:
         return "识别失败"
     if all(_variant_skipped(stage, variant) for variant in successful):
+        if all(v['result'].get(f'{stage}_check', {}).get('skip_reason') == 'missing_requirement' for v in successful):
+            return "已跳过（未提供签章要求）"
         return "已跳过（页脚尚未确认）"
     return "已执行"
 

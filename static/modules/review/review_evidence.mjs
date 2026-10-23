@@ -2,6 +2,7 @@ import {createApiClients} from '../core/api.mjs';
 import {percent, escapeHtml} from '../core/ui.mjs';
 import {createArtifactImages} from './artifact_images.mjs';
 import {renderSampleAnnotations} from './sample_annotations.mjs';
+import {simplifySealText} from '../core/seal_script.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
@@ -84,10 +85,15 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       : hasMaskedTypeRow
       ? '旋正章色图 · 横向文字区域填白（环形 OCR 实际输入）'
       : '旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入';
-    const unwrapCardLabel = item.ring_han_selection
+    const alternativeSelected = item.ring_candidate_selection?.selected === 'alternative';
+    const unwrapCardLabel = alternativeSelected
+      ? `${unwrapLabel}（已采用备选识别结果）`
+      : item.ring_han_selection
       ? '汉字段展开图（公司名称识别输入）'
       : item.ring_company_selection
       ? `${unwrapLabel}（公司名称输入，已排除小字号段）`
+      : item.ring_geometry === 'stable_strong_ellipse_normals'
+      ? `${unwrapLabel}（边框重新定位，双档识别一致）`
       : item.ring_geometry === 'fitted_ellipse_normals'
       ? `${unwrapLabel}（沿椭圆垂直方向展开，双档识别一致）`
       : item.ring_geometry === 'ellipse_observed_border'
@@ -108,13 +114,22 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifactCard(ringInputLabel, item.ring_input_url),
       artifactCard(item.ring_han_selection ? '自动定位的汉字弧段（展开前）' : '环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || '', true),
-      item.ring_normal_alternative?.image_url ? artifactCard(
-        '环字备选 · 沿边框垂直方向展开（仅供核对，不参与匹配）',
-        item.ring_normal_alternative.image_url, item.ring_normal_alternative.text || '', true) : '',
+      alternativeSelected && item.ring_primary?.image_url ? artifactCard(
+        '原主路展开图（未采用，保留核对）',
+        item.ring_primary.image_url, item.ring_primary.text || '', true)
+        : item.ring_normal_alternative?.image_url ? artifactCard(
+          item.ring_normal_alternative.matching
+            ? '环字备选 · 沿边框垂直方向展开（参与匹配）'
+            : item.ring_normal_alternative.comparison
+            ? '环字备选 · 沿边框垂直方向展开（已比对，未采用）'
+            : '环字备选 · 沿边框垂直方向展开（仅供核对，不参与匹配）',
+          item.ring_normal_alternative.image_url, item.ring_normal_alternative.text || '', true) : '',
       item.unwrapped_full_url ? artifactCard(item.ring_han_selection
         ? '完整环形展开图（其他文字与数字仅供核对）'
         : '完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
-      item.ring_border_url ? artifactCard('检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
+      item.ring_border_url ? artifactCard(item.ring_strong_border
+        ? '重新定位的椭圆边框（两档定位一致）'
+        : '检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
       item.stamp_number_url ? artifactCard(numberLabel, item.stamp_number_url, item.stamp_number_text || '') : '',
       item.ring_serial_url ? artifactCard('环形编号（独立识别）', item.ring_serial_url, item.ring_serial_text || '', true) : '',
       numberRecovery?.original_number_url ? artifactCard('编号原图笔画核对', numberRecovery.original_number_url) : '',
@@ -142,7 +157,9 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const rows = (item.reads || []).filter(row => row?.text).map(row => {
       const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel === 'serial' ? '环形编号' : row.channel || 'OCR');
       const confidence = row.confidence == null ? '' : ` · ${percent(row.confidence)}`;
-      return `<div class="seal-source-row"><b>${escapeHtml(channel)} · ${escapeHtml(row.provider || 'OCR')}</b><span>${escapeHtml(row.text)}${confidence}</span></div>`;
+      const display = simplifySealText(row.text);
+      const original = display !== row.text ? ` title="原始 OCR：${escapeHtml(row.text)}"` : '';
+      return `<div class="seal-source-row"><b>${escapeHtml(channel)} · ${escapeHtml(row.provider || 'OCR')}</b><span${original}>${escapeHtml(display)}${confidence}${original ? ' · 已转简体' : ''}</span></div>`;
     });
     if (item.unwrapped_raw_text && item.unwrapped_raw_text !== item.unwrapped_text) {
       rows.push(`<div class="seal-source-row"><b>环形 OCR 原始</b><span>${escapeHtml(item.unwrapped_raw_text)}</span></div>`);
@@ -398,8 +415,10 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       label === '圆章展开 180° 图' || label === '椭圆展开 180° 图' || label === '矩形印章 180° 旋转图' ? [item.rotated_text, item.secondary_rotated_text].filter(Boolean).join(' | ') :
       ''
     );
-    const text = String(inferredText || '').trim();
-    const ocr = text ? `<p class="artifact-ocr-text">识别：${escapeHtml(text)}</p>` : '';
+    const originalText = String(inferredText || '').trim();
+    const text = reviewState.artifactTab === 'seals' ? simplifySealText(originalText) : originalText;
+    const originalNote = text !== originalText ? ` title="原始 OCR：${escapeHtml(originalText)}"` : '';
+    const ocr = text ? `<p class="artifact-ocr-text"${originalNote}>识别：${escapeHtml(text)}${originalNote ? '（已转简体）' : ''}</p>` : '';
     return `<figure data-artifact-image><a href="${escapeHtml(url)}" data-artifact-open title="点击放大查看"><img src="${escapeHtml(url)}" alt="${escapeHtml(label)}" loading="eager"><span class="artifact-image-affordance" aria-hidden="true">放大 ↗</span></a><span data-image-message role="status" hidden></span><button type="button" data-image-retry hidden>重新加载</button><figcaption>${escapeHtml(label)}</figcaption>${ocr}</figure>`;
   }
 

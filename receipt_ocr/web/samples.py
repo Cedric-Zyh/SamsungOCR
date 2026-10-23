@@ -25,6 +25,7 @@ from .sample_company_marks import SampleCompanyMarks, MarkConflict
 from .sample_library import SampleLibrary, LibraryConflict
 from .sample_annotations import SampleAnnotations
 from .sample_requirement_groups import classify_requirements, group_name
+from .sample_result_filters import FILTER_RESULT_SQL, SEAL_SOURCES, sample_result_filters
 
 
 def sample_urls(value):
@@ -139,12 +140,11 @@ class SampleCenter:
         # Only the latest job per filename is needed, not full OCR artifacts.
         with self.database.connect() as con:
             con.execute('BEGIN')
-            jobs = {row["filename"]: dict(row) for row in con.execute("""
-                SELECT j.filename,j.status,j.result_id,j.error_message,j.created_at,j.finished_at,
+            jobs = {row["filename"]: dict(row) for row in con.execute(f"""
+                SELECT j.filename,j.status,j.result_id,j.error_message,j.created_at,j.finished_at,j.payload_json,
                     json_extract(r.result_json,'$.fields') AS fields,
                     json_extract(r.result_json,'$.signature_check') AS signature_check,
-                    json_extract(r.result_json,'$.date_check.status') AS date_status,
-                    json_extract(r.result_json,'$.seal_check.status') AS seal_status
+                    {FILTER_RESULT_SQL} AS filter_result
                 FROM recognition_jobs j
                 LEFT JOIN results r ON r.id=j.result_id AND r.deleted_at=''
                 WHERE j.rowid IN (SELECT MAX(rowid) FROM recognition_jobs GROUP BY filename)
@@ -157,6 +157,7 @@ class SampleCenter:
                                                json.loads(job.get("signature_check") or "{}"))
             status = {"queued": "测试中", "running": "测试中", "succeeded": "已完成",
                       "failed": "运行失败"}.get(job.get("status"), "未测试")
+            filters = sample_result_filters(job, entry)
             items.append({
                 "filename": name,
                 "company": str((entry.get("fields") or {}).get("客户名称") or "").strip() or "未分类",
@@ -165,9 +166,9 @@ class SampleCenter:
                 "status": status, "job_status": job.get("status", ""),
                 "result_id": job.get("result_id"), "error": job.get("error_message", ""),
                 "updated_at": job.get("finished_at") or job.get("created_at", ""),
-                "checks": {key: job.get(f"{key}_status") or "未执行"
-                           for key in ("date", "seal")},
+                "checks": {"date": filters['date']['state'], "seal": filters['seals']['combined']['state']},
                 "signature": signature.get("status", "未执行"),
+                "result_filters": filters,
             })
         counts = Counter(item["company"] for item in items)
         companies = [{"name": name, "count": count}
@@ -200,6 +201,7 @@ class SampleCenter:
                 'has_standard': bool(key and key in standard_keys)})
             group['count'] += 1
         return {"items": items, "companies": companies, "total": len(items),
+                "filter_seal_sources": SEAL_SOURCES,
                 "requirement_groups": {name: sorted(values.values(), key=lambda group: (bool(group['key']), group['name']))
                                        for name, values in groups.items()},
                 "company_marks": marks, "company_versions": versions, "company_seals": seals}

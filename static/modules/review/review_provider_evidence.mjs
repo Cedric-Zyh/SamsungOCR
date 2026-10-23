@@ -1,4 +1,5 @@
 import {escapeHtml, percent, statusPill} from '../core/ui.mjs';
+import {simplifySealText} from '../core/seal_script.mjs';
 
 const isDanzhengtong = check => check?.recognition_mode === 'danzhengtong'
   || [check?.source, check?.backend].some(value => String(value || '').includes('单证通'));
@@ -88,7 +89,7 @@ export function sealEvidenceMarkup(item) {
   for (const {check, variant} of localSealResults(item)) {
     // The comparison status belongs to its selected reading. Older records
     // may carry display_text assembled from several unrelated stamp regions.
-    const value = check.recognized || check.display_text || (check.all_recognized || []).join('；');
+    const value = simplifySealText(check.recognized || check.display_text || (check.all_recognized || []).join('；'));
     const confidence = check.confidence == null ? '' : ` · 置信度 ${percent(check.confidence)}`;
     const note = `${check.region_source ? '清瞳印章区域内' : '本地印章区域'}处理图 OCR${confidence} · 独立对照本单签章要求${check.reliable === false ? '，需人工确认' : ''}`;
     rows.push(evidenceRow(`${localProviderLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, value, variant?.error),

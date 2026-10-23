@@ -29,6 +29,24 @@ test('normal ring alternative is separate, escaped, and uses the existing image 
   assert.match(html, /src="\/files\/artifacts\/test\/primary.png\?preview=rgb"/);
 });
 
+test('selected ring alternative shows its image and retains the unselected original', () => {
+  const html = render([{
+    schema_version: 2, index: 0, color: 'red', shape: '椭圆',
+    ring_geometry: 'fitted_ellipse_normals',
+    unwrapped_url: '/files/artifacts/test/alternative.png', unwrapped_text: '洛阳东利通信有限公司',
+    ring_candidate_selection: {selected: 'alternative'},
+    ring_primary: {image_url: '/files/artifacts/test/primary.png', text: '洛限东利通信有限公司'},
+    ring_normal_alternative: {image_url: '/files/artifacts/test/alternative.png', text: '洛阳东利通信有限公司',
+                              matching: true, selected: true},
+  }]);
+  assert.match(html, /已采用备选识别结果/);
+  assert.match(html, /原主路展开图（未采用，保留核对）/);
+  assert.match(html, /洛阳东利通信有限公司/);
+  assert.match(html, /洛限东利通信有限公司/);
+  assert.doesNotMatch(html, /双档识别一致|仅供核对，不参与匹配/);
+  assert.match(html, /src="\/files\/artifacts\/test\/alternative.png\?preview=rgb"/);
+});
+
 test('requirement input images appear in their own tab and escape OCR text', () => {
   const html = render([], 'signature_requirement');
   assert.match(html, /签章要求行原图/);

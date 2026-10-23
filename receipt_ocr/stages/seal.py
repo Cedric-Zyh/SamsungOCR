@@ -20,6 +20,7 @@ from receipt_ocr.recognition.seal.postprocess.channels import LOCAL_REGION_SOURC
 
 
 from ..domain.results import SealStageResult
+from ..domain.seal_policy import has_seal_requirement, no_requirement_seal_check
 
 
 def _ellipse_channels(seal_texts, seal_artifacts):
@@ -83,6 +84,10 @@ def _settled_future(future):
 
 
 def recognize(context: DocumentContext, request: StageRequest, recognize_seals, seal_api) -> SealStageResult:
+    # Printed fields precede this stage. Stop before page access, remote-box
+    # waiting, detection, orientation or any local OCR when no basis exists.
+    if request.seal_mode == "local" and not has_seal_requirement(request.fields):
+        return SealStageResult(check=no_requirement_seal_check(), regions=[], artifacts=[])
     source = context.source
     remote_only = request.seal_mode == "qingtong_only"
     rows = [] if remote_only else context.page(request.route["page"])

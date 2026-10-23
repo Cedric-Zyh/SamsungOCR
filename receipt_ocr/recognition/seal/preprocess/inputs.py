@@ -26,6 +26,7 @@ from .number_mask import white_verified_number
 from .number_recovery import recover_number_punctuation
 from .red_enhancement import enhance_oriented_seal
 from .oval_ring import prepare_oval_ring
+from .strong_border import prepare_strong_border_ring
 from .han_ring import prepare_han_ring
 from .multi_zone import prepare_multi_zone
 from .local_type_row import prepare_local_type_row
@@ -302,9 +303,13 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 jobs.append((inputs[-1], row_path))
     if shape in {"round", "ellipse"}:
         try:
+            layout_evidence = {}
             plan = prepare_multi_zone(working, directory, index, reader=OcrReader(),
                                       provider=provider, color=region.color,
-                                      ring_guide=consensus["guide"] if consensus is not None else None)
+                                      ring_guide=consensus["guide"] if consensus is not None else None,
+                                      orientation=orientation, layout_evidence=layout_evidence)
+            if layout_evidence:
+                artifact["layout_selection"] = layout_evidence
             if plan is not None:
                 artifact["multi_zone_layout"] = {
                     "method": plan["method"], "rows": plan["rows"], "arcs": plan["arcs"],
@@ -505,7 +510,27 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
                                 elliptical=True, normalized=True, single_line=True,
                                 direct_ellipse=shape == "ellipse", ring_guide=ring_guide)
-            if shape == "ellipse" and consensus is None:
+            if shape == "ellipse" and consensus is None and ring_guide is None:
+                try:
+                    strong = prepare_strong_border_ring(
+                        working, ring_input, path("ring-strong"), color=region.color,
+                        reader=OcrReader(), provider=provider,
+                    )
+                    if strong is not None:
+                        artifact["unwrapped_radial_url"] = add("ring-radial", ring, "原展开图（对照）")
+                        ring, ring_guide = strong["ring"], strong["guide"]
+                        artifact["ring_strong_border"] = strong["evidence"]
+                        artifact["ring_strong_border"]["check_image_url"] = add(
+                            "ring-strong-check", strong["check_ring"], "另一档边框定位展开核对")
+                        artifact["ring_geometry"] = "stable_strong_ellipse_normals"
+                        artifact["ring_border_detection"] = strong["evidence"].copy()
+                        artifact["ring_border_url"] = add(
+                            "ring-border", strong["border"], "深色笔画稳定定位的椭圆边框")
+                        save_ring_text_band_preview(ring_input, ring_band, color=region.color,
+                                                    ring_guide=ring_guide, proportional=True)
+                except Exception as exc:
+                    artifact["errors"].append({"step": "strong_border", "message": str(exc)})
+            if shape == "ellipse" and consensus is None and not artifact.get("ring_strong_border"):
                 try:
                     oval = prepare_oval_ring(
                         source, region, working,

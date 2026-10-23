@@ -62,6 +62,10 @@ def test_qingtong_selected_stamp_preview_sources():
     run_node("--test", "tests/qingtong_preview.cjs")
 
 
+def test_sample_result_filter_scope_folding_and_batch_actions():
+    run_node("--test", "tests/sample_center.cjs", "tests/sample_result_filters.cjs")
+
+
 def test_rendered_attributes_preserve_quotes_without_creating_event_handlers():
     samples = json.loads(run_node("tests/frontend_behaviors.cjs", "--render-samples"))
 

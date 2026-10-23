@@ -79,7 +79,10 @@ def _continuous_arc_seam(group, cx, cy):
     ordinary character gaps elsewhere. Separate lower text breaks that blank
     and must retain the two-arc route. No OCR or required wording is used.
     """
-    if len(group) < 6:
+    # Connected components are not characters: several bold glyphs may be
+    # joined. Let the angular ink/gap evidence decide continuity instead of
+    # requiring a particular number of separate blobs.
+    if not group:
         return None
     ys = np.concatenate([part[0] for part in group])
     xs = np.concatenate([part[1] for part in group])
@@ -98,6 +101,42 @@ def _continuous_arc_seam(group, cx, cy):
     return np.deg2rad(middle)
 
 
+def _company_arc_parts(group, rho, cx, cy):
+    """Ignore only a small, radially separate remnant inside the bottom gap.
+
+    A number stroke left after masking is not an independent lower text row.
+    Estimate the name's inner edge from its upper ink, then require any removed
+    component to lie wholly inside that band and occupy a narrow bottom angle.
+    Keep all original strokes when those independent geometric checks fail.
+    """
+    seam = _continuous_arc_seam(group, cx, cy)
+    if seam is not None or not group:
+        return group, seam
+    ys = np.concatenate([part[0] for part in group])
+    xs = np.concatenate([part[1] for part in group])
+    upper = ys < cy
+    if not np.any(upper):
+        return group, None
+    inner = float(np.quantile(rho[ys[upper], xs[upper]], .20))
+    kept, remnants = [], []
+    for yy, xx in group:
+        theta = np.rad2deg(np.arctan2(yy-cy, xx-cx))
+        if (np.quantile(rho[yy, xx], .99) < inner
+                and np.all((theta >= 60) & (theta <= 120))):
+            remnants.append((yy, xx))
+        else:
+            kept.append((yy, xx))
+    if not remnants or len(remnants) > 2:
+        return group, None
+    ry = np.concatenate([part[0] for part in remnants])
+    rx = np.concatenate([part[1] for part in remnants])
+    angles = np.rad2deg(np.arctan2(ry-cy, rx-cx))
+    if len(ry) > .05*len(ys) or np.ptp(angles) > 15:
+        return group, None
+    seam = _continuous_arc_seam(kept, cx, cy)
+    return (kept, seam) if seam is not None else (group, None)
+
+
 def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower=False,
               allow_continuous_name=False):
     (cx, cy), (a, b), _ = guide.annulus[0][2]
@@ -105,21 +144,28 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
     _, labels, stats, centers = cv2.connectedComponentsWithStats(
         cv2.morphologyEx(ink.astype('uint8'), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)), 8)
     parts = {'upper': [], 'lower': []}
+    continuous_parts = []
     for i, (_, _, w, h, area) in enumerate(stats[1:], 1):
         if area < min(a, b)**2*.0002 or max(h, w) < min(a, b)*.035:
             continue
         ys, xs = np.where(labels == i)
         radial = float(np.median(rho[ys, xs]))
-        if not .48 < radial < .88 or max(w, h) > max(a, b)*.30:
+        if not .48 < radial < .88:
+            continue
+        # The size cap helps locate separated rows, but would erase several
+        # joined company glyphs before the continuous arc bounds are measured.
+        # Keep those actual annular strokes for the continuous-name decision;
+        # retain the established cap if the image needs the two-arc route.
+        continuous_parts.append((ys, xs))
+        if max(w, h) > max(a, b)*.30:
             continue
         key = 'lower' if centers[i, 1] > cy+min(a, b)*.15 else 'upper'
         parts[key].append((ys, xs))
     seam = None
     if allow_continuous_name:
-        combined = parts['upper'] + parts['lower']
-        seam = _continuous_arc_seam(combined, cx, cy)
+        continuous_parts, seam = _company_arc_parts(continuous_parts, rho, cx, cy)
         if seam is not None:
-            parts = {'company': combined}
+            parts = {'company': continuous_parts}
     points = guide.points
     angles = np.mod(np.arctan2(points[:, 1]-cy, points[:, 0]-cx), 2*np.pi)
     order = np.argsort(angles)
@@ -131,7 +177,7 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
     for key, group in parts.items():
         if key == 'lower' and not group and allow_empty_lower:
             continue
-        if len(group) < 3:
+        if len(group) < 3 and key != 'company':
             # Optional lower arc on a verified phone + purpose layout: isolated
             # remnants do not invalidate its complete upper company-name arc.
             if key == 'lower' and allow_sparse_lower:
@@ -173,7 +219,8 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
     return maps
 
 
-def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, color='red', ring_guide=None):
+def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, color='red', ring_guide=None,
+                       orientation=None, layout_evidence=None):
     """Separate contact layouts, retaining the established multi-row route.
 
     Prefer complete detector rows over fragmented component groups. Keep the
@@ -212,12 +259,19 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, 
     rows = _inner_rows(image, rho, (a, b))
     if reader is not None:
         from .detected_layout import prepare_detected_layout
+        detector_evidence = {}
         detected = prepare_detected_layout(
             source, directory, index, image, guide, rho, reader=reader,
-            provider=provider, color=color,
+            provider=provider, color=color, evidence=detector_evidence,
         )
         if detected is not None:
             return detected
+        from .single_row_logo import single_row_logo_evidence
+        ordinary = single_row_logo_evidence(image, rho, rows, detector_evidence, orientation)
+        if ordinary is not None:
+            if layout_evidence is not None:
+                layout_evidence.update(ordinary)
+            return None
     if not 3 <= len(rows) <= 6:
         return None
     # Tilted rows can have intersecting outer boxes even though their actual

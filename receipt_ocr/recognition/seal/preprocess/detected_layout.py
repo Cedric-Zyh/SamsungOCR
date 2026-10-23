@@ -136,7 +136,7 @@ def _detect_layout_rows(source, directory, index, image, rho, *, reader, provide
     return (merged, combined) if len(combined) == 2 else (boxes, rows)
 
 
-def prepare_detected_layout(source, directory, index, image, guide, rho, *, reader, provider, color='red'):
+def prepare_detected_layout(source, directory, index, image, guide, rho, *, reader, provider, color='red', evidence=None):
     from .inputs import _white_detected_type_region
     from .multi_zone import _arc_maps
 
@@ -148,6 +148,10 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
     boxes, rows = _detect_layout_rows(
         source, directory, index, image, rho, reader=reader, provider=provider,
     )
+    if evidence is not None:
+        # Preserve the independent detector decision before a short-number
+        # retry or failed arc construction can replace its local row list.
+        evidence['rows'] = rows
     if len(rows) == 1:
         # Whole-stamp detection can miss a short parenthesized number.
         # Reuse the established tight-number locator, not a wide middle band.

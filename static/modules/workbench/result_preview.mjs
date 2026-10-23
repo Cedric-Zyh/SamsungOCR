@@ -1,11 +1,12 @@
 import {escapeHtml, filenameParts} from '../core/ui.mjs';
+import {simplifySealText} from '../core/seal_script.mjs';
 
 export function resultPreviewModel(record, workbench) {
   const fields = record.fields || {}, date = record.date_check || {}, seal = record.seal_check || {};
   const signature = workbench.signatureCheck(record);
   const rows = [
     {key: 'date', label: '日期', expected: fields['要求到货'] || date.required, actual: date.actual},
-    {key: 'seal', label: '印章', expected: fields['签章要求'] || seal.requirement, actual: seal.recognized},
+    {key: 'seal', label: '印章', expected: fields['签章要求'] || seal.requirement, actual: simplifySealText(seal.recognized)},
     {key: 'signature', label: '签名', expected: signature.contact, actual: signature.receiver},
   ].map(row => {
     const status = workbench.checkStatus(record, row.key);

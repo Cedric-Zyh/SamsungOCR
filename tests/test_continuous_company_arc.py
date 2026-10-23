@@ -66,6 +66,41 @@ def test_separate_bottom_text_keeps_two_arcs_and_its_own_direction(color):
     assert maps['lower']['degrees'][0] > maps['lower']['degrees'][1]
 
 
+@pytest.mark.parametrize('scale', [.5, 1, 2])
+@pytest.mark.parametrize('color', ['red', 'blue'])
+@pytest.mark.parametrize('joined', ['first', 'last', 'all'])
+def test_large_joined_glyphs_do_not_shorten_the_continuous_arc(scale, color, joined):
+    image, rho, guide = arc_image(range(140, 401, 15), scale=scale, ratio=1, color=color)
+    (cx, cy), (a, b), _ = guide.annulus[0][2]
+    start, end = {'first': (140, 200), 'last': (340, 400), 'all': (140, 400)}[joined]
+    theta = np.deg2rad(np.arange(start, end + .25, .25))
+    points = np.column_stack((cx + a / 2 * .77 * np.cos(theta),
+                              cy + b / 2 * .77 * np.sin(theta)))
+    ink = (40, 40, 255) if color == 'red' else (255, 40, 40)
+    cv2.polylines(image, [np.rint(points).astype('int32')], False, ink, max(2, round(5 * scale)))
+    _, _, stats, _ = cv2.connectedComponentsWithStats(
+        (((image[:, :, 1] < 100) & (rho < .93))).astype('uint8'), 8)
+    assert any(max(w, h) > max(a, b) * .30 for _, _, w, h, _ in stats[1:])
+    maps = _arc_maps(image, rho, guide, allow_continuous_name=True)
+    assert set(maps) == {'company'}
+    mapping = maps['company']
+    assert mapping['degrees'][0] < 140
+    assert mapping['degrees'][1] > 400
+    pixels = cv2.remap(image[:, :, 1], mapping['x'], mapping['y'], cv2.INTER_NEAREST)
+    assert np.count_nonzero(pixels[:, :pixels.shape[1] // 10] < 100) > 50
+    assert np.count_nonzero(pixels[:, -pixels.shape[1] // 10:] < 100) > 50
+
+
+def test_joined_components_do_not_change_the_existing_separate_lower_arc():
+    image, rho, guide = arc_image(range(185, 356, 15), range(35, 146, 10))
+    ordinary = _arc_maps(image, rho, guide)
+    checked = _arc_maps(image, rho, guide, allow_continuous_name=True)
+    assert set(checked) == set(ordinary) == {'upper', 'lower'}
+    for name in ordinary:
+        np.testing.assert_array_equal(checked[name]['x'], ordinary[name]['x'])
+        np.testing.assert_array_equal(checked[name]['y'], ordinary[name]['y'])
+
+
 def test_sparse_or_empty_evidence_cannot_declare_a_continuous_name():
     assert _continuous_arc_seam([], 0, 0) is None
     group = [(np.array([0, 1]), np.array([10, 11]))] * 4
