@@ -53,7 +53,7 @@ def finalize_multi_zone(artifact):
             phone = phone_value(text)
             phones.append(phone)
             artifact.update(phone_text=phone, phone_url=row['image_url'])
-        elif trusted and re.fullmatch(r'[（(]\d{1,3}[）)]', text):
+        elif trusted and inner_role(text) == 'number':
             role = '章内编号'
             numbers.append(text)
             artifact.update(stamp_number_text=row['text'], stamp_number_url=row['image_url'])

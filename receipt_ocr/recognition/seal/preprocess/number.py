@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from receipt_ocr.domain.parsing.parsing_seals import normalize_seal_text_strict
+from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters
 from .orientation_angles import _stamp_type_marker_strength
 
 
@@ -16,8 +17,9 @@ MIN_NUMBER_CONFIDENCE = 0.80
 
 
 def seal_number(text):
-    """Only typography is normalized; never guess a digit from a letter."""
+    """Accept digits and the explicit parenthesized-i numeric-field exception."""
     raw = re.sub(r"\s+", "", str(text or ""))
+    raw = normalize_stamp_number_letters(raw, isolated=True)
     if not re.fullmatch(r"[（(]?[0-9０-９]{1,3}[）)]?", raw):
         return ""
     value = normalize_seal_text_strict(raw)

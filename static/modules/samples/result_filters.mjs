@@ -20,7 +20,6 @@ const IDS = Object.fromEntries(FIELDS.map(key => [key, `#sample-filter-${key.rep
 const choices = {date:DATE, seal:SEAL, signature:SIGNATURE, dateAccuracy:ACCURACY, sealAccuracy:ACCURACY, compareSeal:SEAL};
 const labels = {date:'日期',sealSource:'印章来源',seal:'印章',signature:'签名',dateAccuracy:'日期识别',
   sealAccuracy:'印章判定',compareSource:'对照来源',compareSeal:'对照结果'};
-const STORAGE_KEY = 'sample-result-filters-expanded-v1';
 
 export function resultFilterCell(item, key, source = 'combined') {
   const cell = key === 'date' ? item.result_filters?.date : item.result_filters?.seals?.[source];
@@ -82,8 +81,7 @@ export function createResultFilters({environment, ui, changed}) {
     $('#sample-result-filters-body').hidden = !expanded;
     $('#sample-result-filters-toggle').setAttribute('aria-expanded',String(expanded));
     $('#sample-result-filters-toggle').title = expanded ? '收起结果筛选' : '展开结果筛选';
-    $('#sample-result-filters-toggle-label').textContent = expanded ? '收起筛选' : '结果筛选';
-    try { environment.window.localStorage?.setItem(STORAGE_KEY, String(expanded)); } catch {}
+    $('#sample-result-filters-toggle-label').textContent = '筛选';
   }
   function reset() { filters = {...DEFAULT_RESULT_FILTERS}; change(); }
   function initialize() {
@@ -96,7 +94,23 @@ export function createResultFilters({environment, ui, changed}) {
       if (key === 'compareSource' && !filters.compareSource) filters.compareSeal = '';
       change();
     });
-    $('#sample-result-filters-toggle').addEventListener('click', () => setExpanded(!expanded));
+    $('#sample-result-filters-toggle').addEventListener('click', () => {
+      setExpanded(!expanded);
+      if (expanded) $(IDS.date).focus();
+    });
+    $('#sample-result-filters-close').addEventListener('click', () => {
+      setExpanded(false); $('#sample-result-filters-toggle').focus();
+    });
+    environment.document.addEventListener?.('click', event => {
+      if (expanded && !$('#sample-result-filters-body').contains(event.target)
+          && !$('#sample-result-filters-toggle').contains(event.target)) setExpanded(false);
+    });
+    environment.document.addEventListener?.('keydown', event => {
+      if (expanded && event.key === 'Escape') {
+        event.preventDefault(); setExpanded(false); $('#sample-result-filters-toggle').focus();
+      }
+    });
+    environment.window.addEventListener('hashchange', () => setExpanded(false));
     $('#sample-result-filters-clear').addEventListener('click', reset);
     $('#sample-result-filter-chips').addEventListener('click', event => {
       const button = event.target.closest('[data-clear-result-filter]');
@@ -106,9 +120,7 @@ export function createResultFilters({environment, ui, changed}) {
       if (key === 'compareSource') filters.compareSeal = '';
       change();
     });
-    let saved = false;
-    try { saved = environment.window.localStorage?.getItem(STORAGE_KEY) === 'true'; } catch {}
-    setExpanded(saved);
+    setExpanded(false);
   }
   function updateSources(rows) {
     if (!Array.isArray(rows) || !rows.length || JSON.stringify(rows) === JSON.stringify(sources)) return;
@@ -126,6 +138,10 @@ export function createResultFilters({environment, ui, changed}) {
     }).join('');
     if (chips !== lastChips) { $('#sample-result-filter-chips').innerHTML = chips; lastChips = chips; }
     const active = hasResultFilters(filters);
+    const activeCount = FIELDS.filter(key => filters[key] !== DEFAULT_RESULT_FILTERS[key]).length;
+    $('#sample-result-filters-badge').hidden = !active;
+    $('#sample-result-filters-badge').textContent = activeCount;
+    $('#sample-active-filters').hidden = !active && !scoped;
     $('#sample-result-filters-clear').hidden = !active;
     $('#sample-result-filters-count').textContent = `${active || scoped ? '符合条件' : '全部'} ${count} 张`;
     $('#sample-result-filters-count').title = `当前目录共 ${total} 张样单`;

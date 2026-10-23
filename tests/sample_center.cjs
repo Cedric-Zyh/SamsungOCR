@@ -138,7 +138,8 @@ test('company expands into requirements, defaults to ungrouped and classifies on
   assert.match($('#sample-company-list').innerHTML, /✓ 已建章/);
   assert.match($('#sample-grid').innerHTML, /pending.jpg/);
   assert(!$('#sample-grid').innerHTML.includes('grouped.jpg'));
-  assert.match($('#sample-library-summary').textContent, /签章要求：未归类/);
+  assert.equal($('#sample-requirement-title').textContent, '未归类');
+  assert.match($('#sample-library-summary').textContent, /当前分组 1 张 · 本公司 2 张/);
   click({company:'甲公司',requirement:'甲章'});
   assert.match($('#sample-grid').innerHTML, /grouped.jpg/);
   assert(!$('#sample-grid').innerHTML.includes('pending.jpg'));

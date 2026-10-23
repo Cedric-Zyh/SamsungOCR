@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 
 from .parsing_text import normalize_text
 from .seal_information_fields import compare_information_fields
+from .seal_numbers import normalize_stamp_number_letters
 from .seal_script import simplify_seal_text
 
 
@@ -21,7 +22,7 @@ def normalize_seal_text_strict(text: str) -> str:
     """
     return simplify_seal_text("".join(
         chr(ord(character) - 0xFEE0) if "\uff01" <= character <= "\uff5e" else character
-        for character in text
+        for character in normalize_stamp_number_letters(text)
         if not character.isspace() and character not in "()（）|｜"
     ))
 
@@ -181,6 +182,8 @@ def compare_seal_text_strict(
         "部分匹配": "印章已识别文字与签章要求顺序一致，但存在漏字，需人工复核",
         "不匹配": "收货章内容与签章要求存在错字、多字或顺序差异",
     }[status]
+    number_normalized = normalize_stamp_number_letters(best_text)
+    number_note = "；章内数字编号（i）按（1）处理" if number_normalized != best_text else ""
     return {
         "requirement": requirement,
         "recognized": best_text,
@@ -188,7 +191,10 @@ def compare_seal_text_strict(
         "score": round(score, 3),
         "requirement_coverage": round(selected["requirement_coverage"], 6),
         "status": status,
-        "message": (selected.get("field_comparison") or {}).get("message", message),
+        "message": (selected.get("field_comparison") or {}).get("message", message) + number_note,
+        "number_normalization": ({"raw_text": best_text, "text": number_normalized,
+                                  "rule": "parenthesized_i_in_numeric_seal_number"}
+                                 if number_note else None),
         "confidence": round(score, 3),
         "company_score": round(score, 3),
         "company_conflict": False,

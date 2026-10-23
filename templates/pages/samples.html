@@ -13,17 +13,17 @@
       <div id="sample-company-list" class="sample-company-list"></div>
     </aside>
     <div class="sample-library">
-      <header class="sample-library-heading"><div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p></div><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-classify" title="按已有测试结果中的客户名称归类，自动创建新公司" hidden disabled>自动归类</button><button type="button" class="primary-button" id="sample-run-company" disabled>运行全部样单</button></div></header>
+      <header class="sample-library-heading"><div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p></div><div class="sample-header-actions"><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-classify" title="按已有测试结果自动归类" disabled>自动归类</button><button type="button" class="primary-button" id="sample-run-company" disabled>运行全部样单</button></div><button type="button" id="sample-company-mark-edit" class="text-button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-4-4L4 15z"/></svg><span>标记与备注</span></button></div></header>
       <section id="sample-company-mark-panel" class="sample-company-mark-panel" aria-label="当前公司的标记与备注" hidden>
-        <div class="sample-company-mark-line"><span id="sample-company-header-seal" class="sample-company-header-seal"></span><span class="sample-company-mark-label">人工标记</span><span id="sample-company-header-mark" class="sample-company-human-mark" data-mark="unmarked">未标记</span><span id="sample-company-header-new" class="sample-company-new-results" hidden>有新测试结果</span><button type="button" id="sample-company-mark-edit" class="text-button">添加标记与备注</button></div>
+        <div class="sample-company-mark-line"><span class="sample-company-mark-label">签章要求</span><span id="sample-requirement-title" class="sample-requirement-title"></span><span id="sample-company-header-seal" class="sample-company-header-seal" hidden></span><span id="sample-company-header-mark" class="sample-company-human-mark" data-mark="unmarked">未标记</span><span id="sample-company-header-new" class="sample-company-new-results" hidden>有新测试结果</span></div>
         <p id="sample-company-header-note" class="sample-company-header-note" hidden></p>
       </section>
       <div class="sample-tools">
-        <input type="search" id="sample-search" placeholder="搜索样单编号" aria-label="搜索样单编号">
-        <button type="button" class="secondary-button" id="sample-run-selected" disabled>运行所选</button>
-        <button type="button" class="secondary-button sample-delete-button" id="sample-delete-selected" disabled>删除所选</button>
-        <label><input type="checkbox" id="sample-select-page"> 本页</label>
-        <button type="button" class="text-button" id="sample-clear-selection" disabled>已选 0 张</button>
+        <div class="sample-search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input type="search" id="sample-search" placeholder="搜索样单编号" aria-label="搜索样单编号"></div>
+        <button type="button" id="sample-result-filters-toggle" class="secondary-button" aria-expanded="false" aria-controls="sample-result-filters-body"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18M8 3v6M16 9v6M10 15v6"/></svg><span id="sample-result-filters-toggle-label">筛选</span><span id="sample-result-filters-badge" hidden></span><svg class="sample-filter-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
+        <div class="sample-view-toggle" role="group" aria-label="样单展示方式"><button type="button" data-sample-view="grid" aria-pressed="true" aria-label="卡片视图" title="卡片视图"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg></button><button type="button" data-sample-view="list" aria-pressed="false" aria-label="列表视图" title="列表视图"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1"/></svg></button></div>
+        <label><input type="checkbox" id="sample-select-page"> 本页全选</label>
+        {% include "partials/sample_result_filters.html" %}
       </div>
       <div class="sample-tabs" role="group" aria-label="按测试状态筛选">
         <button type="button" data-sample-status="" class="active" aria-pressed="true">全部</button>
@@ -32,11 +32,11 @@
         <button type="button" data-sample-status="已完成" aria-pressed="false">已完成</button>
         <button type="button" data-sample-status="运行失败" aria-pressed="false">运行失败</button>
       </div>
-      {% include "partials/sample_result_filters.html" %}
+      <div id="sample-active-filters" class="sample-active-filters" hidden><div id="sample-result-filter-chips" class="sample-result-filter-chips" aria-label="已选筛选条件"></div><button type="button" id="sample-result-filters-clear" class="text-button" hidden>清空筛选</button><span id="sample-result-filters-count" role="status" aria-live="polite"></span><button type="button" id="sample-result-filters-run" class="secondary-button" hidden disabled>运行筛选结果</button></div>
+      <div id="sample-batch-actions" class="sample-batch-actions" aria-label="所选样单操作" hidden><button type="button" class="text-button" id="sample-clear-selection" disabled>已选 0 张</button><button type="button" class="secondary-button" id="sample-run-selected" disabled>运行所选</button><button type="button" class="secondary-button sample-delete-button" id="sample-delete-selected" disabled>删除所选</button></div>
       <p id="sample-feedback" role="status" class="sample-feedback"></p>
-      <div id="sample-grid" class="sample-grid" aria-label="样单卡片"></div>
+      <div id="sample-grid" class="sample-grid" data-view="grid" aria-label="样单卡片"></div>
       <nav class="sample-pagination" aria-label="样单分页"><span id="sample-page-info"></span><div><button type="button" class="mini-button" id="sample-prev">上一页</button><span id="sample-page-number"></span><button type="button" class="mini-button" id="sample-next">下一页</button></div></nav>
-      <p class="sample-footnote">点击预览或测试结果，打开样单查看窗口。</p>
     </div>
   </div>
 </section>

@@ -320,6 +320,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 artifact["ring_input_url"] = add("zones-ring-input", plan["ring_input"], "仅内部文字填白")
                 artifact["ring_input_mask_url"] = add("zones-mask", plan["mask"], "实际填白笔画")
                 artifact["ring_input_source_url"] = body_input["image_url"]
+                artifact["ring_input_source_name"] = Path(working).name
+                artifact["ring_input_name"] = Path(plan["ring_input"]).name
                 artifact["ring_border_detection"] = plan["border"]
                 artifact["ring_input_mask_method"] = "multi_zone_ink"
                 artifact["ring_input_operation"] = (

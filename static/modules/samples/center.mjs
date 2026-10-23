@@ -5,6 +5,14 @@ import {createSampleLibrary} from './library.mjs';
 import {createResultFilters, matchesResultFilters} from './result_filters.mjs';
 
 const PAGE_SIZE = 6;
+const VIEW_STORAGE_KEY = 'sample-library-view-v1';
+const actionIcons = {
+  preview: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  result: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h5"/>',
+  run: '<path d="M20 7v5h-5M20 12a8 8 0 1 1-2-5"/>',
+  play: '<path d="m8 5 11 7-11 7z"/>',
+};
+const actionIcon = key => `<svg viewBox="0 0 24 24" aria-hidden="true">${actionIcons[key]}</svg>`;
 export const sampleImageUrl = (name, thumbnail = false) =>
   `/api/samples/image/${encodeURIComponent(name)}${thumbnail ? '?thumbnail=1' : ''}`;
 
@@ -31,12 +39,12 @@ export function sampleCard(item, selected, evidence = '') {
   const filename = escapeHtml(item.filename), busy = item.status === '测试中';
   const checks = [['日期', item.checks?.date], ['印章', item.checks?.seal], ['签名', item.signature]];
   const detail = item.status === '已完成'
-    ? `<p class="sample-card-checks">${checks.map(([label, value]) => `<span data-match="${value === '匹配' ? 'true' : value === '未执行' ? '' : 'false'}">${label} ${escapeHtml(value || '未执行')}</span>`).join('')}</p>`
-    : `<p class="${item.error ? 'sample-card-error' : ''}">${escapeHtml(item.error || (busy ? item.job_status === 'queued' ? '等待测试…' : '正在识别…' : '尚无测试结果'))}</p>`;
+    ? `<p class="sample-card-checks">${checks.map(([label, value]) => `<span data-match="${value === '匹配' ? 'true' : value === '未执行' || (label === '签名' && value === '未识别') ? '' : 'false'}">${label} ${escapeHtml(value || '未执行')}</span>`).join('')}</p>`
+    : `<p class="${item.error ? 'sample-card-error' : ''}"${item.error ? ` title="${escapeHtml(item.error)}"` : ''}>${escapeHtml(item.error || (busy ? item.job_status === 'queued' ? '等待测试…' : '正在识别…' : '尚无测试结果'))}</p>`;
   return `<article class="sample-card${selected ? ' is-selected' : ''}" data-filename="${filename}">
     <div class="sample-card-image"><button class="sample-thumbnail" type="button" data-sample-preview aria-label="预览 ${filename}"><img src="${sampleImageUrl(item.filename, true)}" loading="lazy" alt="${filename} 样单缩略图"></button><label><input type="checkbox" data-sample-select aria-label="选择 ${filename}" ${selected ? 'checked' : ''} ${busy ? 'disabled' : ''}></label><span class="sample-state" data-status="${escapeHtml(item.status)}">${escapeHtml(item.status)}</span></div>
     <div class="sample-card-copy"><h3>${filename}</h3>${detail}${evidence}
-    <div class="sample-card-actions"><button type="button" data-sample-preview>预览</button><button type="button" data-sample-result ${item.result_id ? '' : 'disabled'}>测试结果</button><button type="button" data-sample-run ${busy ? 'disabled' : ''}>${busy ? '测试中…' : item.result_id || item.status === '运行失败' ? '重新测试' : '运行测试'}</button></div></div></article>`;
+    <div class="sample-card-actions"><button type="button" data-sample-preview>${actionIcon('preview')}<span>预览</span></button><button type="button" data-sample-result ${item.result_id ? '' : 'disabled'}>${actionIcon('result')}<span>测试结果</span></button><button type="button" data-sample-run ${busy ? 'disabled' : ''}>${actionIcon('run')}<span>${busy ? '测试中…' : item.result_id || item.status === '运行失败' ? '重新测试' : '运行测试'}</span></button></div></div></article>`;
 }
 
 export function createSampleCenter({environment, ui, services, flushSettings, openResult, openOriginal}) {
@@ -46,6 +54,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   let classificationRequirement = null;
   let selected = new Set(), loadPromise = null, running = false, loaded = false, lastRender = '';
   let historyLoading = false, historyMarkup = '';
+  let view = 'grid';
   let companyMarkup = '';
   const resultFilters = createResultFilters({environment, ui, changed: () => {
     page = 1; selected.clear(); render(); $('#sample-grid').scrollTop = 0;
@@ -125,6 +134,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-classify').title = `按最新结果归类${classificationLabel}已完成样单，可更正已有分组`;
     $('#sample-clear-selection').textContent = `已选 ${selected.size} 张${selected.size ? ' · 清空' : ''}`;
     $('#sample-clear-selection').disabled = !selected.size;
+    $('#sample-batch-actions').hidden = !selected.size;
     $('#sample-run-company').disabled = running || !companyItems().some(item => item.status !== '测试中');
     $('#sample-result-filters-run').disabled = running || !scope().some(item => item.status !== '测试中');
     $$('#sample-grid [data-sample-select]').forEach(input => {
@@ -144,9 +154,14 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     page = Math.min(page, pages);
     $('#sample-company-title').textContent = company || '全部样单';
     const groupLabel = requirement === null ? '' : requirementGroups[company]?.find(group => group.key === requirement)?.name || '未归类';
-    $('#sample-library-summary').textContent = `${groupLabel ? `签章要求：${groupLabel} · ` : ''}${groupItems().length} 张样单 · ${sampleCompanyProgress(groupItems()).label} · 使用当前配置`;
-    $('#sample-run-company').textContent = company ? '▶ 运行本公司全部' : '▶ 运行全部样单';
+    $('#sample-library-summary').textContent = `${requirement !== null ? `当前分组 ${groupItems().length} 张 · ` : ''}${company ? `本公司 ${companyItems().length} 张` : `共 ${items.length} 张样单`} · ${sampleCompanyProgress(groupItems()).label}`;
+    $('#sample-requirement-title').textContent = groupLabel || (company === '未分类' ? '未归类' : '本公司全部样单');
+    $('#sample-requirement-title').title = $('#sample-requirement-title').textContent;
+    $('#sample-run-company').innerHTML = `${actionIcon('play')}<span>${company ? '运行本公司全部' : '运行全部样单'}</span>`;
     $('#sample-classify').hidden = false;
+    $('#sample-grid').dataset.view = view;
+    $('#sample-grid').setAttribute('aria-label', view === 'grid' ? '样单卡片' : '样单列表');
+    $$('[data-sample-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.sampleView === view)));
     const markup = visible().map(item => sampleCard(item, selected.has(item.filename), resultFilters.evidence(item))).join('') ||
       `<div class="empty-state">${items.length ? '当前条件下没有样单，请调整搜索或筛选。' : '暂无样单，点击右上角「导入样单」添加图片。'}</div>`;
     // Polling must not replace focused controls just because selection changed.
@@ -158,10 +173,14 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-page-number').textContent = `${page} / ${pages}`;
     $('#sample-prev').disabled = page <= 1;
     $('#sample-next').disabled = page >= pages;
+    const statusRows = sampleScope(items, {company, requirement, search: $('#sample-search').value,
+      resultFilters: resultFilters.current()});
     $$('[data-sample-status]').forEach(button => {
       const active = button.dataset.sampleStatus === status;
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
+      const count = button.dataset.sampleStatus ? statusRows.filter(item => item.status === button.dataset.sampleStatus).length : statusRows.length;
+      button.innerHTML = `${button.dataset.sampleStatus || '全部'} <span class="sample-status-count">${count}</span>`;
     });
     syncSelection();
   }
@@ -265,11 +284,17 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   }
 
   function initialize() {
+    try { if (environment.window.localStorage?.getItem(VIEW_STORAGE_KEY) === 'list') view = 'list'; } catch {}
     resultFilters.initialize();
     statistics.initialize();
     companyMarks.initialize();
     library.initialize();
     const renderFromTop = () => { render(); $('#sample-grid').scrollTop = 0; };
+    $$('[data-sample-view]').forEach(button => button.addEventListener('click', () => {
+      view = button.dataset.sampleView;
+      try { environment.window.localStorage?.setItem(VIEW_STORAGE_KEY, view); } catch {}
+      renderFromTop();
+    }));
     $('#sample-company-search').addEventListener('input', renderCompanies);
     $('#sample-company-list').addEventListener('click', event => {
       const button = event.target.closest('[data-company]');

@@ -36,13 +36,19 @@ def test_number_overlapping_type_box_is_automatically_found(tmp_path):
 
 
 @pytest.mark.parametrize('boxes',[
-    [detect('1')], [detect('(I)')], [detect('(1234)')], [detect(confidence=.4)],
+    [detect('1')], [detect('(l)')], [detect('(1234)')], [detect(confidence=.4)],
     [detect(),detect('(2)')], [detect(points=[[0,12],[24,12],[24,33],[0,33]])],
     [detect(points=[[32,16],[56,16],[56,36],[32,36]])],
 ])
 def test_ambiguous_or_truncated_or_unbracketed_content_is_not_a_short_number(tmp_path,boxes):
     result,path,_=run(tmp_path,boxes)
     assert result is None and not path.exists()
+
+
+def test_parenthesized_i_number_exception_keeps_raw_overlapping_detection(tmp_path):
+    result, path, _ = run(tmp_path, [detect('(i)')])
+    assert result['text'] == '(i)' and result['status'] == 'detected'
+    assert path.is_file()
 
 
 BASE='北京华康君泰贸易有限公司售后业务专用章'

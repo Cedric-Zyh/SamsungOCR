@@ -60,3 +60,35 @@ test('mixed ring evidence labels the selected Han input and full audit image', (
   assert.match(target.innerHTML,/不参与公司名称匹配/);
   assert.doesNotMatch(target.innerHTML,/环形 OCR 直接读取旋正后的整章图/);
 });
+
+test('continuous company input is primary and replaced split reads stay in audit details', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'red',shape:'圆形',
+    ring_input_url:'/files/artifacts/test/masked.png',
+    multi_zone_layout:{method:'ellipse_continuous_name'},
+    inputs:[
+      {id:'upper',zone_name:'upper',superseded_by:'company',image_url:'/files/artifacts/test/upper.png'},
+      {id:'lower',zone_name:'lower',superseded_by:'company',image_url:'/files/artifacts/test/lower.png'},
+      {id:'company',zone_name:'company',channel:'ring',image_url:'/files/artifacts/test/company.png'}],
+    reads:[{input_id:'company',channel:'ring',zone_label:'环形公司名称',text:'完整公司名称'},
+      {input_id:'upper',channel:'split_arc_diagnostic',zone_label:'原分段读数（仅供核对）',text:'截断文字'}]};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/沿连续外环完整展开公司名称/);
+  assert.match(target.innerHTML,/原分段识别（仅供核对）/);
+  assert.match(target.innerHTML,/company.png\?preview=rgb/);
+  assert.ok(target.innerHTML.indexOf('完整公司名称') < target.innerHTML.indexOf('<details>'));
+  assert.ok(target.innerHTML.indexOf('截断文字') > target.innerHTML.indexOf('<details>'));
+});
+
+test('sample-center grey ring images also request RGB-compatible previews', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'red',shape:'圆形',
+    multi_zone_layout:{method:'ellipse_continuous_name'},
+    inputs:[{id:'company',zone_name:'company',channel:'ring',
+      image_url:'/files/samples/artifacts/task/seals/company.png'}],
+    reads:[{input_id:'company',text:'测试公司',zone_label:'环形公司名称',channel:'ring'}]};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/\/files\/samples\/artifacts\/task\/seals\/company.png\?preview=rgb/);
+});

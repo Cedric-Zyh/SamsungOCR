@@ -25,7 +25,7 @@ export function companyRowMarkup(row, progress, active, seal, expanded = null) {
 
 export function requirementRowMarkup(company, group, active, progress) {
   const badge = group.key && group.has_standard ? '<span class="sample-requirement-standard">✓ 已建章</span>' : '';
-  return `<button type="button" class="sample-requirement-select${active ? ' active' : ''}" data-company="${esc(company)}" data-requirement="${esc(group.key)}" data-progress="${progress.state}" aria-pressed="${active}"><span class="sample-requirement-copy"><span class="sample-requirement-name">${esc(group.name)}</span>${badge}</span><small class="sample-requirement-total">${group.count}</small></button>`;
+  return `<button type="button" class="sample-requirement-select${active ? ' active' : ''}" data-company="${esc(company)}" data-requirement="${esc(group.key)}" data-progress="${progress.state}" aria-pressed="${active}"><span class="sample-requirement-copy"><span class="sample-requirement-name" title="${esc(group.name)}">${esc(group.name)}</span>${badge}</span><small class="sample-requirement-total">${group.count}</small></button>`;
 }
 
 export function createCompanyMarks({environment, ui, services, render}) {
@@ -45,6 +45,7 @@ export function createCompanyMarks({environment, ui, services, render}) {
   function renderHeader(company) {
     const panel = $('#sample-company-mark-panel');
     panel.hidden = !company;
+    $('#sample-company-mark-edit').hidden = !company;
     if (!company) return;
     const mark = marks[company] || {state: 'unmarked', note: ''};
     const status = $('#sample-company-header-mark');
@@ -59,7 +60,7 @@ export function createCompanyMarks({environment, ui, services, render}) {
     note.title = mark.note || '';
     const button = $('#sample-company-mark-edit');
     button.dataset.markCompany = company;
-    button.textContent = mark.state === 'unmarked' && !mark.note ? '添加标记与备注' : '编辑标记与备注';
+    button.title = mark.state === 'unmarked' && !mark.note ? '添加标记与备注' : '编辑标记与备注';
   }
 
   function syncReviewed() {

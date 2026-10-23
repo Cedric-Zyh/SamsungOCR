@@ -18,6 +18,7 @@ from .ocr.interface import OcrReader
 from .postprocess.ring_text import reorder_ring_text
 from .preprocess.ring_serial import read_ring_serial
 from .preprocess.ring_alternative import read_normal_alternative
+from .preprocess.continuous_company import read_continuous_company
 from .postprocess.multi_zone import finalize_multi_zone
 from .postprocess.rectangle_form import mark_empty_receiving_fields
 from .postprocess.type_row import prefer_complete_type_read
@@ -191,6 +192,7 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
     texts, artifacts = [], []
     with context as directory:
         for index, region in enumerate(regions):
+            region_text_start = len(texts)
             try:
                 artifact, jobs = prepare_inputs(Path(source), region, index, directory, prefix,
                                                ocr_backend, orientation_mode)
@@ -251,6 +253,15 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 except Exception as exc:
                     input_image.update(status="failed", error=str(exc))
                     artifact["errors"].append({"step": input_image["channel"], "message": str(exc)})
+            try:
+                if read_continuous_company(artifact, directory, index, prefix,
+                                           reader=reader, provider=ocr_backend):
+                    # Split readings remain diagnostic. Only this physical
+                    # stamp's new active ring can enter the local comparison.
+                    texts[region_text_start:] = [row['text'] for row in artifact['reads']
+                                                  if row.get('channel') == 'ring']
+            except Exception as exc:
+                artifact['errors'].append({'step': 'continuous_company', 'message': str(exc)})
             texts.extend(finalize_multi_zone(artifact))
             merge_number_read(artifact)
             if artifact.get("stamp_number_status") == "merged":

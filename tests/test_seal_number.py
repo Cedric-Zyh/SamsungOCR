@@ -19,7 +19,7 @@ def detected(text="(1", confidence=.95, x=80, y=10, width=40, height=40, angle=0
 
 @pytest.mark.parametrize("text,expected", [
     ("(1", "1"), ("（１２）", "12"), ("3)", "3"), (" 01 ", "01"),
-    ("(I)", ""), ("1(2", ""), ("2026", ""), ("10月", ""), ("①", ""),
+    ("(I)", "1"), ("1(2", ""), ("2026", ""), ("10月", ""), ("①", ""),
 ])
 def test_numbers_require_actual_digits_and_preserve_leading_zeroes(text, expected):
     assert seal_number(text) == expected

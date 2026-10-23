@@ -62,17 +62,20 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         : item.multi_zone_layout.method === 'ellipse_continuous_name'
         ? '章型和编号分别识别；填白内部文字后，沿连续外环完整展开公司名称，保留首尾文字。'
         : '自动定位完整横排文字，保留外圈两端；按实际文字分布展开弧段，电话单独记录。';
-      const regions = (item.inputs || []).filter(input => input.zone_name).map(input => {
+      const regionCard = input => {
         const reads = (item.reads || []).filter(read => read.input_id === input.id);
         const label = reads.find(read => read.zone_label)?.zone_label || input.label;
         return artifactCard(label, input.image_url, reads.map(read => read.text).join(' | '),
           input.channel === 'ring' || input.zone_name === 'upper' || input.zone_name === 'lower');
-      }).join('');
+      };
+      const regionInputs = (item.inputs || []).filter(input => input.zone_name);
+      const regions = regionInputs.filter(input => !input.superseded_by).map(regionCard).join('');
+      const previous = regionInputs.filter(input => input.superseded_by).map(regionCard).join('');
       return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>${explanation}</small><div class="artifact-grid">${
         artifactCard('旋正增强图', oriented)
       }${artifactCard('自动文字分区', item.multi_zone_layout.overlay_url)}${
         artifactCard('内部文字填白后', item.ring_input_url)
-      }${regions}</div></section>`;
+      }${regions}</div>${previous ? `<details><summary>原分段识别（仅供核对）</summary><div class="artifact-grid">${previous}</div></details>` : ''}</section>`;
     }
     const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
@@ -383,7 +386,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function artifactCard(label, url, recognizedText = '', rgbPreview = false) {
     if (typeof url !== 'string' || !url.startsWith('/files/')) return '';
-    if (rgbPreview && url.startsWith('/files/artifacts/')) {
+    if (rgbPreview && /^\/files\/(?:samples\/)?artifacts\//.test(url)) {
       const [path, fragment] = url.split('#', 2);
       url = `${path}${path.includes('?') ? '&' : '?'}preview=rgb${fragment ? `#${fragment}` : ''}`;
     }

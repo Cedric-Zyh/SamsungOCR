@@ -12,7 +12,7 @@ const items = [
     date:cell('未识别'),seals:{qingtong_ocr:cell('不匹配','乙章')}}},
 ];
 function nodes() {
-  const map = new Map(), store = new Map();
+  const map = new Map(), store = new Map(), documentHandlers = {};
   const $ = selector => {
     if (!map.has(selector)) map.set(selector, {value:'',dataset:{},innerHTML:'',textContent:'',scrollTop:0,open:false,
       hidden:false,disabled:false,handlers:{},attributes:{},classList:{toggle(){},add(){},remove(){}},
@@ -21,9 +21,9 @@ function nodes() {
     });
     return map.get(selector);
   };
-  const environment = {document:{activeElement:null},window:{addEventListener(){},localStorage:{
+  const environment = {document:{activeElement:null,addEventListener(name,handler){documentHandlers[name]=handler;}},window:{addEventListener(){},localStorage:{
     getItem:key=>store.get(key),setItem:(key,value)=>store.set(key,value)}}};
-  return {$,environment};
+  return {$,environment,documentHandlers};
 }
 
 test('filters compose across company, date and independent seal channels', () => {
@@ -46,7 +46,7 @@ test('not run, failed, missing and pending channel states remain separate', () =
   assert(!matchesResultFilters({status:'测试中',signature:'匹配'},{signature:'匹配'}));
 });
 
-test('folding keeps active conditions and count, remembers preference, and supports removing one chip', () => {
+test('filter popover keeps active conditions and count, starts closed, and removes one chip', () => {
   const {$,environment} = nodes();
   let changes=0;
   const filters = createResultFilters({environment,ui:{$},changed:()=>changes++});
@@ -71,7 +71,54 @@ test('folding keeps active conditions and count, remembers preference, and suppo
   $('#sample-result-filters-toggle').handlers.click();
   const second=createResultFilters({environment,ui:{$},changed:()=>{}});
   second.initialize();
-  assert.equal($('#sample-result-filters-body').hidden,false);
+  assert.equal($('#sample-result-filters-body').hidden,true);
+});
+
+test('filter popover closes outside or on Escape without clearing applied conditions', () => {
+  const {$,environment,documentHandlers} = nodes();
+  const filters = createResultFilters({environment,ui:{$},changed(){}});
+  filters.initialize();
+  $('#sample-result-filters-toggle').handlers.click();
+  $('#sample-filter-date').value='未识别'; $('#sample-filter-date').handlers.change();
+  filters.render(2,10,false,false);
+  assert.equal($('#sample-result-filters-badge').hidden,false);
+  assert.equal($('#sample-result-filters-badge').textContent,1);
+  assert.equal($('#sample-active-filters').hidden,false);
+  let prevented=false;
+  documentHandlers.keydown({key:'Escape',preventDefault(){prevented=true;}});
+  assert(prevented);
+  assert.equal($('#sample-result-filters-body').hidden,true);
+  assert.equal(filters.current().date,'未识别');
+  $('#sample-result-filters-toggle').handlers.click();
+  documentHandlers.click({target:{}});
+  assert.equal($('#sample-result-filters-body').hidden,true);
+  filters.reset(); filters.render(10,10,false,false);
+  assert.equal($('#sample-active-filters').hidden,true);
+  assert.equal($('#sample-result-filters-badge').hidden,true);
+});
+
+test('grid/list switch preserves checked samples and batch toolbar appears only for a selection', async () => {
+  const {$,environment} = nodes();
+  const views=['grid','list'].map(view=>{const node=$(`[view-${view}]`);node.dataset.sampleView=view;return node;});
+  const statuses=['','未测试','测试中','已完成','运行失败'].map(status=>{
+    const node=$(`[status-${status}]`);node.dataset.sampleStatus=status;return node;
+  });
+  const $$=selector=>selector==='[data-sample-view]'?views:selector==='[data-sample-status]'?statuses:[];
+  const center=createSampleCenter({environment,ui:{$,$$,toast(){}},flushSettings:async()=>{},
+    services:{samples:{list:async()=>({items:structuredClone(items),companies:[{name:'甲',count:2},{name:'乙',count:1}]})}}});
+  center.initialize();await center.load();
+  assert.equal($('#sample-batch-actions').hidden,true);
+  assert.equal($('#sample-grid').dataset.view,'grid');
+  assert.match(statuses[3].innerHTML,/>3<\/span>/);
+  $('#sample-grid').handlers.change({target:{matches:()=>true,checked:true,closest:()=>({dataset:{filename:'one.jpg'}})}});
+  assert.equal($('#sample-batch-actions').hidden,false);
+  views[1].handlers.click();
+  assert.equal($('#sample-grid').dataset.view,'list');
+  assert.equal(views[1].attributes['aria-pressed'],'true');
+  assert.match($('#sample-clear-selection').textContent,/已选 1 张/);
+  assert.equal(environment.window.localStorage.getItem('sample-library-view-v1'),'list');
+  $('#sample-clear-selection').handlers.click();
+  assert.equal($('#sample-batch-actions').hidden,true);
 });
 
 test('source evidence is independent and escapes values embedded in card attributes', () => {

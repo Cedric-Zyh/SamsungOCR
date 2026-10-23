@@ -1,14 +1,8 @@
-<section class="sample-result-filters" aria-label="按识别结果筛选样单">
+<section id="sample-result-filters-body" class="sample-result-filters sample-result-filters-body" aria-label="按识别结果筛选样单" hidden>
   <div class="sample-result-filters-header">
-    <button type="button" id="sample-result-filters-toggle" aria-expanded="false" aria-controls="sample-result-filters-body">
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg><span id="sample-result-filters-toggle-label">结果筛选</span>
-    </button>
-    <div id="sample-result-filter-chips" class="sample-result-filter-chips" aria-label="已选筛选条件"></div>
-    <button type="button" id="sample-result-filters-clear" class="text-button" hidden>清空筛选</button>
-    <span id="sample-result-filters-count" role="status" aria-live="polite"></span>
-    <button type="button" id="sample-result-filters-run" class="secondary-button" hidden disabled>▶ 运行筛选结果</button>
+    <strong>识别结果筛选</strong><button type="button" id="sample-result-filters-close" class="text-button" aria-label="收起筛选">收起 ×</button>
   </div>
-  <div id="sample-result-filters-body" class="sample-result-filters-body" hidden>
+  <div class="sample-result-filters-content">
     <div class="sample-result-filter-fields">
       <label>日期结果<select id="sample-filter-date"></select></label>
       <label>印章来源<select id="sample-filter-seal-source"></select></label>
