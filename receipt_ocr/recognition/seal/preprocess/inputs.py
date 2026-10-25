@@ -30,6 +30,7 @@ from .strong_border import prepare_strong_border_ring
 from .han_ring import prepare_han_ring
 from .multi_zone import prepare_multi_zone
 from .local_type_row import prepare_local_type_row
+from .type_row_mask import separate_type_row_bridges
 from .horizontal_consensus import prepare_horizontal_consensus, protect_consensus_border
 from ..ocr.interface import OcrReader
 
@@ -45,12 +46,18 @@ def _white_detected_type_region(
     mask_destination: Path | None = None,
     verified_interior: list | None = None,
     verified_coverage: np.ndarray | None = None,
+    observed_text: str = "",
+    observed_confidence: float = 0.0,
+    color: str = "red",
+    mask_evidence: dict | None = None,
 ) -> Path:
     """White observed row ink, protecting the border and outside pixels.
 
     Raw detector polygons retain components crossing their edges. A complete
     glyph-measured row may clip joined strokes, but only within its verified
-    polygon and the separately measured border-protection interior.
+    polygon and the separately measured border-protection interior. A reliable
+    observed row may also separate thin bridges on a localization-only copy;
+    its measured glyph count and rim must agree before recovering joined ink.
     """
     image = cv2.imread(str(source), cv2.IMREAD_COLOR)
     if image is None:
@@ -108,6 +115,14 @@ def _white_detected_type_region(
         belongs_to_row = inside >= .98 * sizes
         belongs_to_row[0] = False
         selected |= ((mask > 0) & (ink > 0) & belongs_to_row[nearest] & (distance <= 6))
+    recovered = separate_type_row_bridges(
+        source, image, mask, selected, text=observed_text,
+        confidence=observed_confidence, color=color,
+    )
+    if recovered is not None:
+        selected, evidence = recovered
+        if mask_evidence is not None:
+            mask_evidence.update(evidence)
     image[selected] = 255
     if mask_destination is not None:
         mask_destination.parent.mkdir(parents=True, exist_ok=True)
@@ -417,11 +432,15 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 # mask inside the unwrap function: reviewers can inspect the exact
                 # pixels that reached OCR.
                 mask_path = path("type-mask")
+                bridge_evidence = {}
                 _white_detected_type_region(
                     working, ring_input, box, polygons=mask_polygons,
                     mask_destination=mask_path,
                     verified_interior=refined["protected_interior"] if refined else None,
                     verified_coverage=local_row["coverage"] if local_row else None,
+                    observed_text="" if orientation.get("partial_anchor") else orientation.get("type_band_text", ""),
+                    observed_confidence=float(orientation.get("type_band_confidence") or 0),
+                    color=region.color, mask_evidence=bridge_evidence,
                 )
                 if consensus is not None:
                     protect_consensus_border(working, ring_input, mask_path, consensus["guide"])
@@ -439,6 +458,10 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     artifact["ring_input_mask_method"] = "verified_local_row"
                     artifact["ring_input_operation"] = "局部定位并验证完整横排，按同一文字范围读取和填白；可测量时按字形收紧并保护外边框，再展开读取环字"
                     artifact["ring_input_box_source"] = "验证后的完整横排文字范围"
+                if bridge_evidence:
+                    artifact["ring_input_mask_method"] = bridge_evidence["method"]
+                    artifact["ring_input_bridge_separation"] = bridge_evidence
+                    artifact["ring_input_operation"] = "按已识别的完整横排分离细线连接，仅填白原文字框内的字形笔画，保护实测外圈，再展开读取环字"
                 if mask_polygons:
                     artifact["ring_input_polygons"] = mask_polygons
                 # A separate number read remains an independent field, but
@@ -480,6 +503,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             artifact["ring_input_source_url"] = (
                 artifact.get("color_isolated_oriented_url") or artifact.get("color_isolated_url")
             )
+            artifact["ring_input_source_name"] = Path(working).name
+            artifact["ring_input_name"] = ring_input.name
             # The ring input is already a corrected, white-covered stamp
             # image.  Use the ellipse-aware sampler for both round and oval
             # stamps: the outer border remains visible after the cover, while
@@ -551,6 +576,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                             "ring-native-source", oval["source"], "原图淡色笔画增强")
                         artifact["ring_input_url"] = add(
                             "ring-native-input", oval["input"], "原图章色 · 横排笔画填白（环形展开来源）")
+                        artifact["ring_input_source_name"] = oval["source"].name
+                        artifact["ring_input_name"] = oval["input"].name
                         save_ring_text_band_preview(
                             oval["input"], ring_band, color=region.color,
                             ring_guide=ring_guide, proportional=True)

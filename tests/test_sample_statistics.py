@@ -5,6 +5,7 @@ import pytest
 
 from receipt_ocr.web.sample_statistics import evaluate_sample
 from receipt_ocr.web.samples import SampleCenter
+from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
 from test_sample_center import samples
 
 
@@ -126,3 +127,44 @@ def test_statistics_latest_batch_scope_and_production_isolation(samples):
     assert client.get("/api/samples/statistics?task_id=unknown").status_code == 404
     assert len(ctx.database.list_results()) == 1
     assert ctx.database.list_tasks() == []
+
+
+def test_statistics_preserves_each_jobs_origin_and_batch_scheme(samples):
+    ctx, client = samples
+    settings = deepcopy(DEFAULT_RECOGNITION_SETTINGS)
+    settings['recognition_config']['seal'] = ['paddle_v6']
+    ctx.database.set_json_setting('recognition_defaults', settings)
+    first = client.post('/api/samples/run', json={'filenames': ['one.png', 'two.png']}).json['task_id']
+    service = SampleCenter(ctx)
+    service.store.finish(service.store.claim(), {})
+    service.store.finish(service.store.claim(), error='测试失败')
+    finished = '2026-10-23T23:39:17+08:00'
+    started = '2026-10-23T23:38:00+08:00'
+    with service.database.connect() as con:
+        con.execute('UPDATE recognition_jobs SET started_at=?,finished_at=? WHERE task_id=?',
+                    (started, finished, first))
+    settings['recognition_config']['seal'] = ['paddle_seal']
+    ctx.database.set_json_setting('recognition_defaults', settings)
+    second = client.post('/api/samples/run', json={'filenames': ['one.png']}).json['task_id']
+    data = client.get('/api/samples/statistics').json
+    rows = {row['filename']: row for row in data['items']}
+    assert rows['one.png']['task_id'] == second
+    assert rows['two.png']['task_id'] == first
+    assert rows['two.png']['task_name'] == '样单测试 · 2 张'
+    assert rows['two.png']['tested_at'] == finished  # Keep the original time zone.
+    assert rows['blank.png']['tested_at'] == rows['blank.png']['task_id'] == ''
+    batches = {batch['id']: batch for batch in data['batches']}
+    assert batches[first]['status'] == '已完成'
+    assert batches[first]['completed'] == 2
+    assert batches[first]['succeeded'] == batches[first]['failed'] == 1
+    assert batches[first]['status_counts'] == {'succeeded': 1, 'failed': 1}
+    assert batches[first]['recognition_config']['seal'] == ['paddle_v6']
+    assert batches[first]['scheme_labels']['seal'] == ['PaddleOCR PP-OCRv6 Small']
+    assert batches[first]['started_at'] == started
+    assert batches[first]['finished_at'] == finished
+    assert batches[second]['recognition_config']['seal'] == ['paddle_seal']
+    assert batches[second]['finished_at'] == ''
+    assert batches[second]['status_counts'] == {'queued': 1}
+    scoped = client.get('/api/samples/statistics', query_string={'task_id': first}).json
+    assert {row['task_id'] for row in scoped['items']} == {first}
+    assert {row['tested_at'] for row in scoped['items']} == {finished}

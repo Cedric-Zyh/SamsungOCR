@@ -109,9 +109,9 @@ def recover_number_punctuation(source, region, working, destination, number_path
         rows = reader.read_line(number, provider=provider) if proposed.get("status") == "detected" else []
         texts = [proposed.get("text", "")] + [row.text for row in rows]
         scores = [float(proposed.get("confidence") or 0)] + [float(row.confidence) for row in rows]
-        wanted = seal_number(detection["text"])
+        wanted = seal_number(detection["text"], isolated=True)
         if (len(rows) != 1 or any(not math.isfinite(s) or s < MIN_NUMBER_CONFIDENCE for s in scores)
-                or any(seal_number(text) != wanted or not re.fullmatch(r"[（(][0-9０-９]{1,3}[）)]", text)
+                or any(seal_number(text, isolated=True) != wanted or not re.fullmatch(r"[（(][0-9０-９]{1,3}[）)]", text)
                        for text in texts)):
             return detection, {"status": "not_recovered", "reason": "原图笔画未通过编号双重识别",
                                "proposed_texts": texts, "component_box": component_box}

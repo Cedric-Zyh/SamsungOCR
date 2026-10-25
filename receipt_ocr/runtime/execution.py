@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import wraps
+from hashlib import sha256
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
@@ -12,8 +13,10 @@ from time import perf_counter
 @dataclass
 class Execution:
     pages: dict = field(default_factory=dict)
+    text_boxes: dict = field(default_factory=dict)
     steps: dict = field(default_factory=dict)
     cache_hits: int = 0
+    text_box_cache_hits: int = 0
     timing_lock: Lock = field(default_factory=Lock)
 
     def snapshot(self):
@@ -21,6 +24,7 @@ class Execution:
             'steps': {name: {'calls': value['calls'], 'seconds': round(value['seconds'], 4)}
                       for name, value in self.steps.items()},
             'page_ocr_cache_hits': self.cache_hits,
+            'text_box_ocr_cache_hits': self.text_box_cache_hits,
         }
 
 
@@ -98,3 +102,54 @@ def record_page_reuse():
     if execution is not None:
         with execution.timing_lock:
             execution.cache_hits += 1
+
+
+def reuse_text_boxes(source, model_signature, recognize):
+    """Reuse identical encoded inputs within this run, after provider checks.
+
+    Paths alone are unsafe: temporary paths can be rewritten, while identical
+    direction-search images can have different paths. The model signature
+    includes every inference option; different encodings remain separate even
+    when they might decode to the same pixels. ``recognize`` returns the boxes
+    and a cacheability flag, preserving providers' existing failure behavior.
+    Only stable file versions and successful calls can populate the cache.
+    """
+    execution = _current.get()
+    if execution is None:
+        return recognize()
+    path = Path(source)
+    try:
+        version = _file_version(path)
+        content = sha256(path.read_bytes()).digest()
+        stable = version == _file_version(path)
+    except OSError:
+        return recognize()
+    if not stable:
+        return recognize()
+    key = (model_signature, content)
+    if key in execution.text_boxes:
+        result = deepcopy(execution.text_boxes[key])
+        try:
+            stable = version == _file_version(path)
+        except OSError:
+            stable = False
+        if not stable:
+            return recognize()
+        with execution.timing_lock:
+            execution.text_box_cache_hits += 1
+        return result, True
+    result, cacheable = recognize()
+    try:
+        unchanged = (version == _file_version(path)
+                     and sha256(path.read_bytes()).digest() == content
+                     and version == _file_version(path))
+    except OSError:
+        unchanged = False
+    if cacheable and unchanged:
+        execution.text_boxes[key] = deepcopy(result)
+    return result, cacheable
+
+
+def _file_version(path):
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)

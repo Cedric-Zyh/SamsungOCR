@@ -9,16 +9,18 @@ import numpy as np
 from PIL import Image
 
 from receipt_ocr.domain.parsing.parsing_seals import normalize_seal_text_strict
-from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters
+from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters, stamp_number_token
 from .orientation_angles import _stamp_type_marker_strength
 
 
 MIN_NUMBER_CONFIDENCE = 0.80
 
 
-def seal_number(text):
-    """Accept digits and the explicit parenthesized-i numeric-field exception."""
+def seal_number(text, *, isolated=False):
+    """Read digits; isolated crops may ignore text outside their parentheses."""
     raw = re.sub(r"\s+", "", str(text or ""))
+    if isolated:
+        raw = stamp_number_token(raw) or raw
     raw = normalize_stamp_number_letters(raw, isolated=True)
     if not re.fullmatch(r"[（(]?[0-9０-９]{1,3}[）)]?", raw):
         return ""
@@ -102,7 +104,7 @@ def prepare_number_input(source, destination, focus_box, *, reader, provider):
             confidence = float(box.get("confidence") or 0.0)
             angle = float(box.get("angle") or 0.0)
             points = box.get("points") or []
-            if (not seal_number(text) or not math.isfinite(confidence)
+            if (not seal_number(text, isolated=True) or not math.isfinite(confidence)
                     or confidence < MIN_NUMBER_CONFIDENCE
                     or not math.isfinite(angle) or abs(angle) > 15 or len(points) < 4):
                 continue
@@ -159,13 +161,13 @@ def merge_number_read(artifact):
         return
     center = [row for row in artifact.get("reads", []) if row.get("channel") == "center" and row.get("text")]
     numbers = [row for row in artifact.get("reads", []) if row.get("channel") == "number" and row.get("text")]
-    artifact["stamp_number_text"] = " | ".join(row["text"] for row in numbers)
+    artifact["stamp_number_text"] = " | ".join(stamp_number_token(row["text"]) or row["text"] for row in numbers)
     artifact["stamp_number_status"] = "unverified"
     if len(center) != 1 or len(numbers) != 1:
         return
     type_row, number_row = center[0], numbers[0]
-    expected_number = seal_number(detection.get("text"))
-    actual_number = seal_number(number_row["text"])
+    expected_number = seal_number(detection.get("text"), isolated=True)
+    actual_number = seal_number(number_row["text"], isolated=True)
     confidences = [float(row.get("confidence") or 0) for row in (type_row, number_row, detection)]
     if (not expected_number or actual_number != expected_number
             or any(not math.isfinite(value) or value < MIN_NUMBER_CONFIDENCE for value in confidences)
@@ -180,7 +182,7 @@ def merge_number_read(artifact):
     if trailing:
         artifact["stamp_number_status"] = "already_in_type_row" if trailing[0] == actual_number else "conflict"
         return
-    combined = type_row["text"] + number_row["text"]
+    combined = type_row["text"] + (stamp_number_token(number_row["text"]) or number_row["text"])
     artifact.update(
         round_type_row_text=type_row["text"],
         round_type_band_text=combined,

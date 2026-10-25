@@ -56,6 +56,18 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function modernSealInputChain(item, typeBandLabel, unwrapLabel) {
     const oriented = item.color_isolated_oriented_url || item.color_isolated_url;
+    if (item.double_border_layout?.status === 'adopted') {
+      const primary = item.double_border_layout.primary;
+      return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>依据内外椭圆边框与两侧空白，完整展开公司名称；章型文字单独识别，底部网址单独保留。</small><div class="artifact-grid">${
+        artifactCard('旋正后的章色图', oriented)
+      }${artifactCard('公司名称展开图（双椭圆边框之间）', item.unwrapped_url, item.unwrapped_text || '', true)}${
+        artifactCard('章型文字', item.round_type_band_url, item.round_type_band_text || '')
+      }${artifactCard('底部网址（单独保留）', item.website_url, item.website_text || '', true)}${
+        artifactCard('实测内外椭圆边界', item.double_border_layout.overlay_url)
+      }${artifactCard('公司文字带（展开前）', item.ring_text_band_url)}</div>${primary?.image_url
+        ? `<details><summary>原整环识别（仅供核对）</summary><div class="artifact-grid">${artifactCard('原整环展开图', primary.image_url, primary.text || '', true)}</div></details>`
+        : ''}</section>`;
+    }
     if (item.multi_zone_layout) {
       const explanation = item.multi_zone_layout.method === 'ellipse_department_rows'
         ? '章内部门与章型文字分别识别；填白内部文字后，再展开读取公司名称。'

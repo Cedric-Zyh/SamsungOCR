@@ -132,24 +132,66 @@ def evaluate_sample(name, truth, job):
     return {
         "filename": name, "company": str(fields.get("客户名称") or "").strip() or "未分类",
         "result_id": job.get("result_id"), "job_status": status,
+        "task_id": job.get("task_id", ""), "task_name": job.get("task_name", ""),
+        "tested_at": job.get("finished_at") or job.get("started_at") or job.get("created_at", ""),
         "expected_date": expected_date, "requirement": fields.get("签章要求", ""),
         "expected_seal": expected_seal, "date": date_cell, "seals": seals,
     }
 
 
+def _batch_metadata(batch):
+    """Expose the saved test scheme, never the user's current defaults."""
+    config = json.loads(batch.get("recognition_config") or "null")
+    if not isinstance(config, dict):
+        # Older batches predate explicit per-stage plans.
+        mode = batch.get("seal_recognition_mode")
+        local = batch.get("ocr_backend")
+        config = {
+            "date": [local] if local else [],
+            "seal": (["qingtong"] if mode in {"qingtong", "qingtong_only"} else [])
+                    + ([local] if local and mode != "qingtong_only" else []),
+        }
+    batch["recognition_config"] = config
+    batch["scheme_labels"] = {
+        stage: [PROVIDERS.get(method).label if PROVIDERS.get(method) else method
+                for method in config.get(stage, [])]
+        for stage in ("date", "seal")
+    }
+    return batch
+
+
 def sample_statistics(center, task_id=""):
     catalog = center.catalog()
     with center.database.connect() as con:
-        batches = [dict(row) for row in con.execute("""
-            SELECT id,name,created_at,total FROM batch_tasks ORDER BY rowid DESC
+        # All values in this view belong to one database snapshot.
+        con.execute("BEGIN")
+        batches = [_batch_metadata(dict(row)) for row in con.execute("""
+            SELECT b.id,b.name,b.created_at,b.updated_at,b.total,b.status,
+                b.completed,b.succeeded,b.failed,b.recognition_config,
+                b.ocr_backend,b.seal_recognition_mode,
+                COALESCE(MIN(NULLIF(j.started_at,'')),'') AS started_at,
+                CASE WHEN b.completed>=b.total THEN COALESCE(MAX(j.finished_at),'')
+                     ELSE '' END AS finished_at
+            FROM batch_tasks b LEFT JOIN recognition_jobs j ON j.task_id=b.id
+            GROUP BY b.id ORDER BY b.rowid DESC
         """)]
+        batch_lookup = {batch["id"]: batch for batch in batches}
+        for batch in batches:
+            batch["status_counts"] = {}
+        for count in con.execute("""
+            SELECT task_id,status,COUNT(*) AS total FROM recognition_jobs GROUP BY task_id,status
+        """):
+            if count["task_id"] in batch_lookup:
+                batch_lookup[count["task_id"]]["status_counts"][count["status"]] = count["total"]
         if task_id and task_id not in {batch["id"] for batch in batches}:
             raise KeyError(task_id)
         # Snapshot configuration and raw results belong to the same job.
         jobs = {row["filename"]: dict(row) for row in con.execute("""
-            SELECT j.filename,j.status,j.result_id,j.error_message,j.payload_json,r.result_json
+            SELECT j.filename,j.status,j.result_id,j.error_message,j.payload_json,r.result_json,
+                j.task_id,b.name AS task_name,j.created_at,j.started_at,j.finished_at
             FROM recognition_jobs j
             LEFT JOIN results r ON r.id=j.result_id AND r.deleted_at=''
+            LEFT JOIN batch_tasks b ON b.id=j.task_id
             WHERE j.rowid IN (
                 SELECT MAX(rowid) FROM recognition_jobs
                 WHERE (?='' OR task_id=?) GROUP BY filename

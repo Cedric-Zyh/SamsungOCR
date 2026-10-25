@@ -263,6 +263,7 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, 
         detected = prepare_detected_layout(
             source, directory, index, image, guide, rho, reader=reader,
             provider=provider, color=color, evidence=detector_evidence,
+            verified_rows=(orientation or {}).get('department_verified_rows'),
         )
         if detected is not None:
             return detected

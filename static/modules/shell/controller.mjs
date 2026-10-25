@@ -31,7 +31,8 @@ export function createApplication(environment, options = {}) {
   const {ReceiptImport, ReceiptQueue, ReceiptWorkbench} = {...environment, ...options};
   const api = options.api || createApi({fetch: environment.fetch, onResultsChanged: invalidateResultViews});
   const services = options.services || createApiClients(api);
-  const seal_center = createSealCenter({ui, services});
+  const seal_center = createSealCenter({ui, services,
+    openSource: (id, kind) => review.openReview(id, {sample: kind === 'sample', mode: 'view', origin: '#seal-center'})});
   const process_history = createProcessHistory({
     environment,
     ui,
@@ -227,7 +228,7 @@ export function createApplication(environment, options = {}) {
     if (document.hidden) return;
     try {
       const page = document.body.dataset.activePage;
-      if (page === 'samples') await sample_center.load();
+      if (page === 'samples') await sample_center.poll();
       if (['progress', 'records'].includes(page) && Date.now() - (progressState.dailyAttemptAt || 0) >= 2000) await progress.loadDailyResults({refreshRecords:false});
       if (page === 'records' && (recordsState.recordsStale || Date.now() - (recordsState.recordAttemptAt || 0) >= 10000)) await records.loadRecords({background:!!recordsState.recordsLoaded});
       else if (page === 'quality' && Date.now() - (reportState.reportAttemptAt || 0) >= 30000) await report.loadReport();

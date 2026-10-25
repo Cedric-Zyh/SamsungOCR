@@ -48,7 +48,7 @@ def detected_rows(boxes, image, rho, *, allow_single_type=False):
         row_height = float(np.linalg.norm(points[3]-points[0]))
         angle = np.rad2deg(np.arctan2(*(points[1]-points[0])[::-1]))
         confidence = float(box.get('confidence') or 0)
-        role = inner_role(box.get('text', ''))
+        role = inner_role(box.get('text', ''), number_field=box.get('number_field', False))
         if (not np.isfinite(confidence) or confidence < .80 or abs(angle) > 15
                 or rho[y, x] > .70 or row_height < 8
                 or row_width < (.65 if role == 'number' else 2)*row_height):
@@ -136,7 +136,8 @@ def _detect_layout_rows(source, directory, index, image, rho, *, reader, provide
     return (merged, combined) if len(combined) == 2 else (boxes, rows)
 
 
-def prepare_detected_layout(source, directory, index, image, guide, rho, *, reader, provider, color='red', evidence=None):
+def prepare_detected_layout(source, directory, index, image, guide, rho, *, reader, provider, color='red', evidence=None,
+                            verified_rows=None):
     from .inputs import _white_detected_type_region
     from .multi_zone import _arc_maps
 
@@ -145,9 +146,21 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
     def path(name):
         return directory / f'seal-{index}-zones-{name}.png'
 
-    boxes, rows = _detect_layout_rows(
-        source, directory, index, image, rho, reader=reader, provider=provider,
-    )
+    boxes, rows = [], []
+    if (verified_rows and verified_rows.get('coordinate_frame') == 'final_oriented_stamp'
+            and verified_rows.get('image_size') == [image.shape[1], image.shape[0]]):
+        # Reuse the complete rows verified during orientation. A fresh smaller
+        # detection must not replace them with fragmented glyph boxes.
+        from .department_orientation import department_rows
+        boxes = verified_rows.get('boxes', [])
+        rows = department_rows(boxes, image)
+        if rows and [r['detected_text'] for r in rows] != [
+                verified_rows.get('department_text'), verified_rows.get('type_text')]:
+            rows = []
+    if not rows:
+        boxes, rows = _detect_layout_rows(
+            source, directory, index, image, rho, reader=reader, provider=provider,
+        )
     if evidence is not None:
         # Preserve the independent detector decision before a short-number
         # retry or failed arc construction can replace its local row list.
@@ -159,11 +172,12 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
         number = prepare_number_input(
             source, path('number-detection'), rows[0]['box'], reader=reader, provider=provider,
         )
-        if number.get('status') != 'detected' or inner_role(number.get('text')) != 'number':
+        if number.get('status') != 'detected' or inner_role(number.get('text'), number_field=True) != 'number':
             return None
         l, top, r, bottom = number['box']
         boxes = list(boxes) + [{
             'text': number['text'], 'confidence': number['confidence'],
+            'number_field': True,
             'points': [[l, top], [r, top], [r, bottom], [l, bottom]],
         }]
         rows = detected_rows(boxes, image, rho)

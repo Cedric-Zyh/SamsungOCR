@@ -109,6 +109,63 @@ body[data-active-page="review"] .review-preview { background:#dfdcd5; border-col
 .review-page .history-item :is(span,p) { color:var(--archive-muted); font-size:12px; }
 .review-page .truth-controls .check-label { border-color:var(--archive-line); border-radius:2px; background:transparent; color:var(--archive-text); font-weight:500; }
 
+
+/* Sample annotations are a self-contained form within the review column. */
+.review-page fieldset.sample-annotation-editor { display:block; width:100%; min-width:0; margin:0; padding:0; border:0; container-type:inline-size; container-name:sample-annotation; }
+.review-page fieldset.sample-annotation-editor>details.review-block { min-width:0; margin:0; padding:0; border:1px solid #d8d4c9; border-radius:8px; background:#f7f5ef; }
+.review-page fieldset.sample-annotation-editor>details.review-block+details.review-block { margin-top:12px; }
+.review-page fieldset.sample-annotation-editor>details.review-block>.annotation-section-heading { display:flex; align-items:center; gap:10px; min-width:0; min-height:48px; margin:0; padding:13px 16px; border:0; color:var(--archive-text); font-size:13px; font-weight:500; line-height:1.5; list-style:none; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading::-webkit-details-marker { display:none; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading>span { margin:0; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading>.annotation-section-title { display:inline-flex; align-items:center; flex:1; gap:8px; min-width:0; color:var(--archive-ink); font-size:13px; font-weight:600; }
+.review-page fieldset.sample-annotation-editor .annotation-section-title>svg { flex:none; width:16px; height:16px; fill:none; stroke:#667452; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading>[data-truth-status] { flex:0 1 auto; max-width:50%; padding:3px 7px; border:1px solid #ddd9cf; border-radius:4px; background:#ece9e1; color:var(--archive-text); font-size:11px; font-weight:400; line-height:1.5; text-align:center; white-space:normal; overflow-wrap:anywhere; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading>[data-truth-status]:empty { display:none; }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading>.annotation-chevron { display:grid; place-items:center; flex:none; width:18px; height:18px; color:var(--archive-muted); transition:transform .15s ease; }
+.review-page fieldset.sample-annotation-editor .annotation-chevron>svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.review-page fieldset.sample-annotation-editor>details[open]>.annotation-section-heading>.annotation-chevron { transform:rotate(180deg); }
+.review-page fieldset.sample-annotation-editor .annotation-section-heading:focus-visible { outline:2px solid #7b8969; outline-offset:3px; border-radius:6px; }
+.review-page fieldset.sample-annotation-editor .annotation-section-body { min-width:0; padding:0 16px 16px; }
+.review-page fieldset.sample-annotation-editor .annotation-description { margin:0 0 16px; color:var(--archive-muted); font-size:11px; line-height:1.75; }
+.review-page fieldset.sample-annotation-editor .annotation-prefill-note { margin:0 0 16px; padding:8px 10px; border-left:2px solid #a5b28c; border-radius:0 4px 4px 0; background:#edf0e5; color:#626f4f; font-size:12px; font-weight:400; line-height:1.7; overflow-wrap:anywhere; }
+.review-page fieldset.sample-annotation-editor .annotation-prefill-note[hidden] { display:none; }
+.review-page fieldset.sample-annotation-editor .truth-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:14px 12px; min-width:0; }
+.review-page fieldset.sample-annotation-editor .annotation-field { display:grid; align-content:start; gap:6px; min-width:0; margin:0; color:var(--archive-text); font-size:12px; font-weight:400; line-height:1.5; }
+.review-page fieldset.sample-annotation-editor .annotation-field-wide { grid-column:1 / -1; }
+.review-page fieldset.sample-annotation-editor .annotation-field-label { color:var(--archive-text); font-size:12px; font-weight:500; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select,textarea) { appearance:none; -webkit-appearance:none; display:block; width:100%; min-width:0; max-width:100%; margin:0; padding:9px 11px; border:1px solid #cfcfc2; border-radius:6px; background:#fdfcf8; color:var(--archive-ink); box-shadow:none; font:inherit; font-size:13px; font-weight:400; line-height:20px; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select) { height:40px; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select,textarea)[data-annotation-source="recognition"]:not(:disabled):not([readonly]):not(:focus) { border-color:#bdc6ad; background:#f8faf2; }
+.review-page fieldset.sample-annotation-editor .annotation-field textarea { height:76px; min-height:76px; resize:vertical; }
+.review-page fieldset.sample-annotation-editor .annotation-field input::placeholder,.review-page fieldset.sample-annotation-editor .annotation-field textarea::placeholder { color:#97988c; opacity:1; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select,textarea):focus { border-color:#899875; outline:2px solid #6c7c522b; outline-offset:2px; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select,textarea):is(:disabled,[readonly]) { border-color:#d9d6cb; background:#ece9e2; color:#7b7f71; -webkit-text-fill-color:#7b7f71; opacity:1; cursor:default; }
+.review-page fieldset.sample-annotation-editor .annotation-field :is(input,select,textarea):disabled { cursor:not-allowed; }
+.review-page fieldset.sample-annotation-editor .annotation-select { position:relative; display:block; min-width:0; }
+.review-page fieldset.sample-annotation-editor .annotation-select select { padding-right:35px; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-select>svg { position:absolute; top:14px; right:12px; width:12px; height:12px; fill:none; stroke:#7a826d; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+.review-page fieldset.sample-annotation-editor .annotation-select:has(select:disabled)>svg { stroke:#969a8d; }
+.review-page fieldset.sample-annotation-editor .annotation-field input[type="date"] { font-variant-numeric:tabular-nums; }
+.review-page fieldset.sample-annotation-editor .annotation-field input[type="date"]::-webkit-date-and-time-value { text-align:left; }
+.review-page fieldset.sample-annotation-editor .annotation-field-hint { display:none; margin:0; color:var(--archive-muted); font-size:11px; font-weight:400; line-height:1.6; }
+.review-page fieldset.sample-annotation-editor .annotation-actual-date:has(input:disabled) .annotation-field-hint { display:block; }
+.review-page fieldset.sample-annotation-editor .truth-history { margin:16px 0 0; padding-top:12px; border-top:1px solid var(--archive-soft-line); color:var(--archive-muted); font-size:11px; font-weight:400; line-height:1.7; white-space:normal; overflow-wrap:anywhere; }
+.review-page fieldset.sample-annotation-editor .truth-history:empty { display:none; }
+.review-page fieldset.sample-annotation-editor .annotation-notes-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; min-width:0; }
+.review-page fieldset.sample-annotation-editor .annotation-notes-grid>.annotation-field:last-child { width:100%; max-width:250px; }
+@container sample-annotation (max-width:420px) {
+  .review-page fieldset.sample-annotation-editor .truth-controls { grid-template-columns:minmax(0,1fr); }
+  .review-page fieldset.sample-annotation-editor .annotation-notes-grid>.annotation-field:last-child { max-width:none; }
+}
+@container sample-annotation (max-width:340px) {
+  .review-page fieldset.sample-annotation-editor>details.review-block>.annotation-section-heading { gap:8px; padding-inline:12px; }
+  .review-page fieldset.sample-annotation-editor .annotation-section-body { padding-inline:12px; }
+  .review-page fieldset.sample-annotation-editor .annotation-section-heading>.annotation-section-title { gap:6px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .review-page fieldset.sample-annotation-editor .annotation-chevron { transition:none; }
+}
+
 .review-page .review-actions { background:var(--archive-paper); border-top:1px solid var(--archive-line); box-shadow:0 -4px 12px #272b1f06; }
 .review-page .review-actions button { min-height:34px; border-radius:2px; font-weight:500; }
 .review-page .review-actions .primary-button { color:var(--archive-paper); background:#282d23; border:1px solid #282d23; }
@@ -137,6 +194,20 @@ body:is([data-active-page="records"], [data-active-page="review"]) #open-batch-r
   box-shadow:0 26px 90px #3b362736; overflow:hidden;
 }
 .review-dialog[open] { display:flex; flex-direction:column; }
+.review-dialog.has-sample-browse { padding-inline:48px; }
+.review-browse-position { color:var(--archive-muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.review-dialog .review-browse-arrow {
+  position:absolute; top:50%; z-index:9; display:grid; place-items:center; width:36px; height:72px;
+  padding:0; border:1px solid var(--archive-line); border-radius:4px; background:var(--archive-paper);
+  color:var(--archive-ink); opacity:.4; transform:translateY(-50%); cursor:pointer;
+  transition:opacity .16s ease,background-color .16s ease,border-color .16s ease;
+}
+.review-dialog .review-browse-prev { left:5px; }
+.review-dialog .review-browse-next { right:5px; }
+.review-dialog .review-browse-arrow svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.review-dialog .review-browse-arrow:is(:hover,:focus-visible):not(:disabled) { opacity:1; background:var(--archive-accent-wash); border-color:#b5a17f; }
+.review-dialog .review-browse-arrow:disabled { opacity:.16; cursor:default; }
+.review-dialog .review-browse-arrow.hidden { display:none; }
 .review-dialog::backdrop { background:#d7d3c78c; backdrop-filter:blur(9px); -webkit-backdrop-filter:blur(9px); }
 .review-dialog-heading { display:flex; flex:none; align-items:center; justify-content:space-between; gap:24px; min-height:62px; border-bottom:1px solid var(--archive-line); }
 .review-dialog-heading h2 { flex:none; margin:0; font-size:19px; font-weight:650; letter-spacing:1px; }
@@ -184,4 +255,5 @@ body[data-active-page="review"] .review-dialog .review-form { height:100%; min-h
 }
 @media(prefers-reduced-motion:reduce) {
   .review-dialog .review-empty.is-loading .empty-mark { animation:none; }
+  .review-dialog .review-browse-arrow { transition:none; }
 }

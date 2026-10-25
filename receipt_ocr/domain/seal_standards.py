@@ -54,17 +54,24 @@ def seal_candidates(result):
             (key for key, label in SHAPES.items() if label == artifact.get("shape")), ""
         )
         texts = []
+        receiving_form = bool(artifact.get('rectangular_form_fields'))
         ring, center = str(artifact.get("unwrapped_text") or ""), str(artifact.get("round_type_band_text") or "")
         if ring and center:
             texts.append(ring + center)
-        texts.extend([artifact.get("rectangular_text"), ring, center, artifact.get("color_isolated_text"),
+        texts.extend([artifact.get("rectangular_text"), ring, center,
+                      artifact.get("color_isolated_text") if not receiving_form else None,
                       artifact.get("combined_text")])
         texts.extend(artifact.get("matching_texts") or [])
         texts.extend(read.get("text") for read in artifact.get("reads") or []
                      if isinstance(read, dict) and read.get("matching") is not False
                      and read.get("channel") != "serial")
         texts.extend(serial_matching_texts(requirement, artifact))
-        texts.extend(artifact.get("color_isolated_texts") or [])
+        # Whole-body OCR also contains receiving/date values. Once physical
+        # form cells are identified, only active rows and their assembled
+        # identity may enter standard registration/comparison. Raw body text
+        # remains available in the artifact for inspection.
+        if not receiving_form:
+            texts.extend(artifact.get("color_isolated_texts") or [])
         # Remote OCR belongs only to the explicitly identified API stamp.
         if artifact.get("source") == "清瞳印章区域":
             entry = next((c for c in remote if c.get("index") == artifact.get("api_index")), {})

@@ -11,7 +11,7 @@ from typing import Iterable
 
 from ..domain.ocr import TextObservation
 from .registry import PROVIDERS
-from ..runtime.execution import measure
+from ..runtime.execution import measure, reuse_text_boxes
 
 
 # Intel/OpenMP may try to allocate a shared-memory control segment while
@@ -427,12 +427,22 @@ def detect_text_boxes(
     if width <= 0 or height <= 0:
         return []
 
+    # Preserve the same predictor inputs and options. Only byte-identical
+    # successful reads in this document may skip another native prediction.
+    signature = ('paddle-boxes-v1', model_variant, MODEL_VARIANTS[model_variant],
+                 paddle_engine(), path.suffix.lower(), width, height)
+    return reuse_text_boxes(path, signature,
+                            lambda: _predict_text_boxes(path, model_variant, width, height))[0]
+
+
+def _predict_text_boxes(path, model_variant, width, height):
     with _prediction_slot():
         with measure("paddle_text_box_setup"):
             pipeline = _pipeline(model_variant)
         with measure("paddle_text_box_inference"):
             results = list(pipeline.predict(input=str(path)))
 
+    cacheable = not any(result.get('error') for result in results)
     output: list[dict] = []
     for result in results:
         for text, score, polygon in zip(
@@ -473,4 +483,4 @@ def detect_text_boxes(
                 "width": (max(xs) - min(xs)) / width,
                 "height": (max(ys) - min(ys)) / height,
             })
-    return output
+    return output, cacheable

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 import warnings
 
@@ -31,6 +32,9 @@ class SampleLibrary:
         self.ctx, self.database = ctx, database
         self.directory = database.path.parent / 'originals'
         self.directory.mkdir(exist_ok=True)
+        self._truth_lock = threading.Lock()
+        self._truth_signature = None
+        self._truth_names = frozenset()
         with database.connect() as con:
             con.execute('''CREATE TABLE IF NOT EXISTS sample_library (
                 filename TEXT PRIMARY KEY, storage_name TEXT NOT NULL DEFAULT '',
@@ -54,15 +58,34 @@ class SampleLibrary:
         return entries
 
     def source(self, name, *, include_deleted=False):
-        if name not in self.catalog(include_deleted=include_deleted):
+        if not isinstance(name, str) or Path(name).name != name:
             raise KeyError(name)
         with self.database.connect() as con:
-            row = con.execute('SELECT storage_name FROM sample_library WHERE filename=?', (name,)).fetchone()
+            row = con.execute('SELECT storage_name,deleted_at FROM sample_library WHERE filename=?', (name,)).fetchone()
+        if row and row['deleted_at'] and not include_deleted:
+            raise KeyError(name)
+        if not (row and row['storage_name']):
+            if name not in self._builtin_names() or Path(name).suffix.lower() not in self.ctx.ALLOWED_EXTENSIONS:
+                raise KeyError(name)
         root = self.directory if row and row['storage_name'] else self.ctx.DATA_DIR
         source = (root / (row['storage_name'] if row and row['storage_name'] else name)).resolve()
         if source.parent != root.resolve() or not source.is_file():
             raise KeyError(name)
         return source
+
+    def _builtin_names(self):
+        """Reload the built-in allowlist only when its source file changes."""
+        path = Path(self.ctx.GROUND_TRUTH_PATH)
+        with self._truth_lock:
+            try:
+                stat = path.stat()
+                signature = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+            except FileNotFoundError:
+                signature = (str(path.resolve()), None, None)
+            if signature != self._truth_signature:
+                self._truth_names = frozenset(load_ground_truth(path))
+                self._truth_signature = signature
+            return self._truth_names
 
     def import_files(self, files, company):
         if not 1 <= len(files) <= 100:

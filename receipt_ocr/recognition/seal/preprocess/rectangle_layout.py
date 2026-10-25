@@ -30,7 +30,7 @@ def _empty_form_field(interior, span, boxes, scaled_height):
         if not top <= mapped[:, 1].mean() < bottom or confidence < .5:
             continue
         text = re.sub(r'\s+', '', str(box.get('text') or ''))
-        if re.fullmatch(r'(?:收货人|收货日期|收货时间|签收人|签收日期)[:：]?', text) and confidence >= .90:
+        if re.fullmatch(r'(?:收货人|收货日期|收货时间|签收人|签收日期|日期)[:：]?', text) and confidence >= .90:
             labels.append(text)
         elif not re.fullmatch(r'[年月日时分:：]+', text):
             return None

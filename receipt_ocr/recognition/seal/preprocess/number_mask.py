@@ -33,7 +33,7 @@ def _complete_number_box(image, box):
 def white_verified_number(ring_input, number_input, evidence, mask_path, combined_mask,
                           *, reader, provider):
     box = evidence.get('box')
-    expected = seal_number(evidence.get('text'))
+    expected = seal_number(evidence.get('text'), isolated=True)
     confidence = float(evidence.get('confidence') or 0)
     if (evidence.get('status') != 'detected' or not expected
             or not math.isfinite(confidence) or confidence < MIN_NUMBER_CONFIDENCE
@@ -51,7 +51,7 @@ def white_verified_number(ring_input, number_input, evidence, mask_path, combine
         return {'status': 'unverified'}
     read = reads[0]
     score = float(read.confidence or 0)
-    if (seal_number(read.text) != expected or not math.isfinite(score)
+    if (seal_number(read.text, isolated=True) != expected or not math.isfinite(score)
             or score < MIN_NUMBER_CONFIDENCE):
         return {'status': 'unverified', 'text': read.text, 'confidence': score}
     # Reuse containment-based masking: a frame or a neighbouring stroke

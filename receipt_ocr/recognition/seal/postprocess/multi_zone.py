@@ -2,6 +2,7 @@
 import re
 from collections import Counter
 
+from receipt_ocr.domain.parsing.seal_numbers import stamp_number_token
 from ..layout_fields import inner_role, phone_value
 
 
@@ -28,6 +29,8 @@ def finalize_multi_zone(artifact):
         if channel not in {'layout_inner', 'layout_lower', 'ring'}:
             continue
         text = re.sub(r'\s+', '', row.get('text', ''))
+        number_field = channel == 'layout_inner'
+        number_text = stamp_number_token(text) if number_field else ''
         trusted = float(row.get('confidence') or 0) >= .80
         role = '待核对文字'
         row['matching'] = False
@@ -53,10 +56,10 @@ def finalize_multi_zone(artifact):
             phone = phone_value(text)
             phones.append(phone)
             artifact.update(phone_text=phone, phone_url=row['image_url'])
-        elif trusted and inner_role(text) == 'number':
+        elif trusted and inner_role(text, number_field=number_field) == 'number':
             role = '章内编号'
-            numbers.append(text)
-            artifact.update(stamp_number_text=row['text'], stamp_number_url=row['image_url'])
+            numbers.append(number_text)
+            artifact.update(stamp_number_text=number_text, stamp_number_url=row['image_url'])
         elif trusted and re.fullmatch(r'\d{4,12}站', text):
             role = '站点编号'
             stations.append(text)
@@ -72,7 +75,7 @@ def finalize_multi_zone(artifact):
                             round_type_band_url=row['image_url'])
         row['zone_label'] = role
         if channel == 'layout_inner':
-            observed_roles.append(inner_role(text) if trusted else '')
+            observed_roles.append(inner_role(text, number_field=number_field) if trusted else '')
     # Assemble only unambiguous observations from this single physical stamp.
     # Number remains separately visible; phone never enters the company name.
     matching = []

@@ -518,6 +518,16 @@ if (process.argv.includes('--render-samples')) {
     assert.equal(calls.length,3);assert.equal(h.timers.at(-1).delay,5000);
   });
 
+  test('sample background polling uses its idle-aware refresh entry point', async () => {
+    const h=harness(), calls=[];
+    const app=createApplication(h.context,{state:h.bags,ui:{$:h.$,$$:()=>[],toast:h.context.toast},fieldSchema:h.context.fieldSchema,api:h.context.api});
+    app.sample_center.poll=async()=>calls.push('poll');
+    app.sample_center.load=async()=>assert.fail('background polling must not force a full sample refresh');
+    h.context.document.body.dataset.activePage='samples';
+    await app.pollQueue();
+    assert.deepEqual(calls,['poll']);
+  });
+
   test('statistics refreshes coalesce and identify fields missing ground truth', async () => {
     const h=harness(['loadReport','renderReport','percent','escapeHtml']), pending=defer();
     let calls=0;h.context.api=()=>{calls++;return pending.promise;};

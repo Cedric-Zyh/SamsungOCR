@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from .number_mask import _complete_number_box
-from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters
+from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters, stamp_number_token
 
 
 def prepare_overlapping_number(source, destination, focus_box, *, reader, provider):
@@ -35,7 +35,7 @@ def prepare_overlapping_number(source, destination, focus_box, *, reader, provid
         text = re.sub(r'\s+', '', str(item.get('text') or ''))
         confidence = float(item.get('confidence') or 0)
         points = np.asarray(item.get('points', []), float)
-        if (not re.fullmatch(r'[（(][0-9０-９]{1,3}[）)]', normalize_stamp_number_letters(text, isolated=True))
+        if (not re.fullmatch(r'[（(][0-9０-９]{1,3}[）)]', normalize_stamp_number_letters(stamp_number_token(text), isolated=True))
                 or not math.isfinite(confidence) or confidence < .90
                 or points.shape != (4, 2) or not np.isfinite(points).all()):
             continue

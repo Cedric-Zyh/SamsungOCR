@@ -4,7 +4,9 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.web.sample_result_filters import FILTER_RESULT_SQL, sample_result_filters
+from receipt_ocr.web.sample_result_filters import (
+    FILTER_RESULT_SQL, LIST_RESULT_SQL, decode_list_result, sample_result_filters,
+)
 from receipt_ocr.web.samples import SampleCenter
 from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
 from test_sample_center import samples
@@ -19,9 +21,10 @@ def project(result, *, status='succeeded', plan=PLAN):
     with sqlite3.connect(':memory:') as con:
         con.execute('CREATE TABLE results (result_json TEXT)')
         con.execute('INSERT INTO results VALUES(?)', (json.dumps(result),))
-        compact = con.execute('SELECT ' + FILTER_RESULT_SQL + ' FROM results r').fetchone()[0]
-    return sample_result_filters({'status': status, 'filter_result': compact,
-                                 'payload_json': json.dumps({'sample_options': {'recognition_config': plan}})}, TRUTH), compact
+        compact = con.execute('SELECT ' + LIST_RESULT_SQL + ' FROM results r').fetchone()[0]
+    return sample_result_filters({'status': status,
+                                 'payload_json': json.dumps({'sample_options': {'recognition_config': plan}})},
+                                 TRUTH, result=decode_list_result(compact)), compact
 
 
 def evidence():
@@ -104,6 +107,43 @@ def test_legacy_ocr_only_and_local_channel_use_their_own_evidence():
     assert row['seals']['qingtong_ocr']['state'] == '不匹配'
     assert row['seals']['local:legacy_local']['state'] == '部分匹配'
     assert row['seals']['local:paddle_v6']['state'] == '未运行'
+
+
+@pytest.mark.parametrize('result', [
+    None, {}, evidence(),
+    {'recognition_variants': {'seal': None}},
+    {'recognition_variants': {'seal': []}},
+    {'date_check': None, 'seal_check': None, 'recognition_variants': None},
+    {'date_check': 'old-invalid-shape', 'seal_check': False, 'recognition_variants': 'legacy'},
+    {'seal_check': {'status': True, 'recognized': False, 'reliable': False,
+                    'dual_check': {'selected': {'template': {'matched': True}}}}},
+    {'recognition_config': {'date': [], 'seal': ['paddle_v6']},
+     'recognition_variants': {'seal': [{'method': 'paddle_v6', 'error': None, 'details': None}]}},
+])
+def test_compact_projection_preserves_legacy_sql_evidence_including_missing_and_null_variants(result):
+    with sqlite3.connect(':memory:') as con:
+        con.execute('CREATE TABLE results (result_json TEXT)')
+        con.execute('INSERT INTO results VALUES(?)', (json.dumps(result) if result is not None else None,))
+        legacy, compact = con.execute('SELECT ' + FILTER_RESULT_SQL + ',' + LIST_RESULT_SQL + ' FROM results r').fetchone()
+    expected = json.loads(legacy)
+    actual = decode_list_result(compact)
+    del actual['fields'], actual['signature_check']
+    assert json.dumps(actual, sort_keys=True) == json.dumps(expected, sort_keys=True)
+
+
+def test_compact_projection_preserves_signature_review_and_recognition_config():
+    result = evidence()
+    result['fields'] = {'仓库联系人': '张三', '仓库接收人': '李四'}
+    result['signature_check'] = {'source': '人工复核', 'contact': '张三', 'receiver': '李四',
+                                 'human_confirmed_match': True, 'status': '匹配'}
+    result['recognition_config'] = PLAN
+    with sqlite3.connect(':memory:') as con:
+        con.execute('CREATE TABLE results (result_json TEXT)')
+        con.execute('INSERT INTO results VALUES(?)', (json.dumps(result),))
+        projected = decode_list_result(con.execute('SELECT ' + LIST_RESULT_SQL + ' FROM results r').fetchone()[0])
+    assert projected['fields'] == result['fields']
+    assert projected['signature_check'] == result['signature_check']
+    assert projected['recognition_config'] == PLAN
 
 
 def test_list_endpoint_uses_latest_sample_job_and_carries_only_compact_filter_data(samples):

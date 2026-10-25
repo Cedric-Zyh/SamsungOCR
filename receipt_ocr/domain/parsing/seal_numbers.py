@@ -4,6 +4,18 @@ import re
 
 _ONE = r"[（(]\s*[iIｉＩ]\s*[）)]"
 _PURPOSE_NUMBER = re.compile(r"((?:专用章|收货章|业务受理章?)\s*)" + _ONE)
+_PARENTHESIZED = re.compile(r"[（(][^()（）]*[）)]")
+
+
+def stamp_number_token(text):
+    """Keep one observed parenthesized token in an isolated number field.
+
+    Preserve its contents and bracket shapes. More than one token remains
+    ambiguous; the caller must never select one using the required number.
+    This is deliberately separate from whole-seal/company normalization.
+    """
+    matches = _PARENTHESIZED.findall(str(text or ""))
+    return matches[0] if len(matches) == 1 else ""
 
 
 def normalize_stamp_number_letters(text, *, isolated=False):

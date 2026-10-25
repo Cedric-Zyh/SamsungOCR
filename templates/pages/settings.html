@@ -1,16 +1,26 @@
     <section data-page="settings" class="hidden settings-page">
-      <div class="recognition-plan">
-        <div class="settings-layout">
-          <section class="settings-card settings-content" aria-labelledby="settings-content-title">
-            <div class="settings-section-heading"><div><h2 id="settings-content-title">识别内容与方式</h2><p>勾选需要的内容；多选方式可做结果对照。</p></div><span id="plan-selected-count" class="settings-count"></span></div>
+      <div class="settings-shell">
+        <div class="settings-tabs-bar">
+          <nav class="settings-tabs" role="tablist" aria-label="设置分类">
+            <button type="button" id="settings-tab-recognition" class="settings-tab" role="tab" data-settings-tab="recognition" aria-controls="settings-recognition-panel" aria-selected="true" tabindex="0">识别设置</button>
+            <button type="button" id="settings-tab-rules" class="settings-tab" role="tab" data-settings-tab="rules" aria-controls="settings-rules-panel" aria-selected="false" tabindex="-1">核验规则</button>
+            <button type="button" id="settings-tab-services" class="settings-tab" role="tab" data-settings-tab="services" aria-controls="settings-services-panel" aria-selected="false" tabindex="-1">远程服务</button>
+            <button type="button" id="settings-tab-data" class="settings-tab" role="tab" data-settings-tab="data" aria-controls="settings-data-panel" aria-selected="false" tabindex="-1">数据管理</button>
+          </nav>
+          <div class="settings-auto-save-panel"><p id="plan-save-status" class="plan-save-status" role="status" aria-live="polite"></p></div>
+        </div>
+        <section id="settings-recognition-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="recognition" aria-labelledby="settings-tab-recognition">
+          <section class="settings-card settings-content recognition-plan" aria-labelledby="settings-content-title">
+            <div class="settings-section-heading"><div><h2 id="settings-content-title">识别内容</h2><p>选择需要读取的内容，并为每项设置识别方式，修改后自动保存。</p></div></div>
+            <div class="settings-overview"><span class="settings-count">已启用 <span id="plan-selected-count"></span></span><span class="settings-overview-note">多选方式会分别识别，用于结果对照</span><span id="plan-name">自定义</span></div>
+            <p id="plan-error" class="settings-note settings-note-error hidden" role="alert"></p>
             <div class="plan-grid">
 {% for key, title, description in [('fields','印刷字段','客户、订单、到货要求与签章要求'),('products','商品明细','商品名称、型号和数量'),('handwriting','手写签名','收货人等手写信息'),('date','签收日期','识别日期，并与到货要求比对'),('seal','客户印章','识别印章，并与签章要求比对')] %}
               <section class="plan-card" data-plan-card="{{ key }}" aria-labelledby="plan-title-{{ key }}">
-                <div class="plan-card-heading"><label class="plan-title" id="plan-title-{{ key }}"><input type="checkbox" data-target="{{ key }}" aria-controls="plan-methods-{{ key }}" checked><span>{{ title }}</span></label><span class="plan-stage-status" data-plan-status="{{ key }}"></span></div>
-                <p class="plan-description">{{ description }}</p>
+                <div class="plan-card-copy"><h3 class="plan-title" id="plan-title-{{ key }}">{{ title }}</h3><p class="plan-description">{{ description }}</p></div>
                 <div class="plan-methods" id="plan-methods-{{ key }}" role="group" aria-label="{{ title }}识别方式">
 {% for backend in ocr_backend_catalog if backend.id in ['paddle_v6','paddle_seal'] and (backend.id != 'paddle_seal' or key == 'seal') %}
-                  <label class="plan-method" title="{{ backend.reason if not backend.available else {'paddle_v6':'在本机使用 PP-OCRv6 Small 识别','paddle_seal':'仅对印章三张处理图使用 PP-OCRv4 印章检测模型 + PP-OCRv6 识别'}[backend.id] }}"><input type="checkbox" data-method="{{ backend.id }}" data-stage="{{ key }}" {{ 'disabled' if not backend.available else '' }} data-available="{{ 'true' if backend.available else 'false' }}"><span>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</span>{% if not backend.available %}<small>不可用</small>{% endif %}</label>
+                  <label class="plan-method" title="{{ backend.reason if not backend.available else {'paddle_v6':'在本机使用 PP-OCRv6 Small 识别','paddle_seal':'仅对印章三张处理图使用 PP-OCRv4 印章检测模型 + PP-OCRv6 识别'}[backend.id] }}"><input type="checkbox" data-method="{{ backend.id }}" data-stage="{{ key }}" {{ 'disabled' if not backend.available else '' }} data-available="{{ 'true' if backend.available else 'false' }}"><span>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</span><small>{{ '本地' if backend.available else '不可用' }}</small></label>
 {% endfor %}
 {% if key == 'seal' %}
                   <label class="plan-method" title="{{ '使用已配置的清瞳印章服务' if seal_api_enabled else '需要先配置清瞳服务密钥' }}"><input type="checkbox" data-method="qingtong" data-stage="seal" data-available="{{ 'true' if seal_api_enabled else 'false' }}" {{ 'disabled' if not seal_api_enabled else '' }}><span>清瞳</span><small>{{ '远程' if seal_api_enabled else '未配置' }}</small></label>
@@ -19,70 +29,150 @@
                   <label class="plan-method" title="生产环境真实识别，每次处理一张，每隔 2 秒查询结果"><input type="checkbox" data-method="danzhengtong" data-stage="{{ key }}" data-available="{{ 'true' if dzt_status.configured else 'false' }}" {{ 'disabled' if not dzt_status.configured else '' }}><span>单证通</span><small>{{ '远程' if dzt_status.configured else dzt_status.status }}</small></label>
 {% endif %}
                 </div>
-{% if key == 'seal' %}
-                <div class="seal-orientation-setting">
-                  <div class="setting-item-copy">
-                    <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M19 12a7 7 0 1 0-2 5"/><path d="m9 9 6 2-2 6-6-2z"/></svg></span>
-                    <div><label for="seal-orientation-mode">印章方向处理</label><small id="seal-orientation-description"></small></div>
-                  </div>
-                  <div class="setting-select-wrap"><select id="seal-orientation-mode" aria-label="印章方向处理方式" aria-describedby="seal-orientation-description">
-{% for mode in seal_orientation_modes %}
-                    <option value="{{ mode.id }}">{{ mode.label }}</option>
-{% endfor %}
-                  </select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></div>
-                </div>
-{% endif %}
+                <label class="plan-toggle"><input type="checkbox" role="switch" data-target="{{ key }}" aria-label="启用{{ title }}" aria-controls="plan-methods-{{ key }}" checked><span class="plan-toggle-track" aria-hidden="true"></span></label>
+                <span class="plan-stage-status" data-plan-status="{{ key }}"></span>
               </section>
 {% endfor %}
             </div>
-          </section>
-          <aside class="settings-card settings-current" aria-labelledby="settings-current-title">
-            <div class="settings-current-heading"><h2 id="settings-current-title">当前配置</h2><span id="plan-name">自定义</span></div>
-            <p id="plan-save-status" class="plan-save-status" role="status" aria-live="polite"></p>
-            <div id="plan-selection-list" class="plan-selection-list"></div>
+            <div class="seal-orientation-setting">
+              <div class="setting-item-copy">
+                <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M19 12a7 7 0 1 0-2 5"/><path d="m9 9 6 2-2 6-6-2z"/></svg></span>
+                <div><label for="seal-orientation-mode">印章方向处理</label><small id="seal-orientation-description"></small></div>
+              </div>
+              <div class="setting-select-wrap"><select id="seal-orientation-mode" aria-label="印章方向处理方式" aria-describedby="seal-orientation-description">
+{% for mode in seal_orientation_modes %}
+                <option value="{{ mode.id }}">{{ mode.label }}</option>
+{% endfor %}
+              </select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></div>
+            </div>
+            <div id="plan-selection-list" class="sr-only"></div>
             <p id="plan-summary" class="sr-only" aria-live="polite"></p>
-            <p id="plan-error" class="settings-note settings-note-error hidden" role="alert"></p>
-            <div class="settings-scope-note"><strong>所有任务统一使用最新配置</strong><span>保存后，待开始、排队和重试任务在开始识别时读取最新配置；正在识别的单张回单完成后，下一张使用新配置。</span></div>
             <div class="settings-plan-notes">
               <p id="plan-multi-note" class="settings-note hidden">同一项选择多种方式会分别执行，耗时也会增加。</p>
               <p id="plan-requirement-note" class="settings-note hidden">未读取印刷字段时，使用已有回单的要求信息；新回单可能缺少比对依据。</p>
-              <p id="plan-page-note" class="settings-note hidden">本地识别仍会读取整页。签章要求包含在“印刷字段”中，目前按整组识别。</p>
-              <p id="remote-plan-note" class="settings-note hidden">所选远程服务会接收完整回单图片；单证通逐张处理，每隔 2 秒查询结果。</p>
+              <p id="remote-plan-note" class="settings-note hidden">所选远程服务会接收完整回单图片。</p>
             </div>
-          </aside>
-        </div>
+            <details class="settings-plan-help"><summary>生效范围与识别说明</summary><p>识别设置和核验规则修改后自动保存。待开始、排队和重试任务在每张开始识别时读取最新配置；正在识别的单张完成后，下一张使用新配置。</p><p id="plan-page-note" class="hidden">本地识别仍会读取整页。签章要求包含在“印刷字段”中，目前按整组识别。</p><p>单证通逐张处理，每隔 2 秒查询结果。多路识别结果按「核验规则」判定。</p></details>
+          </section>
+          <details class="settings-card settings-disclosure">
+            <summary><span><strong>识别方式说明</strong><small>查看用途与可用状态</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="settings-disclosure-body settings-engine-list">
+{% for backend in ocr_backend_catalog if backend.id in ['paddle_v6','paddle_seal'] %}
+              <div><span><strong>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</strong><small>{{ {'paddle_v6':'本地小模型，速度较快','paddle_seal':'仅识别印章三张处理图，不参与页面和日期'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
+{% endfor %}
+              <div><span><strong>清瞳</strong><small>在线印章服务，按所选方案执行</small></span><b class="settings-availability {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</b></div>
+              <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b data-dzt-status class="settings-availability {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</b></div>
+            </div>
+          </details>
+        </section>
+        <section id="settings-rules-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="rules" aria-labelledby="settings-tab-rules" hidden>
+          <section class="settings-card acceptance-card" aria-labelledby="acceptance-settings-title">
+            <div class="settings-section-heading"><div><h2 id="acceptance-settings-title">核验与复核规则</h2><p>设置多路结果如何判定通过或不通过，修改后自动保存。</p></div></div>
+            <div class="acceptance-settings">
+            <h3>默认通过标准</h3>
+            <div class="acceptance-rule" role="group" aria-labelledby="seal-match-title">
+              <strong id="seal-match-title">客户印章</strong>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="none"><span>不核对</span></label>
+              <small>清瞳包含“印章模板”和“文字 OCR”两路结果；同时选择多种识别方式时按此规则判定。</small>
+            </div>
+            <div class="acceptance-rule" role="group" aria-labelledby="date-match-title">
+              <strong id="date-match-title">签收日期</strong>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="any" checked><span>任一结果匹配</span></label>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="none"><span>不核对</span></label>
+              <small>多种识别方式都返回日期时，按这里选择是否要求全部一致。</small>
+            </div>
+            <div class="acceptance-rule" role="group" aria-labelledby="signature-match-title">
+              <strong id="signature-match-title">签名核对</strong>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any"><span>任一结果匹配</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="all"><span>全部结果匹配</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none" checked><span>不核对</span></label>
+              <small>多种识别方式识别收货人和仓库联系人时，按这里选择判定方式。</small>
+            </div>
+            <h3 class="acceptance-subheading">默认不通过标准</h3>
+            <div class="acceptance-rule acceptance-reject-rule" role="group" aria-labelledby="reject-match-title">
+              <strong id="reject-match-title">不匹配结果</strong>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="any_mismatch" checked><span>任一结果不匹配</span></label>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="all_mismatch"><span>全部结果不匹配</span></label>
+              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="none"><span>不自动不通过</span></label>
+              <small>任一结果不匹配时自动不通过；日期或印章不一致按上面的规则进入复核。</small>
+            </div>
+            <div class="acceptance-rule" role="group" aria-labelledby="low-confidence-title">
+              <strong id="low-confidence-title">低置信度字段</strong>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check"><span>核对</span></label>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore" checked><span>不核对</span></label>
+              <small>“核对”会因低置信度字段进入人工复核；“不核对”仍保留提示，但不阻止整单自动通过。</small>
+            </div>
+            </div>
+          </section>
+        </section>
+        <section id="settings-services-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="services" aria-labelledby="settings-tab-services" hidden>
+          <section class="settings-card remote-services" aria-labelledby="remote-services-title">
+            <div class="settings-section-heading"><div><h2 id="remote-services-title">远程识别服务</h2><p>管理服务凭据，配置后可在识别方式中选择。</p></div><span class="remote-local-note">配置保存在本机</span></div>
+            <div class="remote-service-row">
+              <span class="remote-service-icon" aria-hidden="true">单</span>
+              <div class="remote-service-copy"><h3>单证通 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h3><p>识别回单字段、手写签名、日期与印章</p></div>
+              <button type="button" class="secondary-button" data-service-dialog="dzt-settings-dialog" aria-haspopup="dialog" aria-label="配置单证通">配置<span aria-hidden="true"> ›</span></button>
+            </div>
+            <div class="remote-service-row">
+              <span class="remote-service-icon" aria-hidden="true">清</span>
+              <div class="remote-service-copy"><h3>清瞳 <span class="remote-status {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</span></h3><p>在线印章识别与核验</p></div>
+              <button type="button" class="secondary-button" data-service-dialog="qingtong-settings-dialog" aria-haspopup="dialog" aria-label="配置清瞳">配置<span aria-hidden="true"> ›</span></button>
+            </div>
+          </section>
+        </section>
+        <section id="settings-data-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="data" aria-labelledby="settings-tab-data" hidden>
+          <div class="settings-data-grid">
+            <section class="settings-card bootstrap-data-settings" aria-labelledby="bootstrap-data-title">
+              <div class="settings-section-heading">
+                <div class="setting-item-copy">
+                  <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9M8 5.25l8 4.5"/></svg></span>
+                  <div><h2 id="bootstrap-data-title">样单与标准章迁移</h2><p>打包带到另一台电脑，导入后即可使用。</p></div>
+                </div>
+              </div>
+              <div class="bootstrap-data-actions">
+                <div class="bootstrap-scope-field">
+                  <label for="bootstrap-scope">数据范围</label>
+                  <div class="bootstrap-scope-select">
+                    <select id="bootstrap-scope" aria-label="导出或导入的数据范围">
+                      <option value="all">样单和标准章</option>
+                      <option value="samples">仅样单</option>
+                      <option value="standards">仅标准章</option>
+                    </select>
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                  </div>
+                </div>
+                <div class="bootstrap-action-buttons">
+                  <button type="button" id="bootstrap-export" class="secondary-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg><span>导出数据包</span></button>
+                  <button type="button" id="bootstrap-import" class="primary-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 15v5h14v-5"/></svg><span>导入数据包</span></button>
+                  <input type="file" id="bootstrap-file" accept=".zip,application/zip" aria-label="选择样单与标准章数据包" hidden>
+                  <button type="button" id="bootstrap-refresh" class="secondary-button" hidden>刷新查看</button>
+                </div>
+              </div>
+              <details class="settings-plan-help bootstrap-data-help"><summary>数据范围与重复导入说明</summary><p>包含样单原图、标注和当前标准章，不包含测试记录、正式回单或服务密钥。同名样单和同签章要求的标准章保留本机版本，重复导入自动跳过。</p><p>先选择数据范围，再导出或导入。合并数据包也可只导入其中一种，图片保留原文件。</p></details>
+              <p id="bootstrap-status" role="status" aria-live="polite"></p>
+            </section>
+            <section class="settings-card retention-settings" aria-labelledby="retention-settings-title">
+              <div class="setting-item-copy retention-settings-copy">
+                <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></span>
+                <div><h2 id="retention-settings-title">数据保留</h2><p id="retention-description">到期自动清理回单、识别记录及本地中间文件。</p></div>
+              </div>
+              <form id="retention-form" class="retention-form">
+                <label for="retention-days">保留天数</label>
+                <div class="retention-controls">
+                  <div class="retention-input-wrap"><input id="retention-days" name="retention_days" type="number" min="1" max="3650" step="1" value="{{ retention_days }}" inputmode="numeric" aria-describedby="retention-description retention-range"><span>天</span></div>
+                  <button id="save-retention-days" type="submit" class="primary-button">保存设置</button>
+                </div>
+                <small id="retention-range">默认 {{ retention_default_days }} 天 · 可设置 1–3650 天</small>
+                <span id="retention-save-status" class="retention-save-status" role="status" aria-live="polite"></span>
+              </form>
+            </section>
+          </div>
+          <details class="settings-runtime"><summary><span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8m-4-4v4"/></svg>运行信息</span><span class="settings-chevron" aria-hidden="true">⌄</span></summary><div><span>运行环境<strong>{{ python_path }}</strong></span><span>数据存储<strong>storage/results.db</strong></span></div></details>
+        </section>
       </div>
-      <section class="settings-card remote-services" aria-labelledby="remote-services-title">
-        <div class="settings-section-heading"><div><h2 id="remote-services-title">远程识别服务</h2><p>管理服务凭据，配置后可在识别方式中选择。</p></div><span class="remote-local-note">配置保存在本机</span></div>
-        <div class="remote-service-row">
-          <span class="remote-service-icon" aria-hidden="true">单</span>
-          <div class="remote-service-copy"><h3>单证通 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h3><p>识别回单字段、手写签名、日期与印章</p></div>
-          <button type="button" class="secondary-button" data-service-dialog="dzt-settings-dialog" aria-haspopup="dialog" aria-label="配置单证通">配置<span aria-hidden="true"> ›</span></button>
-        </div>
-        <div class="remote-service-row">
-          <span class="remote-service-icon" aria-hidden="true">清</span>
-          <div class="remote-service-copy"><h3>清瞳 <span class="remote-status {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</span></h3><p>在线印章识别与核验</p></div>
-          <button type="button" class="secondary-button" data-service-dialog="qingtong-settings-dialog" aria-haspopup="dialog" aria-label="配置清瞳">配置<span aria-hidden="true"> ›</span></button>
-        </div>
-      </section>
-      <section class="settings-card bootstrap-data-settings" aria-labelledby="bootstrap-data-title">
-        <div class="settings-section-heading"><div><h2 id="bootstrap-data-title">初始化数据</h2><p>将样单和标准章带到另一台电脑，部署后导入即可使用。</p></div></div>
-        <p>包含现有样单原图、标注和当前标准章；不包含测试记录、正式回单或服务密钥。同名样单和同签章要求的标准章保留本机版本，重复导入会自动跳过。</p>
-        <div class="bootstrap-data-actions">
-          <label for="bootstrap-scope">数据范围</label>
-          <select id="bootstrap-scope" aria-label="导出或导入的数据范围">
-            <option value="all">样单和标准章</option>
-            <option value="samples">仅样单</option>
-            <option value="standards">仅标准章</option>
-          </select>
-          <button type="button" id="bootstrap-export" class="secondary-button">导出数据包</button>
-          <button type="button" id="bootstrap-import" class="primary-button">导入数据包</button>
-          <input type="file" id="bootstrap-file" accept=".zip,application/zip" aria-label="选择初始化数据包" hidden>
-          <button type="button" id="bootstrap-refresh" class="secondary-button" hidden>刷新查看</button>
-        </div>
-        <p>先选择数据范围，再导出或导入。已有的合并数据包也可以只导入其中一种。图片保留原文件，不降低清晰度。</p>
-        <p id="bootstrap-status" role="status" aria-live="polite"></p>
-      </section>
       <dialog id="dzt-settings-dialog" class="service-dialog" aria-labelledby="dzt-settings-title">
         <header class="service-dialog-header"><div><h2 id="dzt-settings-title">单证通配置 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h2><p>保存后用于后续识别，密钥留空保留原值。</p></div><button type="button" class="service-dialog-close" data-service-close aria-label="关闭单证通配置" autofocus>×</button></header>
         <div class="service-dialog-body">
@@ -122,74 +212,4 @@
         </div>
         <footer class="service-dialog-footer"><button id="clear-qingtong-key" type="button" class="service-clear">清除配置</button><div><button type="button" class="secondary-button" data-service-close>关闭</button><button type="submit" form="qingtong-form" class="primary-button">保存密钥</button></div></footer>
       </dialog>
-      <section class="settings-card retention-settings" aria-labelledby="retention-settings-title">
-        <div class="setting-item-copy retention-settings-copy">
-          <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></span>
-          <div><h2 id="retention-settings-title">数据保留</h2><p id="retention-description">到期自动清理回单、识别记录及本地中间文件</p><small id="retention-range">默认 {{ retention_default_days }} 天 · 可设置 1–3650 天</small></div>
-        </div>
-        <form id="retention-form" class="retention-form">
-          <label for="retention-days">保留天数</label>
-          <div class="retention-controls">
-            <div class="retention-input-wrap"><input id="retention-days" name="retention_days" type="number" min="1" max="3650" step="1" value="{{ retention_days }}" inputmode="numeric" aria-describedby="retention-description retention-range"><span>天</span></div>
-            <button id="save-retention-days" type="submit" class="primary-button">保存</button>
-          </div>
-          <span id="retention-save-status" class="retention-save-status" role="status" aria-live="polite"></span>
-        </form>
-      </section>
-      <div class="settings-reference-grid">
-        <details class="settings-card settings-disclosure">
-          <summary><span><strong>识别方式说明</strong><small>查看用途与可用状态</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
-          <div class="settings-disclosure-body settings-engine-list">
-{% for backend in ocr_backend_catalog if backend.id in ['paddle_v6','paddle_seal'] %}
-            <div><span><strong>{{ {'paddle_v6':'Paddle v6 Small','paddle_seal':'Paddle 印章专用'}[backend.id] }}</strong><small>{{ {'paddle_v6':'本地小模型，速度较快','paddle_seal':'仅识别印章三张处理图，不参与页面和日期'}[backend.id] }}</small></span><b class="settings-availability {{ 'available' if backend.available else '' }}">{{ '可用' if backend.available else '不可用' }}</b></div>
-{% endfor %}
-            <div><span><strong>清瞳</strong><small>在线印章服务，按所选方案执行</small></span><b class="settings-availability {{ 'available' if seal_api_enabled else '' }}">{{ '已配置' if seal_api_enabled else '未配置' }}</b></div>
-            <div><span><strong>单证通</strong><small>生产环境直连，逐张处理，每隔 2 秒查询</small></span><b data-dzt-status class="settings-availability {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</b></div>
-          </div>
-        </details>
-        <details class="settings-card settings-disclosure acceptance-card" aria-labelledby="acceptance-settings-title">
-          <summary><span><strong id="acceptance-settings-title">核验与复核规则</strong><small>设置多路结果如何判定通过或不通过</small></span><span class="settings-chevron" aria-hidden="true">⌄</span></summary>
-          <div class="settings-disclosure-body">
-            <div class="acceptance-settings">
-            <h3>默认通过标准</h3>
-            <div class="acceptance-rule" role="group" aria-labelledby="seal-match-title">
-              <strong id="seal-match-title">客户印章</strong>
-              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="any" checked><span>任一结果匹配</span></label>
-              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="none"><span>不核对</span></label>
-              <small>清瞳包含“印章模板”和“文字 OCR”两路结果；同时选择多种识别方式时按此规则判定。</small>
-            </div>
-            <div class="acceptance-rule" role="group" aria-labelledby="date-match-title">
-              <strong id="date-match-title">签收日期</strong>
-              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="any" checked><span>任一结果匹配</span></label>
-              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="none"><span>不核对</span></label>
-              <small>多种识别方式都返回日期时，按这里选择是否要求全部一致。</small>
-            </div>
-            <div class="acceptance-rule" role="group" aria-labelledby="signature-match-title">
-              <strong id="signature-match-title">签名核对</strong>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any"><span>任一结果匹配</span></label>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none" checked><span>不核对</span></label>
-              <small>多种识别方式识别收货人和仓库联系人时，按这里选择判定方式。</small>
-            </div>
-            <h3 class="acceptance-subheading">默认不通过标准</h3>
-            <div class="acceptance-rule acceptance-reject-rule" role="group" aria-labelledby="reject-match-title">
-              <strong id="reject-match-title">不匹配结果</strong>
-              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="any_mismatch" checked><span>任一结果不匹配</span></label>
-              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="all_mismatch"><span>全部结果不匹配</span></label>
-              <label><input type="radio" name="reject-match-mode" data-acceptance-reject value="none"><span>不自动不通过</span></label>
-              <small>任一结果不匹配时自动不通过；日期或印章不一致按上面的规则进入复核。</small>
-            </div>
-            <div class="acceptance-rule" role="group" aria-labelledby="low-confidence-title">
-              <strong id="low-confidence-title">低置信度字段</strong>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check"><span>核对</span></label>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore" checked><span>不核对</span></label>
-              <small>“核对”会因低置信度字段进入人工复核；“不核对”仍保留提示，但不阻止整单自动通过。</small>
-            </div>
-            </div>
-          </div>
-        </details>
-      </div>
-      <details class="settings-runtime"><summary>运行信息</summary><div><span>运行环境<strong>{{ python_path }}</strong></span><span>数据存储<strong>storage/results.db</strong></span></div></details>
     </section>

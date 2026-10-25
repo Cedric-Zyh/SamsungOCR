@@ -49,6 +49,76 @@ FILTER_RESULT_SQL = (
 )
 
 
+def _projection_paths(root, fields):
+    return [path for key, value in fields.items()
+            for path in (_projection_paths(f'{root}.{key}', value) if isinstance(value, dict)
+                         else [f'{root}.{key}'])]
+
+
+def _extract_sql(source, paths):
+    # All paths come from the static allowlists, never request parameters.
+    return f"json_extract({source}," + ','.join(f"'{path}'" for path in paths) + ')'
+
+
+_DATE_CHECK = dict.fromkeys(('status', 'actual'))
+_VARIANT_FIELDS = {'method': None, 'error': None, 'details': {'seal_check': _SEAL_CHECK}}
+_VARIANT_PATHS = _projection_paths('$', _VARIANT_FIELDS)
+
+
+def _list_projection_sql():
+    # json_each parses the image-heavy original once. Each selected check or
+    # variant then uses one multi-path extraction, instead of one per scalar.
+    # JSON-encoding the CASE result preserves objects and scalar string values.
+    cases = {
+        key: "CASE WHEN p.type IN ('object','array') THEN p.value ELSE json_quote(p.value) END"
+        for key in ('fields', 'signature_check', 'recognition_config')
+    }
+    for key, fields in (('date_check', _DATE_CHECK), ('seal_check', _SEAL_CHECK)):
+        cases[key] = ("CASE WHEN p.type IN ('object','array') THEN "
+                      + _extract_sql('p.value', _projection_paths('$', fields)) + ' END')
+    cases['recognition_variants'] = (
+        "CASE WHEN p.type IN ('object','array') THEN (SELECT json_group_array("
+        + _extract_sql('v.value', _VARIANT_PATHS)
+        + ") FROM json_each(p.value,'$.seal') v) ELSE '[]' END"
+    )
+    return (
+        '(SELECT json_group_object(p.key,json(CASE p.key '
+        + ' '.join(f"WHEN '{key}' THEN {expression}" for key, expression in cases.items())
+        + ' END)) FROM json_each(r.result_json) p WHERE p.key IN ('
+        + ','.join(f"'{key}'" for key in cases) + '))'
+    )
+
+
+LIST_RESULT_SQL = _list_projection_sql()
+
+
+def _restore_projection(values, fields):
+    restored = {}
+    for key, child in fields.items():
+        if isinstance(child, dict):
+            restored[key] = _restore_projection(values, child)
+        else:
+            value = next(values)
+            # Single-path SQLite json_extract (the old projection) represents
+            # JSON true/false as 1/0, whereas multi-path extraction retains bools.
+            restored[key] = int(value) if isinstance(value, bool) else value
+    return restored
+
+
+def decode_list_result(value):
+    """Rebuild only allowlisted listing evidence from compact SQL arrays."""
+    projected = json.loads(value)
+    result = {key: projected.get(key) for key in ('fields', 'signature_check', 'recognition_config')}
+    for key, fields in (('date_check', _DATE_CHECK), ('seal_check', _SEAL_CHECK)):
+        values = projected.get(key) or [None] * len(_projection_paths('$', fields))
+        result[key] = _restore_projection(iter(values), fields)
+    result['recognition_variants'] = {'seal': [
+        _restore_projection(iter(variant or [None] * len(_VARIANT_PATHS)), _VARIANT_FIELDS)
+        for variant in projected.get('recognition_variants') or []
+    ]}
+    return result
+
+
 def _present(check):
     return any(check.get(key) is not None for key in ('status', 'actual', 'recognized', 'display_text', 'label', 'text'))
 
@@ -98,9 +168,10 @@ def _channel(check, *, value='', job=None, enabled=None, error='', truth=None, k
             'accuracy': _accuracy(truth or {}, kind, state, value)}
 
 
-def sample_result_filters(job, truth):
+def sample_result_filters(job, truth, *, result=None):
     """Use only this job's evidence, including each provider's own verdict."""
-    result = json.loads(job.get('filter_result') or '{}')
+    if result is None:
+        result = json.loads(job.get('filter_result') or '{}')
     options = json.loads(job.get('payload_json') or '{}')
     options = options.get('sample_options') or options
     config = options.get('recognition_config')

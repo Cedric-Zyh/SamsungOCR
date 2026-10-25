@@ -8,7 +8,8 @@ import numpy as np
 
 from receipt_ocr.imaging.colors import _ocr_color_mask
 from receipt_ocr.imaging.ellipse import (
-    _fit_ellipse_annulus, _ellipse_normal_maps, _save_ellipse_annulus_unwrapped,
+    _fit_unfiltered_ellipse_annulus as _fit_ellipse_annulus,
+    _ellipse_normal_maps, _save_ellipse_annulus_unwrapped,
 )
 
 

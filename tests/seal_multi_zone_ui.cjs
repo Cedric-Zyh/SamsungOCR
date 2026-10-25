@@ -2,6 +2,25 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
 
+test('double-border company and website have separate previews with raw evidence retained', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'red',shape:'椭圆',
+    double_border_layout:{status:'adopted',overlay_url:'/files/artifacts/test/borders.png',
+      primary:{image_url:'/files/artifacts/test/old.png',text:'MMM旧环字O'}},
+    unwrapped_url:'/files/samples/artifacts/task/company.png',unwrapped_text:'测试京东维修中心',
+    website_url:'/files/samples/artifacts/task/website.png',website_text:'www.JD.com',
+    round_type_band_url:'/files/artifacts/test/purpose.png',round_type_band_text:'维修专用章'};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/公司名称展开图（双椭圆边框之间）/);
+  assert.match(target.innerHTML,/底部网址（单独保留）/);
+  assert.match(target.innerHTML,/company.png\?preview=rgb/);
+  assert.match(target.innerHTML,/website.png\?preview=rgb/);
+  assert.match(target.innerHTML,/原整环识别（仅供核对）/);
+  assert.ok(target.innerHTML.indexOf('测试京东维修中心') < target.innerHTML.indexOf('<details>'));
+  assert.ok(target.innerHTML.indexOf('MMM旧环字O') > target.innerHTML.indexOf('<details>'));
+});
+
 test('multi-zone evidence shows actual separate inputs and RGB arc previews', () => {
   const target = {innerHTML: ''};
   const item = {schema_version:2,index:0,color:'red',shape:'椭圆',

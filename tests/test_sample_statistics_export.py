@@ -59,9 +59,204 @@ def test_download_all_matching_rows_and_keep_untrusted_text_as_text(samples, mon
     assert details(sheet(client.get('/api/samples/statistics/export?filter=missing')))[1] == []
 
 
+@pytest.fixture
+def evaluated_rows(monkeypatch):
+    def c(state='正确', decision='匹配'):
+        return dict(state=state, value='印章内容', decision=decision, note='')
+    rows = []
+    scenarios = [('不匹配', '错误', '匹配'), ('匹配', '错误', '不匹配'),
+                 ('匹配', '错误', '部分匹配'), ('匹配', '错误', ''),
+                 ('匹配', '未识别', ''), ('匹配', '失败', ''),
+                 (None, '待标注', '匹配'), ('匹配', '未测试', ''), ('匹配', '正确', '匹配')]
+    date_scenarios = [('正确', '2026-10-24'), ('错误', '2026-10-24'),
+                      ('未识别', '2026-10-24'), ('错误', ''), ('正确', ''),
+                      ('失败', '2026-10-24'), ('待标注', None), ('未测试', '2026-10-24'),
+                      ('正确', '2026-10-24')]
+    for index, ((expected, state, decision), (date_state, expected_date)) in enumerate(zip(scenarios, date_scenarios)):
+        rows.append(dict(filename=f'{7000000000 + index}.jpg', company='客户甲' if index < 5 else '客户乙',
+                         requirement='甲专用章' if index < 4 else '', expected_seal=expected,
+                         expected_date=expected_date, job_status='' if index == 7 else 'failed' if index == 5 else 'succeeded',
+                         tested_at='2026-10-24T00:01:00+08:00' if index != 7 else '',
+                         task_id='test-batch' if index != 7 else '', task_name='样单测试 · 8 张' if index != 7 else '',
+                         date=c(date_state), seals={'qingtong_template': c(state, decision),
+                                                  'qingtong_ocr': c('未测试' if index == 7 else '待标注' if index == 6 else '正确', expected or '')}))
+    data = dict(items=rows, columns=[{'key': 'qingtong_template', 'label': '清瞳模板'},
+                                    {'key': 'qingtong_ocr', 'label': '清瞳文字'}], batches=[])
+    monkeypatch.setattr(exports, 'sample_statistics', lambda *args: data)
+    return rows
+
+
+@pytest.mark.parametrize('selected,indices', [
+    ('false_accept', [0]), ('false_reject', [1]), ('partial', [2]), ('other', [3]),
+    ('wrong', [0, 1, 2, 3]), ('unrecognized', [4]), ('failed', [5]),
+    ('pending_truth', [6]), ('untested', [7]), ('missing', [4, 5]),
+    ('errors', [0, 1, 2, 3, 4, 5]),
+])
+def test_export_new_seal_filters(samples, evaluated_rows, selected, indices):
+    _, client = samples
+    worksheet = sheet(client.get('/api/samples/statistics/export', query_string={
+        'filter': selected, 'channel': 'qingtong_template'}))
+    _, rows = details(worksheet)
+    assert [row[1] for row in rows] == [evaluated_rows[index]['filename'] for index in indices]
+
+
+@pytest.mark.parametrize('selected,indices', [
+    ('wrong_date', [1]), ('date_missed', [2]), ('date_spurious', [3]),
+    ('date_with_value', [0, 1, 2, 5, 7, 8]), ('date_blank', [3, 4]),
+    ('failed', [5]), ('pending_truth', [6]), ('untested', [7]),
+])
+def test_export_date_cohorts_and_errors(samples, evaluated_rows, selected, indices):
+    _, client = samples
+    worksheet = sheet(client.get('/api/samples/statistics/export', query_string={
+        'tab': 'date', 'filter': selected, 'channel': 'date'}))
+    assert [row[1] for row in details(worksheet)[1]] == [evaluated_rows[index]['filename'] for index in indices]
+
+
+def test_export_channel_requirement_and_company_match_the_drilled_down_rows(samples, evaluated_rows):
+    _, client = samples
+    response = client.get('/api/samples/statistics/export', query_string={
+        'company': '客户甲', 'requirement': '甲专用章', 'filter': 'errors', 'channel': 'qingtong_template'})
+    worksheet = sheet(response)
+    header, rows = details(worksheet)
+    assert len(rows) == 4
+    assert '清瞳模板 · 评估结果' in header
+    assert '清瞳文字 · 评估结果' not in header
+    assert rows[0][header.index('测试时间')] == '2026-10-24T00:01:00+08:00'
+    assert rows[0][header.index('测试批次 ID')] == 'test-batch'
+    other = sheet(client.get('/api/samples/statistics/export', query_string={
+        'company': '客户甲', 'requirement': '甲专用章', 'filter': 'errors', 'channel': 'qingtong_ocr'}))
+    assert details(other)[1] == []
+
+
+def test_export_coverage_annotations_error_types_and_groups(samples, evaluated_rows):
+    _, client = samples
+    response = client.get('/api/samples/statistics/export')
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.data))
+    assert workbook.sheetnames == ['印章结果', '覆盖与标注', '错误类型', '按公司统计', '按签章要求统计', '共同样本对比', '判定分歧']
+    coverage = {row[0]: row[1] for row in workbook['覆盖与标注'].values if row[0]}
+    assert {key: coverage[key] for key in ('样单总数', '已测试', '未测试', '已标注', '待标注', '应匹配', '应不匹配')} == {
+        '样单总数': 9, '已测试': 8, '未测试': 1, '已标注': 8, '待标注': 1, '应匹配': 7, '应不匹配': 1}
+    assert coverage['可评测样单'] == 7 and coverage['异常样单'] == 6
+    error_rows = [row for row in workbook['错误类型'].values if row[0] == '清瞳模板']
+    assert error_rows[0][:9] == ('清瞳模板', 7, 6, 1, 1, 1, 1, 1, 1)
+    company_rows = [row for row in workbook['按公司统计'].values if row[0] == '客户甲']
+    template = next(row for row in company_rows if row[6] == '清瞳模板')
+    assert template[:9] == ('客户甲', 5, 5, 0, 5, 0, '清瞳模板', 0, 5)
+    assert template[-1] == 5  # Each anomalous sample counts once, even if several channels failed.
+    requirement_rows = [row for row in workbook['按签章要求统计'].values if row[0] == '甲专用章']
+    assert all(row[1] == 4 for row in requirement_rows)
+    for worksheet in workbook:
+        assert all(item.data_type != 'f' for row in worksheet for item in row)
+
+
+def test_date_export_breaks_down_wrong_missing_and_spurious_dates(samples, evaluated_rows):
+    _, client = samples
+    response = client.get('/api/samples/statistics/export?tab=date')
+    workbook = load_workbook(BytesIO(response.data))
+    rows = list(workbook['错误类型'].values)
+    header = next(row for row in rows if row[:2] == ('识别通道', '可评测'))
+    result = next(row for row in rows if row[0] == '识别日期')
+    assert header[:7] == ('识别通道', '可评测', '错误合计', '日期识别错误', '有日期但未识别', '空白日期误识别', '失败')
+    assert result[:7] == ('识别日期', 7, 4, 1, 1, 1, 1)
+    coverage = {row[0]: row[1] for row in workbook['覆盖与标注'].values if row[0]}
+    assert coverage['有日期'] == 6 and coverage['日期空白'] == 2
+    assert workbook.sheetnames[-1] == '日期分组'
+    cohorts = {row[0]: row for row in workbook['日期分组'].values if row[0] in {'有日期', '空白日期'}}
+    assert cohorts['有日期'][:8] == ('有日期', 6, 5, 2, 1, 1, 1, 0.4)
+    assert cohorts['空白日期'][:8] == ('空白日期', 2, 2, 1, 1, 0, 0, 0.5)
+
+
+def test_export_coverage_separates_pending_and_trims_requirement_groups(samples, evaluated_rows):
+    _, client = samples
+    evaluated_rows[0]['job_status'] = 'queued'
+    evaluated_rows[0]['seals'] = {'qingtong_template': {'state': '测试中'}, 'qingtong_ocr': {'state': '测试中'}}
+    evaluated_rows[0]['requirement'] = ' 甲专用章 '
+    response = client.get('/api/samples/statistics/export?requirement=%20甲专用章%20')
+    workbook = load_workbook(BytesIO(response.data))
+    assert len(details(workbook.active)[1]) == 4
+    coverage = {row[0]: row[1] for row in workbook['覆盖与标注'].values if row[0]}
+    assert coverage['已测试'] == 3 and coverage['测试中'] == 1 and coverage['未测试'] == 0
+    assert coverage['可评测样单'] == coverage['异常样单'] == 3
+    grouped = [row for row in workbook['按签章要求统计'].values if row[0] == '甲专用章']
+    assert len(grouped) == 2 and all(row[1:4] == (4, 3, 0) for row in grouped)
+
+
+def test_date_error_filters_treat_empty_wrong_reading_as_missed(evaluated_rows):
+    missed = evaluated_rows[1]
+    missed['date']['value'] = ''
+    assert not exports.matches(missed, 'date', 'wrong_date')
+    assert exports.matches(missed, 'date', 'date_missed')
+    blank = evaluated_rows[3]
+    blank['date']['value'] = ''
+    assert not exports.matches(blank, 'date', 'date_spurious')
+
+
+def test_common_sample_export_uses_all_active_channels_and_counts_missing_failures(samples, evaluated_rows, monkeypatch):
+    _, client = samples
+    remote_a, remote_b, local, dormant = 'qingtong_template', 'qingtong_ocr', 'local:model', 'local:dormant'
+    scenarios = [('正确', '错误', '正确'), ('正确', '未运行', '正确'),
+                 ('失败', '未识别', '未识别'), ('未运行', '正确', '正确'), ('正确', '正确', '未运行')]
+    rows = evaluated_rows[:5]
+    for row, states in zip(rows, scenarios):
+        row['seals'] = {key: {'state': state} for key, state in zip((remote_a, remote_b, local), states)}
+        row['seals'][dormant] = {'state': '未运行'}
+    columns = [{'key': key, 'label': label} for key, label in (
+        (remote_a, '清瞳模板'), (remote_b, '清瞳文字'), (local, '本地模型'), (dormant, '未启用模型'))]
+    monkeypatch.setattr(exports, 'sample_statistics', lambda *args: dict(items=rows, columns=columns, batches=[]))
+    response = client.get('/api/samples/statistics/export')
+    workbook = load_workbook(BytesIO(response.data))
+    common = {row[0]: row for row in workbook['共同样本对比'].values if row[0] in {column['label'] for column in columns}}
+    assert set(common) == {'清瞳模板', '清瞳文字', '本地模型'}
+    assert common['清瞳模板'][:8] == ('清瞳模板', 2, 1, 0, 0, 1, 0.5, 3)
+    assert common['清瞳文字'][:8] == ('清瞳文字', 2, 0, 1, 1, 0, 0, 3)
+    assert common['本地模型'][:8] == ('本地模型', 2, 1, 0, 1, 0, 0.5, 3)
+
+
+def test_disagreement_export_classifies_only_differing_valid_decisions(samples, evaluated_rows, monkeypatch):
+    _, client = samples
+    remote_a, remote_b, local = 'qingtong_template', 'qingtong_ocr', 'local:model'
+    def c(state, decision):
+        return {'state': state, 'decision': decision}
+    scenarios = [
+        [c('正确', '匹配'), c('错误', '不匹配'), c('正确', '匹配')],
+        [c('错误', '匹配'), c('正确', '不匹配'), c('正确', '不匹配')],
+        [c('错误', '不匹配'), c('错误', '部分匹配'), c('错误', '部分匹配')],
+        [c('正确', '匹配'), c('正确', '匹配'), c('未运行', '')],
+        [c('失败', '匹配'), c('错误', '不匹配'), c('未识别', '匹配')],
+        [c('待标注', '匹配'), c('待标注', '不匹配'), c('待标注', '不匹配')],
+    ]
+    rows = evaluated_rows[:6]
+    for row, cells in zip(rows, scenarios):
+        row['seals'] = dict(zip((remote_a, remote_b, local), cells))
+    columns = [{'key': key, 'label': label} for key, label in (
+        (remote_a, '清瞳模板'), (remote_b, '清瞳文字'), (local, '本地模型'))]
+    monkeypatch.setattr(exports, 'sample_statistics', lambda *args: dict(items=rows, columns=columns, batches=[]))
+    workbook = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    pairs = {(row[0], row[1]): row[2:8] for row in workbook['判定分歧'].values if row[0] in {'清瞳模板', '清瞳文字'}}
+    assert pairs[('清瞳模板', '清瞳文字')] == (4, 3, 1, 1, 1, 0)
+    assert pairs[('清瞳模板', '本地模型')] == (3, 2, 0, 1, 1, 0)
+    assert pairs[('清瞳文字', '本地模型')] == (3, 1, 0, 1, 0, 0)
+
+
+def test_group_export_prioritizes_anomalous_rows_over_group_size(samples, evaluated_rows):
+    _, client = samples
+    for row in evaluated_rows:
+        row['company'] = '样单较多'
+        row['seals'] = {'qingtong_template': {'state': '正确'}, 'qingtong_ocr': {'state': '正确'}}
+    evaluated_rows[0]['company'] = '异常集中'
+    evaluated_rows[0]['seals'] = {'qingtong_template': {'state': '错误'}, 'qingtong_ocr': {'state': '失败'}}
+    workbook = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    groups = [row for row in workbook['按公司统计'].values if row[0] in {'异常集中', '样单较多'}]
+    assert groups[0][0] == '异常集中' and groups[0][-1] == 1
+    assert groups[-1][0] == '样单较多' and groups[-1][-1] == 0
+
+
 @pytest.mark.parametrize('query,status', [
     ('task_id=unknown', 404), ('tab=unknown', 400), ('filter=unknown', 400),
     ('tab=date&filter=local', 400),
+    ('channel=unknown', 400), ('tab=date&channel=qingtong_template', 400),
+    ('tab=seal&filter=wrong_date', 400), ('tab=date&filter=false_accept', 400),
 ])
 def test_invalid_export_scope_reports_error(samples, query, status):
     _, client = samples

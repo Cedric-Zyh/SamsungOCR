@@ -11,28 +11,33 @@ export function createNavigation({
     'seal-center': ['印章中心', '维护标准印章，让每一次核验都有据可依。'],
     records: ['回单管理', '查询与核验回单，让每一张单据都有据可查。'],
     import: ['导入回单', '上传一批回单，跟进识别进度，再完成复核与导出。'],
-    settings: ['设置', '选择识别内容与方式，让每次测试更有针对性。'],
+    settings: ['设置', '管理识别方案、核验规则和本机数据。'],
     progress: ['工作台', '处理待办，跟进回单识别进度。'],
     review: ['人工复核', '对照原图核验信息，确认后保存结果。'],
   };
+  function reviewBackgroundPage() {
+    return reviewState.reviewOrigin?.hash === '#seal-center' ? 'seal-center' : reviewState.sampleView ? 'samples' : 'records';
+  }
   function syncReviewDialog(page) {
     const dialog = $('#review-dialog');
     if (!dialog) return;
     if (page === 'review' && !dialog.open) {
       const table = $('.record-filter-table');
+      const backgroundPage = reviewBackgroundPage();
       navigationState.reviewReturn = {
         focus: document.activeElement,
+        page: backgroundPage,
         recordId: document.activeElement?.closest('[data-open-review]')?.dataset.openReview,
         scroll: reviewState.reviewOrigin?.scroll || 0,
         tableTop: table?.scrollTop || 0, tableLeft: table?.scrollLeft || 0,
       };
-      reviewState.reviewOrigin = {hash: reviewState.sampleView ? '#samples' : '#records', scroll: navigationState.reviewReturn.scroll};
+      reviewState.reviewOrigin = {hash: `#${backgroundPage}`, scroll: navigationState.reviewReturn.scroll};
       const toastNode = $('#toast');
       navigationState.toastParent = toastNode?.parentElement;
       if (toastNode) dialog.append(toastNode);
       document.body.classList.add('review-dialog-open');
       dialog.showModal();
-      if (!reviewState.sampleView && !recordsState.recordsLoaded) loadRecords().catch(error => toast(error.message, 'danger'));
+      if (backgroundPage === 'records' && !recordsState.recordsLoaded) loadRecords().catch(error => toast(error.message, 'danger'));
     } else if (page !== 'review' && dialog.open) {
       dismissReview?.();
       dialog.close();
@@ -47,17 +52,18 @@ export function createNavigation({
         if (focus?.isConnected && focus.closest('[data-page="records"]')) focus.focus({preventScroll: true});
         else $('#record-search')?.focus({preventScroll: true});
       }
-      if (saved && page === 'samples') {
+      if (saved && (page === 'samples' || page === 'seal-center')) {
         navigationState.restoreScroll = saved.scroll;
         if (saved.focus?.isConnected) saved.focus.focus({preventScroll: true});
       }
       navigationState.reviewReturn = null;
+      reviewState.reviewOrigin = null;
     }
   }
   function showPage(page) {
     if (!pageInfo[page]) page = 'records';
     if ($('#import-dialog').open) $('#import-dialog').close();
-    const backgroundPage = page === 'review' ? (reviewState.sampleView ? 'samples' : 'records') : page;
+    const backgroundPage = page === 'review' ? reviewBackgroundPage() : page;
     $$('[data-page]').forEach(section => section.classList.toggle('hidden', section.dataset.page !== page && section.dataset.page !== backgroundPage));
     $$('[data-nav]').forEach(link => {
       const active = link.dataset.nav === backgroundPage;
@@ -101,6 +107,8 @@ export function createNavigation({
         else location.hash = sample ? 'samples' : 'records';
       });
     } else {
+      const sealReturn = route === 'seal-center' && navigationState.reviewReturn?.page === 'seal-center'
+        ? navigationState.reviewReturn : null;
       if (route === 'review' && !reviewState.current) showReviewEmpty?.({loading: true});
       showPage(route);
       if (route === 'review') loadReviewQueue(true).catch(error => {
@@ -114,7 +122,17 @@ export function createNavigation({
         loadDailyResults({refreshRecords: false}).catch(error => toast(error.message, 'danger'));
       }
       if (route === 'samples' && loadSamples) loadSamples();
-      if (route === 'seal-center' && loadSealCenter) loadSealCenter().catch(error => toast(error.message, 'danger'));
+      if (route === 'seal-center' && loadSealCenter) {
+        const returnFocus = document.activeElement;
+        loadSealCenter().then(() => {
+          if (!sealReturn || location.hash !== '#seal-center') return;
+          // Refreshing the archive may replace the source button. Restore its
+          // replacement only when the user has not moved focus elsewhere.
+          if (document.activeElement !== returnFocus && document.activeElement !== document.body && document.activeElement?.isConnected) return;
+          const focus = sealReturn.focus?.isConnected ? sealReturn.focus : $('[data-standard-source]', $('[data-page="seal-center"]'));
+          focus?.focus({preventScroll: true});
+        }).catch(error => toast(error.message, 'danger'));
+      }
     }
   }
 

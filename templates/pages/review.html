@@ -1,8 +1,10 @@
   <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-dialog-title">
   <header class="review-dialog-heading">
     <h2 id="review-dialog-title">人工复核</h2>
-    <div class="review-dialog-tools"><span id="review-session-progress" role="status"></span><button id="toggle-review-queue" class="review-queue-toggle" type="button" aria-expanded="false" aria-controls="review-queue-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/></svg><span>复核列表</span></button><button type="button" class="review-dialog-close" data-close-modal aria-label="关闭人工复核，返回回单管理" autofocus><span>关闭</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <div class="review-dialog-tools"><span id="review-browse-position" class="review-browse-position hidden" role="status" aria-live="polite" title="当前列表中有测试结果的样单"></span><span id="review-session-progress" role="status"></span><button id="toggle-review-queue" class="review-queue-toggle" type="button" aria-expanded="false" aria-controls="review-queue-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M3 6h1M3 12h1M3 18h1"/></svg><span>复核列表</span></button><button type="button" class="review-dialog-close" data-close-modal aria-label="关闭人工复核，返回回单管理" autofocus><span>关闭</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
   </header>
+  <button id="review-browse-prev" class="review-browse-arrow review-browse-prev hidden" type="button" aria-label="上一张样单" title="上一张样单" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+  <button id="review-browse-next" class="review-browse-arrow review-browse-next hidden" type="button" aria-label="下一张样单" title="下一张样单" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
   <section data-page="review" class="review-page hidden">
     <div class="review-workspace queue-collapsed"><aside id="review-queue-panel" class="review-queue" aria-label="待复核回单"><header class="review-queue-heading"><strong>本次复核列表</strong><button id="review-refresh" type="button" class="text-button">刷新</button></header><p id="review-scope-label" class="review-queue-scope"></p><span id="review-scope" class="sr-only" role="status"></span><div id="review-queue"></div><nav class="result-pagination review-pagination" aria-label="待复核回单分页"><span id="review-page-info" role="status"></span><button id="review-page-prev" type="button" class="mini-button" disabled>上一页</button><button id="review-page-next" type="button" class="mini-button" disabled>下一页</button></nav></aside><div id="review-modal" aria-labelledby="review-title"><section class="modal-panel"><header class="modal-header"><div><h2 id="review-title">人工复核</h2><p id="review-subtitle"></p></div><span class="review-save-state" data-save-state role="status"></span></header><div id="review-content" class="modal-content"></div></section></div><div id="review-empty" class="review-empty hidden"><span class="empty-mark" aria-hidden="true">✓</span><h2>当前范围已处理完</h2><p>没有需要继续处理的回单。</p><button type="button" class="secondary-button" data-close-modal>返回回单管理</button><button type="button" class="text-button" id="review-revisit">重新查看稍后处理项</button></div></div>
   </section>
@@ -64,15 +66,31 @@
         <details class="review-block" data-review-panel="evidence"><summary>识别依据与处理图片</summary><div class="artifact-tabs"><button type="button" class="artifact-tab active" data-artifact-tab="date">日期区域</button><button type="button" class="artifact-tab" data-artifact-tab="seals">印章区域</button><button type="button" class="artifact-tab" data-artifact-tab="signature_requirement">签章要求区域</button></div><div data-artifacts></div></details>
         <details class="review-block" data-review-panel="history"><summary>修改记录</summary><div data-history class="history-list"></div></details>
         <fieldset class="sample-annotation-editor" data-sample-annotations disabled>
-          <details class="review-block truth-block" data-review-panel="truth"><summary>样单标注 <span data-truth-status>正在加载…</span></summary><p>根据原图填写正确结果，保存后用于样单测试对比。</p><div class="truth-controls">
-            <label>客户名称<input name="truth_customer" maxlength="2000"></label>
-            <label>签章要求<textarea name="truth_requirement" rows="2" maxlength="2000"></textarea></label>
-            <label>要求到货日期<input name="truth_required_date" placeholder="YYYY-MM-DD" maxlength="2000"></label>
-            <label>签收日期是否填写<select name="truth_date_present"><option value="">暂未标注</option><option value="true">已填写日期</option><option value="false">未填写日期</option></select></label>
-            <label>实际签收日期<input name="truth_actual_date" type="date"></label>
-            <label>印章结论<select name="truth_seal_should_match"><option value="">暂未标注</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select></label>
-          </div><div data-truth-history class="truth-history"></div></details>
-          <details class="review-block review-notes" data-review-panel="notes"><summary>备注与错误类型</summary><label>人工备注<textarea name="human_note" rows="2" maxlength="5000"></textarea></label><label>错误类型<select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select></label></details>
+          <details class="review-block truth-block" data-review-panel="truth">
+            <summary class="annotation-section-heading"><span class="annotation-section-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1 12-12a2.8 2.8 0 0 0-4-4L4 15l-1 5Z"/></svg>样单标注</span><span data-truth-status role="status" aria-live="polite">正在加载…</span><span class="annotation-chevron" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></span></summary>
+            <div class="annotation-section-body">
+              <p class="annotation-description">对照原图核对标注，保存后用于样单测试对比。</p>
+              <p class="annotation-prefill-note" data-truth-prefill-note role="status" aria-live="polite" hidden></p>
+              <div class="truth-controls">
+                <label class="annotation-field annotation-field-wide"><span class="annotation-field-label">客户名称</span><input name="truth_customer" maxlength="2000" placeholder="填写客户名称"></label>
+                <label class="annotation-field annotation-field-wide"><span class="annotation-field-label">签章要求</span><textarea name="truth_requirement" rows="2" maxlength="2000" placeholder="填写原图中的签章要求"></textarea></label>
+                <label class="annotation-field"><span class="annotation-field-label">要求到货日期</span><input name="truth_required_date" placeholder="YYYY-MM-DD" maxlength="2000"></label>
+                <label class="annotation-field"><span class="annotation-field-label">签收日期是否填写</span><span class="annotation-select"><select name="truth_date_present"><option value="">暂未标注</option><option value="true">已填写日期</option><option value="false">未填写日期</option></select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></label>
+                <label class="annotation-field annotation-actual-date"><span class="annotation-field-label">实际签收日期</span><input name="truth_actual_date" type="date" aria-describedby="annotation-actual-date-hint"><small id="annotation-actual-date-hint" class="annotation-field-hint">选择“已填写日期”后可编辑。</small></label>
+                <label class="annotation-field"><span class="annotation-field-label">印章结论</span><span class="annotation-select"><select name="truth_seal_should_match"><option value="">暂未标注</option><option value="true">应与签章要求匹配</option><option value="false">不应匹配</option></select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></label>
+              </div>
+              <div data-truth-history class="truth-history"></div>
+            </div>
+          </details>
+          <details class="review-block review-notes" data-review-panel="notes">
+            <summary class="annotation-section-heading"><span class="annotation-section-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v15l4-4h10a2 2 0 0 0 2-2v-3Z"/><path d="M8 7h8M8 11h5"/></svg>备注与错误类型</span><span class="annotation-chevron" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></span></summary>
+            <div class="annotation-section-body">
+              <div class="annotation-notes-grid">
+                <label class="annotation-field annotation-field-wide"><span class="annotation-field-label">人工备注</span><textarea name="human_note" rows="2" maxlength="5000" placeholder="记录需要关注的问题或补充说明"></textarea></label>
+                <label class="annotation-field"><span class="annotation-field-label">错误类型</span><span class="annotation-select"><select name="error_type"><option value="">无</option><option>字段识别错误</option><option>商品明细错误</option><option>日期识别错误</option><option>印章识别错误</option><option>图像质量问题</option><option>版式变化</option><option>其他</option></select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></label>
+              </div>
+            </div>
+          </details>
         </fieldset>
         <div class="review-actions"><div class="review-footer-context"><p data-review-mode-note class="review-mode-note" role="status" aria-live="polite"></p><p data-review-readiness role="status" aria-live="polite"></p><p data-review-shortcuts>Ctrl / ⌘ + Enter 确认通过 · Ctrl / ⌘ + S 保存稍后 · Alt + D / S 定位日期 / 印章</p></div><button type="button" class="text-button" data-retry>重新识别</button><button type="button" class="secondary-button" data-save-pending>保存并稍后处理</button><button type="button" class="secondary-button review-reject" data-confirm-fail>确认不通过</button><button type="button" class="primary-button" data-confirm-pass>确认通过并继续</button><button type="button" class="primary-button hidden" data-save-sample disabled>保存标注与备注</button><button type="button" class="secondary-button view-enter-review hidden" data-enter-review>进入复核</button></div>
       </form>

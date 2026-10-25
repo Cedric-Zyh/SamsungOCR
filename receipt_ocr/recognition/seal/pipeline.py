@@ -19,8 +19,9 @@ from .postprocess.ring_text import reorder_ring_text
 from .preprocess.ring_serial import read_ring_serial
 from .preprocess.ring_alternative import read_normal_alternative
 from .preprocess.continuous_company import read_continuous_company
+from .preprocess.double_border import read_double_border
 from .postprocess.multi_zone import finalize_multi_zone
-from .postprocess.rectangle_form import mark_empty_receiving_fields
+from .postprocess.rectangle_form import mark_receiving_form_fields
 from .postprocess.type_row import prefer_complete_type_read
 from .postprocess.ring_alternative import select_ring_alternative
 
@@ -254,6 +255,15 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                     input_image.update(status="failed", error=str(exc))
                     artifact["errors"].append({"step": input_image["channel"], "message": str(exc)})
             try:
+                if read_double_border(artifact, directory, index, prefix,
+                                      reader=reader, provider=ocr_backend):
+                    # Replace only this stamp's mixed ring; keep its purpose
+                    # and number channels. The website stays independent.
+                    texts[region_text_start:] = [row['text'] for row in artifact['reads']
+                                                  if row.get('channel') in {'ring', 'center', 'number', 'body'}]
+            except Exception as exc:
+                artifact['errors'].append({'step': 'double_border', 'message': str(exc)})
+            try:
                 if read_continuous_company(artifact, directory, index, prefix,
                                            reader=reader, provider=ocr_backend):
                     # Split readings remain diagnostic. Only this physical
@@ -267,13 +277,17 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
             if artifact.get("stamp_number_status") == "merged":
                 texts.append(artifact["round_type_band_text"])
             if artifact.get("shape_code") == "rectangle":
-                mark_empty_receiving_fields(artifact)
+                mark_receiving_form_fields(artifact)
                 fixed_layout = artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}
                 if fixed_layout:
+                    # Form values remain raw evidence, never stamp-name
+                    # candidates, even when the receiving/date cell is filled.
+                    texts[region_text_start:] = [read['text'] for read in artifact['reads']
+                                                  if read.get('matching') is not False]
                     body_parts = ["" for _ in artifact["rectangular_fixed_rows"]]
                     for read in artifact["reads"]:
                         if (read.get("channel") == "body" and read["confidence"] >= .75
-                                and read.get("rectangle_field_kind") != "empty_receiving_field"):
+                                and read.get("matching") is not False):
                             body_parts[read["rectangle_row_index"]] += read["text"]
                     artifact["rectangular_row_texts"] = body_parts
                 else:
@@ -324,7 +338,8 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                         artifact["ring_serial_detection"] = {"status": "failed"}
                         artifact["errors"].append({"step": "ring_serial", "message": str(exc)})
             texts.extend(serial_matching_texts(requirement, artifact))
-            if artifact.get("shape_code") == "ellipse" and not artifact.get("multi_zone_layout"):
+            if (artifact.get("shape_code") == "ellipse" and not artifact.get("multi_zone_layout")
+                    and not artifact.get("double_border_layout")):
                 # A complete observed alternative can beat a wrong primary
                 # reading, even when the primary's confidence is higher.
                 try:

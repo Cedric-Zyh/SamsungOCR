@@ -8,6 +8,7 @@ from PIL import Image
 from .orientation_angles import choose_round_stamp_angle
 from .orientation_settings import FOUR_WAY_ANCHOR_MIN_CONFIDENCE
 from .horizontal_rows import split_type_rows
+from ..layout_fields import inner_role
 
 
 def detect_orientation_boxes(source, scratch, *, model_variant):
@@ -26,7 +27,9 @@ def detect_orientation_boxes(source, scratch, *, model_variant):
     anchor = choose_round_stamp_angle(
         boxes, minimum_confidence=FOUR_WAY_ANCHOR_MIN_CONFIDENCE,
     )
-    if not anchor.get("anchor_text") and not next(split_type_rows(boxes), None):
+    department = any(inner_role(box.get('text', '')) == 'department'
+                     and float(box.get('confidence') or 0) >= .90 for box in boxes)
+    if not anchor.get("anchor_text") and not next(split_type_rows(boxes), None) and not department:
         # Preserve fine-detail detections that genuinely need the larger image.
         return detect_boxes(source, model_variant=model_variant)
 

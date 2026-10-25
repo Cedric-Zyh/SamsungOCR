@@ -189,7 +189,8 @@ def test_contact_requirement_phone_must_match_observed_digits():
     assert compare_seal_text_strict(expected[:-1]+'2', texts)['status'] != '匹配'
 
 
-def test_missing_short_number_uses_existing_tight_locator(tmp_path, monkeypatch):
+@pytest.mark.parametrize('detected_number', ['(3)', 'F(3)'])
+def test_missing_short_number_uses_existing_tight_locator(tmp_path, monkeypatch, detected_number):
     from types import SimpleNamespace
     from receipt_ocr.recognition.seal.preprocess import multi_zone, number
     from receipt_ocr.recognition.seal.preprocess.detected_layout import prepare_detected_layout
@@ -199,7 +200,7 @@ def test_missing_short_number_uses_existing_tight_locator(tmp_path, monkeypatch)
     boxes = [{'text': '检测专用章', 'confidence': .99,
               'points': [[200, 200], [500, 200], [500, 250], [200, 250]]}]
     reader = SimpleNamespace(detect_boxes=lambda *args, **kwargs: boxes)
-    evidence = {'status': 'detected', 'text': '(3)', 'confidence': .99,
+    evidence = {'status': 'detected', 'text': detected_number, 'confidence': .99,
                 'box': [300, 270, 370, 320], 'method': 'tight_ink_components'}
     monkeypatch.setattr(number, 'prepare_number_input', lambda *args, **kwargs: evidence)
     mapping = {'x': np.zeros((30, 80), np.float32), 'y': np.zeros((30, 80), np.float32),

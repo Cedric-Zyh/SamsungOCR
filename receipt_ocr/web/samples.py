@@ -23,9 +23,12 @@ from .seal_standards import SealStandardDependencies, register_standard
 from .sample_statistics import sample_statistics
 from .sample_company_marks import SampleCompanyMarks, MarkConflict
 from .sample_library import SampleLibrary, LibraryConflict
+from .sample_thumbnails import SampleThumbnails
 from .sample_annotations import SampleAnnotations
 from .sample_requirement_groups import classify_requirements, group_name
-from .sample_result_filters import FILTER_RESULT_SQL, SEAL_SOURCES, sample_result_filters
+from .sample_result_filters import (
+    LIST_RESULT_SQL, SEAL_SOURCES, decode_list_result, sample_result_filters,
+)
 
 
 def sample_urls(value):
@@ -105,6 +108,7 @@ class SampleCenter:
         self.database.path.parent.mkdir(parents=True, exist_ok=True)
         self.database.initialize()
         self.library = SampleLibrary(ctx, self.database)
+        self.thumbnails = SampleThumbnails(self.database.path.parent / 'thumbnails')
         self.annotations = SampleAnnotations(self.library)
         self.store = SampleJobStore(self.database, self.library)
         self.store.initialize()
@@ -142,9 +146,7 @@ class SampleCenter:
             con.execute('BEGIN')
             jobs = {row["filename"]: dict(row) for row in con.execute(f"""
                 SELECT j.filename,j.status,j.result_id,j.error_message,j.created_at,j.finished_at,j.payload_json,
-                    json_extract(r.result_json,'$.fields') AS fields,
-                    json_extract(r.result_json,'$.signature_check') AS signature_check,
-                    {FILTER_RESULT_SQL} AS filter_result
+                    {LIST_RESULT_SQL} AS list_result
                 FROM recognition_jobs j
                 LEFT JOIN results r ON r.id=j.result_id AND r.deleted_at=''
                 WHERE j.rowid IN (SELECT MAX(rowid) FROM recognition_jobs GROUP BY filename)
@@ -153,11 +155,11 @@ class SampleCenter:
         items = []
         for name, entry in catalog.items():
             job = jobs.get(name, {})
-            signature = derive_signature_check(json.loads(job.get("fields") or "{}"),
-                                               json.loads(job.get("signature_check") or "{}"))
+            result = decode_list_result(job['list_result']) if job else {}
+            signature = derive_signature_check(result.get('fields') or {}, result.get('signature_check') or {})
             status = {"queued": "测试中", "running": "测试中", "succeeded": "已完成",
                       "failed": "运行失败"}.get(job.get("status"), "未测试")
-            filters = sample_result_filters(job, entry)
+            filters = sample_result_filters(job, entry, result=result)
             items.append({
                 "filename": name,
                 "company": str((entry.get("fields") or {}).get("客户名称") or "").strip() or "未分类",
@@ -250,16 +252,16 @@ def register_sample_routes(app, ctx):
 
     @bp.get("/api/samples/image/<name>")
     def source_image(name):
-        source = center().source(name)
+        service = center()
+        source = service.source(name)
         if request.args.get("thumbnail") == "1":
-            from PIL import Image, ImageOps
             from io import BytesIO
-            image = ImageOps.exif_transpose(Image.open(source))
-            image.thumbnail((480, 480))
-            output = BytesIO()
-            image.convert("RGB").save(output, "JPEG", quality=80)
-            output.seek(0)
-            return send_file(output, mimetype="image/jpeg", max_age=3600)
+            try:
+                thumbnail, etag = service.thumbnails.get(source)
+            except FileNotFoundError:
+                abort(404)
+            return send_file(BytesIO(thumbnail), mimetype="image/jpeg", conditional=True,
+                             etag=etag, max_age=0)
         return send_file(source, conditional=True)
 
     @bp.post('/api/samples/import')
@@ -381,8 +383,10 @@ def register_sample_routes(app, ctx):
         from .sample_statistics_export import export_statistics as build_export
         try:
             output = build_export(center(), company=request.args.get('company', ''),
+                                  requirement=request.args.get('requirement', ''),
                                   task_id=request.args.get('task_id', ''),
-                                  tab=request.args.get('tab', 'seal'), selected=request.args.get('filter', ''))
+                                  tab=request.args.get('tab', 'seal'), selected=request.args.get('filter', ''),
+                                  channel=request.args.get('channel', ''))
         except KeyError:
             return jsonify(error='这次测试记录不存在，请重新选择'), 404
         except ValueError as exc:

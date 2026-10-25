@@ -74,13 +74,14 @@ def test_unconfirmed_or_filled_cells_are_never_marked_empty(case):
     assert _empty_form_field(image, (310,440), boxes, 720) is None
 
 
-def test_date_placeholders_are_allowed_without_inventing_actual_dates():
+@pytest.mark.parametrize('caption', ['收货日期：', '日期：'])
+def test_date_placeholders_are_allowed_without_inventing_actual_dates(caption):
     image = np.full((600,800,3),255,np.uint8)
     image[480:540, 35:235] = (70,70,245)
     image[480:540, 400:650] = (70,70,245)
-    boxes = [detection('收货日期：', [30,475,240,545]),
+    boxes = [detection(caption, [30,475,240,545]),
              detection('年月日', [395,475,655,545])]
-    assert _empty_form_field(image, (465,600), boxes, 720)['label'] == '收货日期：'
+    assert _empty_form_field(image, (465,600), boxes, 720)['label'] == caption
     boxes[-1]['text'] = '2026年10月23日'
     assert _empty_form_field(image, (465,600), boxes, 720) is None
 

@@ -7,6 +7,7 @@ import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
 from .colors import _ocr_color_mask
+from .border_fit import fit_border_contour
 
 
 def _ellipse_fits_canvas(ellipse, shape):
@@ -143,7 +144,7 @@ def map_ellipse_box_to_normalized(
     return [mapped_left, mapped_top, mapped_right, mapped_bottom]
 
 
-def _fit_ellipse_annulus(mask):
+def _fit_ellipse_annulus(mask, *, reject_outliers=True):
     """Share the measured ring geometry between the preview and OCR input."""
     # The stamp border is often broken by scan streaks and page text.  Fit
     # geometry on a lightly closed mask so those gaps do not make the outer
@@ -162,7 +163,11 @@ def _fit_ellipse_annulus(mask):
         if len(contour) < 20 or cv2.contourArea(contour) < mask.size * 0.01:
             continue
         try:
-            ellipse = cv2.fitEllipse(contour)
+            # Geometry must not follow a scan rule attached outside the rim.
+            # The original mask is retained unchanged for actual OCR sampling.
+            ellipse = (fit_border_contour(contour) if reject_outliers
+                       and cv2.contourArea(contour) >= mask.size * .12
+                       else cv2.fitEllipse(contour))
             if not _ellipse_fits_canvas(ellipse, mask.shape):
                 continue
             (cx, cy), (axis_a, axis_b), angle = ellipse
@@ -219,6 +224,15 @@ def _fit_ellipse_annulus(mask):
             ((outer_cx, outer_cy), (outer_a * 0.55, outer_b * 0.55), outer_angle),
         )
     return outer, inner, estimated_inner
+
+
+def _fit_unfiltered_ellipse_annulus(mask):
+    """Raw reference residual for the separately verified strong-ink fallback.
+
+    It compares two thresholded geometry masks with the polluted reference;
+    its actual sampling never uses this reference ellipse.
+    """
+    return _fit_ellipse_annulus(mask, reject_outliers=False)
 
 
 def _ellipse_normal_maps(outer, inner, estimated_inner):

@@ -9,6 +9,7 @@ import {createReviewEditors} from './editors.mjs';
 import {createReviewSubmission} from './submission.mjs';
 import {createReviewStandard} from '../seals/review_standard.mjs';
 import {createSampleAnnotationSubmission} from './sample_annotations.mjs';
+import {createSampleBrowse} from './sample_browse.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -26,6 +27,7 @@ export function createReview({
   const {$, $$, toast} = ui;
   const reviewImage = createReviewImage({environment, ui, reviewState});
   const reviewPreview = createReviewPreview({environment, ui});
+  const sampleBrowse = createSampleBrowse({ui, reviewState, openReview});
 
   const {submitReview} = createReviewSubmission({
     ui, reviewState, services, currentReadiness, syncReviewReadiness,
@@ -108,6 +110,7 @@ export function createReview({
   function showReviewEmpty({loading = false, error = ''} = {}) {
     reviewPreview.cancel();
     reviewState.current = null;
+    sampleBrowse.clear();
     reviewState.reviewDirty = false;
     $('#review-modal').classList.add('hidden');
     $('#review-empty').classList.remove('hidden');
@@ -163,23 +166,26 @@ export function createReview({
       if (element.matches('input,textarea')) element.focus({preventScroll:true});
     }
   }
-  async function openReview(id, {mode = 'review', sample = false, preview = false} = {}) {
+  function currentReviewHash() {
+    return `#${reviewState.sampleView ? 'sample-view' : reviewState.reviewMode === 'view' ? 'view' : 'review'}/${reviewState.current.id}`;
+  }
+  async function openReview(id, {mode = 'review', sample = false, preview = false, origin = '', browseIds = [], imageGroup = '', isCurrent, onOpened} = {}) {
     mode = sample || mode === 'view' ? 'view' : 'review';
     if (!canLeaveReview({discard:false})) {
-      if (reviewState.current && document.body.dataset.activePage === 'review') history.replaceState(null, '', `#review/${reviewState.current.id}`);
+      if (reviewState.current && document.body.dataset.activePage === 'review') history.replaceState(null, '', currentReviewHash());
       return;
     }
     reviewState.reviewIntent = (reviewState.reviewIntent || 0) + 1;
     const editVersion = reviewState.reviewEditVersion;
     if (document.body.dataset.activePage !== 'review') {
-      reviewState.reviewOrigin = {hash: sample ? '#samples' : '#records', scroll: window.scrollY};
+      reviewState.reviewOrigin = {hash: origin || (sample ? '#samples' : '#records'), scroll: window.scrollY};
     }
     const originHash = location.hash;
     const requestId = reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
     const item = await (sample ? services.samples.get(id) : services.records.get(id));
-    if (requestId !== reviewState.reviewRequest || location.hash !== originHash) return;
+    if (requestId !== reviewState.reviewRequest || location.hash !== originHash || (isCurrent && !isCurrent())) return;
     if (reviewState.reviewSaving || reviewState.reviewEditVersion !== editVersion) {
-      if (reviewState.current) history.replaceState(null, '', `#review/${reviewState.current.id}`);
+      if (reviewState.current) history.replaceState(null, '', currentReviewHash());
       toast('加载期间有新的修改，已保留当前回单，请保存后再切换。', 'warning');
       return;
     }
@@ -188,7 +194,8 @@ export function createReview({
     reviewState.current = item; reviewState.reviewDirty = false; reviewState.reviewMode = mode;
     const replaceFocusedForm = $('#review-content').contains?.(document.activeElement);
     renderReview(item, id, mode);
-    if (sample && preview) focusReviewImage('page');
+    if (sample && (imageGroup || preview)) focusReviewImage(imageGroup || 'page');
+    sampleBrowse.setContext(sample ? browseIds : []);
     // Switching receipts stays inside a single modal history entry.
     const route = `${sample ? 'sample-view' : mode}/${id}`;
     if (document.body.dataset.activePage === 'review' || /^#(review|view|sample-view)\//.test(location.hash)) history.replaceState(null, '', `#${route}`);
@@ -198,6 +205,7 @@ export function createReview({
       $('#review-title').setAttribute('tabindex', '-1');
       $('#review-title').focus({preventScroll: true});
     }
+    onOpened?.();
     await Promise.allSettled([renderHistory(), ...(sample ? [renderGroundTruth()] : [loadReviewQueue(false)])]);
   }
 
@@ -239,6 +247,7 @@ export function createReview({
     reviewPreview.cancel();
     reviewState.current = null;
     reviewState.sampleView = false;
+    sampleBrowse.clear();
     reviewState.reviewDirty = false;
     reviewState.reviewIntent = (reviewState.reviewIntent || 0) + 1;
     reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
@@ -247,7 +256,8 @@ export function createReview({
   }
   function closeModal() {
     if (!canLeaveReview()) return;
-    const target = reviewState.sampleView ? '#samples' : '#records';
+    const target = reviewState.reviewOrigin?.hash === '#seal-center' ? '#seal-center'
+      : reviewState.sampleView ? '#samples' : '#records';
     dismissReview();
     history.replaceState(null, '', target);
     navigationState.restoreScroll = reviewState.reviewOrigin?.scroll || 0;
@@ -259,6 +269,7 @@ export function createReview({
   }
 
   function initialize() {
+    sampleBrowse.initialize();
     $$('[data-close-modal]').forEach(node => node.addEventListener('click', closeModal));
     $('#review-dialog')?.addEventListener('cancel', event => {
       event.preventDefault();

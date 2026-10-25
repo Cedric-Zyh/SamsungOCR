@@ -1,6 +1,6 @@
 """Classify observed layout text without using the requested stamp wording."""
 import re
-from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters
+from receipt_ocr.domain.parsing.seal_numbers import normalize_stamp_number_letters, stamp_number_token
 
 
 def phone_value(text):
@@ -13,11 +13,12 @@ def phone_value(text):
     return f'{match[1]}-{match[2]}' if match else ''
 
 
-def inner_role(text):
+def inner_role(text, *, number_field=False):
     value = re.sub(r'\s+', '', text or '')
     if phone_value(value):
         return 'phone'
-    if re.fullmatch(r'[（(]\d{1,3}[）)]', normalize_stamp_number_letters(value, isolated=True)):
+    number = stamp_number_token(value) if number_field else value
+    if re.fullmatch(r'[（(]\d{1,3}[）)]', normalize_stamp_number_letters(number, isolated=True)):
         return 'number'
     if re.fullmatch(r'\d{4,12}站', value):
         return 'station'

@@ -27,7 +27,7 @@ def _orient_complete_row(source, best, scratch, band_dir, *, model_variant):
     """
     from ..ocr.interface import OcrReader
 
-    if best.get("grouped_row"):
+    if best.get("grouped_row") or best.get("department_verified_rows"):
         return best
     seed = _oriented_type_row_exact_box(
         best["boxes"], best["decision"], best["fine_matrix"],
@@ -346,6 +346,21 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
 
         best = _select_four_way_candidate(candidates)
         if not best["post_rotation_verified"]:
+            from .department_orientation import prepare_department_candidate
+            for item in list(candidates):
+                try:
+                    trial = prepare_department_candidate(
+                        source, scratch, band_dir, item, model_variant=model_variant,
+                    )
+                except Exception:
+                    continue
+                if trial is not None:
+                    candidates.append(trial)
+                    best = _select_four_way_candidate(candidates)
+                    if best["post_rotation_verified"]:
+                        break
+
+        if not best["post_rotation_verified"]:
             # A diagonal row can be missed at all four right angles. Only
             # then compare the intermediate angles on the same full stamp.
             for angle in (45, 135, 225, 315):
@@ -384,7 +399,9 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
         # needless quarter-turn changes the secondary read image for no gain.
         decision["four_way_candidates"] = {
             (f"rebase-{item['angle_rebase']['from_coarse']:g}"
-             if item.get("angle_rebase") else str(int(item["angle"]))): {
+             if item.get("angle_rebase") else
+             f"department-{item['angle']:g}" if item.get("department_verified_rows")
+             else str(int(item["angle"]))): {
                 "text": item["band_text"],
                 "fine_rotation": round(item["fine_rotation"], 3),
                 "anchor_text": item["anchor_text"],
@@ -475,11 +492,14 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
             coarse_angle,
             (source_width, source_height),
         )
+    if best.get("department_verified_rows"):
+        decision["department_verified_rows"] = best["department_verified_rows"]
+        decision["type_row_texts"] = [best["band_text"]]
     rotation_note = f"按 {coarse_angle:g}° 粗校正"
     if is_original:
         rotation_note = "原方向最佳"
     fine_note = (
-        f"，再按章型文字微调 {best['fine_rotation']:.1f}°"
+        f"，再按{'部门文字' if best.get('department_verified_rows') else '章型文字'}微调 {best['fine_rotation']:.1f}°"
         if best["fine_rotation"] else ""
     )
     decision["status"] = (
