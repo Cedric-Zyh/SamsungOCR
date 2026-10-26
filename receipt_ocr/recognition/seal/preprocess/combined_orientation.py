@@ -4,7 +4,7 @@ from pathlib import Path
 import math
 import tempfile
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from receipt_ocr.recognition.seal.preprocess.orientation_settings import (
     FOUR_WAY_ANCHOR_MIN_CONFIDENCE, FOUR_WAY_COARSE_ANGLES,
     FOUR_WAY_MIN_FINE_ROTATION, FOUR_WAY_MAX_FINE_ROTATION,
@@ -77,10 +77,11 @@ def _orient_complete_row(source, best, scratch, band_dir, *, model_variant):
         final_width=width, final_height=height, focus_box=focus, exact_box=exact,
         mask_polygons=[polygon], band_text=text, band_confidence=confidence,
         complete_row=proposal,
+        read_box=focus, blank_padding=0,
     )
 
 
-def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None):
+def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None, blank_padding=0):
     """Recognise the stamp-type row of one candidate.
 
     ``focus_box`` comes from observed text. Without one there is no row to
@@ -102,7 +103,8 @@ def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None
             return "", 0.0
         band_path = Path(band_path)
         band_path.parent.mkdir(parents=True, exist_ok=True)
-        rgb.crop((left, top, right, bottom)).save(band_path)
+        ImageOps.expand(rgb.crop((left, top, right, bottom)),
+                        border=blank_padding, fill="white").save(band_path)
     rows = [
         row for row in read_line(band_path, model_variant=model_variant)
         if getattr(row, "text", "")
@@ -172,11 +174,16 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant, obse
     focus_box = _oriented_type_anchor_box(
         decision, fine_matrix, final_width, final_height
     )
+    # Keep the wider box for localization searches, but never import its ring
+    # fragments into line OCR. Blank padding is added AFTER the exact crop.
+    read_box = _oriented_type_row_exact_box(
+        boxes, decision, fine_matrix, final_width, final_height,
+    )
     band_text, band_confidence = _read_type_band_text(
         final_path,
         band_dir / f"coarse-{angle}-type-row.png",
         model_variant=model_variant,
-        focus_box=focus_box,
+        focus_box=read_box, blank_padding=6,
     )
     single = {
         "angle": float(angle),
@@ -188,6 +195,8 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant, obse
         "final_width": final_width,
         "final_height": final_height,
         "focus_box": focus_box,
+        "read_box": read_box,
+        "blank_padding": 6,
         "anchor_text": anchor_text,
         "anchor_confidence": anchor_confidence,
         "anchor_angle": float(decision.get("angle") or 0.0) if anchor_text else 0.0,
@@ -448,7 +457,10 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
         if best["focus_box"]:
             verified_row = destination.with_name(destination.stem + "-verified-type-row.png")
             with Image.open(best["path"]) as image:
-                image.convert("RGB").crop(tuple(round(v) for v in best["focus_box"])).save(verified_row)
+                crop = image.convert("RGB").crop(tuple(round(v) for v in
+                                                       (best.get("read_box") or best["focus_box"])))
+                ImageOps.expand(crop, border=best.get("blank_padding", 0),
+                                fill="white").save(verified_row)
             decision["type_band_path"] = str(verified_row)
 
     decision.update(
@@ -469,7 +481,8 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
     if best["focus_box"]:
         decision["oriented_type_row_box"] = best["focus_box"]
         # Reading context and the exact ink mask serve different purposes.
-        decision["oriented_type_row_read_box"] = best["focus_box"]
+        decision["oriented_type_row_read_box"] = best.get("read_box") or best["focus_box"]
+        decision["type_row_blank_padding"] = best.get("blank_padding", 0)
         decision["oriented_type_row_exact_box"] = best.get("exact_box") or _oriented_type_row_exact_box(
             best["boxes"], best["decision"], best["fine_matrix"],
             best["final_width"], best["final_height"],

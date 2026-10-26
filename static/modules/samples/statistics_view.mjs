@@ -79,6 +79,26 @@ function errorTable(rows, columns, tab) {
   }).join('')}</tbody></table></div></section>`;
 }
 
+export function problemAnnotationsPanel(rows) {
+  const samples = [...new Map(rows.map((row, index) => [row.filename || index, row])).values()];
+  const statuses = {unmarked:0, clear:0, issues:0}, types = new Map(), features = new Map();
+  const add = (counter, values) => [...new Set(values || [])].forEach(label => counter.set(label, (counter.get(label) || 0) + 1));
+  let legacy = 0;
+  for (const row of samples) {
+    const review = row.problem_review || {}, status = ['clear', 'issues'].includes(review.status) ? review.status : 'unmarked';
+    statuses[status]++;
+    if (status === 'issues') add(types, review.types);
+    add(features, row.sample_features);
+    if (row.legacy_problem_types?.length) legacy++;
+  }
+  const distribution = (title, counter) => `<h4>${title}</h4><div class="sample-stat-matrix-wrap"><table class="sample-stat-matrix"><thead><tr><th>标签</th><th>样单数</th></tr></thead><tbody>${[...counter].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN')).map(([label, count]) => `<tr><th scope="row">${esc(label)}</th><td>${count}</td></tr>`).join('') || '<tr><td colspan="2">暂无标记</td></tr>'}</tbody></table></div>`;
+  return analysisPanel('human-problems', '人工问题标记', `已发现问题 ${statuses.issues} 张`,
+    `<p>当前范围内整张样单的人工观察，仅关联各自本次测试；不改变自动评测结果或正确率。同一样单同一标签只计一次，多选标签合计可超过问题样单数。</p>
+    <div class="sample-stat-summary-status"><span>尚未标注 ${statuses.unmarked}</span><span>已核对无问题 ${statuses.clear}</span><span>已发现问题 ${statuses.issues}</span></div>
+    ${distribution('本次发现的问题', types)}${distribution('图片与版式特征（跨测试保留）', features)}
+    ${legacy ? `<p>${legacy} 张样单有未关联测试的旧标记，未计入本次问题；可打开样单核对后标注。</p>` : ''}`);
+}
+
 function dateCohorts(rows) {
   const s = summarizeChannel(rows, 'date', 'date');
   return analysisPanel('date-cohorts', '有日期与空白日期分别评估', '区分真实日期与空白样单', `<p>分开看两类样单，避免大量空白日期掩盖实际日期识别效果。</p><div class="sample-stat-matrix-wrap"><table class="sample-stat-matrix"><thead><tr><th>人工标注</th><th>样单数</th><th>可评测</th><th>正确</th><th>正确率</th></tr></thead><tbody>${[['dated','有日期','date_with_value'],['blank','空白日期','date_blank']].map(([key,label,filter]) => {
@@ -112,6 +132,7 @@ function groupPanel(rows, {columns, tab, groupBy, showAllGroups}) {
 export function statisticsOverview(rows, options) {
   const {tab, columns, distribution} = options;
   return channelTable(rows, columns, tab, distribution)
-    + errorTable(rows, columns, tab) + (tab === 'date' ? dateCohorts(rows) : commonComparison(rows, columns, tab) + disagreementPanel(rows, columns))
+    + errorTable(rows, columns, tab) + problemAnnotationsPanel(rows)
+    + (tab === 'date' ? dateCohorts(rows) : commonComparison(rows, columns, tab) + disagreementPanel(rows, columns))
     + groupPanel(rows, options);
 }

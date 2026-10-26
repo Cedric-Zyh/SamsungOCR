@@ -76,6 +76,8 @@ def analyze_upload(ctx: RecognitionDependencies):
             options.seal_recognition_mode, options.recognition_config,
         )
 
+    trace_key = uuid.uuid4().hex
+    ctx.database.begin_recognition_calls(original_name, trace_key)
     try:
         result, preview_name = ctx.documents.recognize(
             source,
@@ -84,6 +86,7 @@ def analyze_upload(ctx: RecognitionDependencies):
             ocr_backend=options.ocr_backend,
             seal_recognition_mode=options.seal_recognition_mode,
         )
+        result["_recognition_call_key"] = trace_key
         record_id = ctx.database.insert_result(
             filename=original_name,
             stored_name=stored_name,
@@ -92,11 +95,15 @@ def analyze_upload(ctx: RecognitionDependencies):
             result=result,
         )
         result["id"] = record_id
+        result.pop("_recognition_calls", None)
+        result.pop("_recognition_call_key", None)
         ctx.database.update_task(task_id, success=True, pending_review=result["review_status"] == "待复核")
         return jsonify(result)
     except Exception as exc:
         ctx.logger.exception("Receipt analysis failed")
         failure = {
+            "_recognition_calls": getattr(exc, "recognition_calls", None),
+            "_recognition_call_key": trace_key,
             "filename": original_name,
             "overall": "识别失败",
             "final_result": "识别失败",

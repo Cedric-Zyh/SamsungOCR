@@ -53,6 +53,7 @@ export function createApiClients(api) {
       statisticsExportUrl: params => query('/api/samples/statistics/export', params),
       saveCompanyMark: payload => api('/api/samples/company-mark', {method: 'POST', json: payload}),
       get: id => api(`/api/samples/results/${encodeURIComponent(id)}`),
+      recognitionCalls: id => api(`/api/samples/results/${encodeURIComponent(id)}/recognition-calls`),
       reviewHistory: id => api(`/api/samples/results/${encodeURIComponent(id)}/review-history`),
       groundTruth: id => api(`/api/samples/results/${encodeURIComponent(id)}/ground-truth`),
       saveAnnotations: (id, payload) => api(`/api/samples/results/${encodeURIComponent(id)}/annotations`, {method: 'PATCH', json: payload}),
@@ -61,6 +62,7 @@ export function createApiClients(api) {
     sealStandards: {
       list: search => api(query('/api/seal-standards', {search})),
       sources: id => api(`/api/seal-standards/${encodeURIComponent(id)}/sources`),
+      recognitionInfo: id => api(`/api/seal-standards/${encodeURIComponent(id)}/recognition-info`),
       save: (id, payload) => api(`/api/results/${encodeURIComponent(id)}/seal-standard`, {method:'POST', json:payload}),
     },
     imports: {
@@ -82,6 +84,7 @@ export function createApiClients(api) {
       list: (params, options) => api(query('/api/results', params), options),
       daily: (importDate, options) => api(query('/api/daily-results', {import_date: importDate, include_queue: 1}), options),
       get: (id, options) => api(`/api/results/${encodeURIComponent(id)}`, options),
+      recognitionCalls: id => api(`/api/results/${encodeURIComponent(id)}/recognition-calls`),
       review: (id, payload) => api(`/api/results/${encodeURIComponent(id)}/review`, {method: 'PATCH', json: payload}),
       history: (id, options) => api(`/api/results/${encodeURIComponent(id)}/review-history`, options),
       groundTruth: (id, options) => api(`/api/results/${encodeURIComponent(id)}/ground-truth`, options),

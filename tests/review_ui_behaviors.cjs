@@ -4,6 +4,14 @@ const {reviewReadiness, reviewKeyboardAction, normalizedReviewDate} = require('.
 const {createReviewImage} = require('../static/modules/review/review_image.mjs');
 const {createReview} = require('../static/modules/review/review.mjs');
 const {dateAuditText, sealEvidenceMarkup} = require('../static/modules/review/review_provider_evidence.mjs');
+
+test('sample seal matching is not converted into manual confirmation by reliability metadata', () => {
+  const item = {sample_center:true,seal_check:{backend:'本地 PaddleOCR PP-OCRv6 Small',
+    recognized:'客户公司收货专用章',status:'匹配',reliable:false}};
+  const markup = sealEvidenceMarkup(item);
+  assert.match(markup,/pill success">匹配/);
+  assert.doesNotMatch(markup,/匹配待确认|需人工确认|需人工复核/);
+});
 const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
 const item = () => ({id: 1, fields: {'要求到货': '2025-03-31', '签章要求': '上海客户收货章'},

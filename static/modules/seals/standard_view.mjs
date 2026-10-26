@@ -26,15 +26,16 @@ export function standardDetail(standard) {
       <div class="seal-preview-tools" role="group" aria-label="标准章图片缩放"><button type="button" data-seal-zoom="fit" title="恢复适应窗口">适应窗口</button><button type="button" data-seal-zoom="out" aria-label="缩小标准章图片" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button><span data-seal-zoom-label title="相对于适应窗口的缩放比例">100%</span><button type="button" data-seal-zoom="in" aria-label="放大标准章图片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button><a href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" aria-label="查看完整标准章原图（新窗口）">查看原图</a></div>
       <div class="seal-preview-viewport" tabindex="0" role="region" aria-label="标准章图片，放大后可滚动查看"><div class="seal-preview-image"><img src="${escapeHtml(standard.image_url)}" alt="${escapeHtml(requirement)}的当前标准章"></div></div>
     </figure>
-    <dl class="seal-detail-text"><div><dt>签章要求</dt><dd>${escapeHtml(requirement)}</dd></div><div><dt>识别文字</dt><dd>${escapeHtml(standard.recognized || '未识别到文字')}<small class="seal-detail-text-note">供人工核对</small></dd></div></dl>
+    <dl class="seal-detail-text"><div><dt>签章要求</dt><dd>${escapeHtml(requirement)}</dd></div><div><dt>${standard.recognized_source === 'manual' ? '标准章文字' : '识别文字'}</dt><dd>${escapeHtml(standard.recognized || '未识别到文字')}<small class="seal-detail-text-note">${standard.recognized_source === 'manual' ? '人工校正' : '来自识别结果 · 供人工核对'}</small>${standard.recognized_source === 'manual' ? `<details><summary>查看原始识别文字</summary><p>${escapeHtml(standard.ocr_recognized || '未识别到文字')}</p></details>` : ''}</dd></div></dl>
     <dl class="seal-detail-metadata"><div><dt>印章形状</dt><dd>${shapeLabel(standard.shape)}</dd></div><div><dt>${sourceLabel}</dt><dd title="${escapeHtml(sourceName)}">${source}</dd></div><div><dt>印章颜色</dt><dd>${colorLabel(standard.color)}</dd></div><div><dt>当前版本</dt><dd>第 ${revision} 版</dd></div></dl>
+    <div data-standard-recognition-info aria-live="polite"><p class="seal-name-load-state">正在加载名称词条与纠错记录…</p></div>
     <div class="seal-detail-footer"><p>每条签章要求保留一枚标准章，分组仅便于查找，各分公司、章号独立核验。</p></div>
     `;
 }
 
 export function standardCard(standard) {
   if (!standard) return '<div class="seal-standard-empty"><b>尚无标准章</b><p>选择一枚转正、清理后的客户章，手动加入印章中心。</p><small>形状尚无参照，识别过程不会自动加入。</small></div>';
-  return `<figure class="seal-standard-card"><a href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" title="打开完整标准章图片"><img src="${escapeHtml(standard.image_url)}" alt="已保存的标准章"></a><figcaption><b>当前标准章</b><span>${shapeLabel(standard.shape)} · ${colorLabel(standard.color)}</span><p>${escapeHtml(standard.recognized || '未识别到文字')}</p><small>来自 ${escapeHtml(standard.source_filename)} · 第 ${standard.revision} 版</small></figcaption></figure>`;
+  return `<figure class="seal-standard-card"><a href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" title="打开完整标准章图片"><img src="${escapeHtml(standard.image_url)}" alt="已保存的标准章"></a><figcaption><b>当前标准章</b><span>${shapeLabel(standard.shape)} · ${colorLabel(standard.color)}</span><p>${escapeHtml(standard.recognized || '未识别到文字')}</p><small>来自 ${escapeHtml(standard.source_filename)} · 第 ${standard.revision} 版${standard.recognized_source === 'manual' ? ' · 人工校正' : ''}</small></figcaption></figure>`;
 }
 
 export function candidateCard(candidate, {selected=false, sourceId='', filename=''} = {}) {

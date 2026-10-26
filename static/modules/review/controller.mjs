@@ -10,6 +10,7 @@ import {createReviewSubmission} from './submission.mjs';
 import {createReviewStandard} from '../seals/review_standard.mjs';
 import {createSampleAnnotationSubmission} from './sample_annotations.mjs';
 import {createSampleBrowse} from './sample_browse.mjs';
+import {createReviewRunHistory} from './run_history.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -28,6 +29,7 @@ export function createReview({
   const reviewImage = createReviewImage({environment, ui, reviewState});
   const reviewPreview = createReviewPreview({environment, ui});
   const sampleBrowse = createSampleBrowse({ui, reviewState, openReview});
+  const runHistory = createReviewRunHistory({environment, ui, reviewState, services});
 
   const {submitReview} = createReviewSubmission({
     ui, reviewState, services, currentReadiness, syncReviewReadiness,
@@ -101,13 +103,19 @@ export function createReview({
     $('[data-seal-standard]', $('#review-content')).scrollIntoView({block: 'nearest'});
     Promise.allSettled([renderHistory(), ...(reviewState.sampleView ? [renderGroundTruth()] : []), refreshVisibleResults()]);
   }});
-  const renderReview = createReviewView({
+  const renderReviewForm = createReviewView({
     ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor, renderProductTable,
     setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation, applyReviewMode,
     focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
     renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard
   });
+  function renderReview(item, id, mode) {
+    runHistory.clear();
+    renderReviewForm(item, id, mode);
+    runHistory.setContext({...item, id}, {sample: reviewState.sampleView});
+  }
   function showReviewEmpty({loading = false, error = ''} = {}) {
+    runHistory.clear();
     reviewPreview.cancel();
     reviewState.current = null;
     sampleBrowse.clear();
@@ -244,6 +252,7 @@ export function createReview({
   }
 
   function dismissReview() {
+    runHistory.clear();
     reviewPreview.cancel();
     reviewState.current = null;
     reviewState.sampleView = false;
@@ -270,9 +279,11 @@ export function createReview({
 
   function initialize() {
     sampleBrowse.initialize();
+    runHistory.initialize();
     $$('[data-close-modal]').forEach(node => node.addEventListener('click', closeModal));
     $('#review-dialog')?.addEventListener('cancel', event => {
       event.preventDefault();
+      if (runHistory.isOpen()) { runHistory.close(); return; }
       closeModal();
     });
     document.addEventListener('keydown', event => {
@@ -280,6 +291,7 @@ export function createReview({
       const action = reviewKeyboardAction(event);
       if (!action) return;
       event.preventDefault();
+      if (runHistory.isOpen() && ['save', 'pass', 'date', 'seal'].includes(action)) return;
       if (reviewState.reviewSaving) return;
       if (reviewState.sampleView && action === 'save') { saveSampleAnnotations(); return; }
       if (reviewState.reviewMode === 'view' && ['save', 'pass'].includes(action)) {

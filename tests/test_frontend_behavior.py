@@ -37,7 +37,7 @@ def test_standard_seal_selection_registration_replacement_and_review_guards():
 
 
 def test_process_history_grouping_and_request_lifecycle():
-    run_node("--test", "tests/process_history_ui.cjs")
+    run_node("--test", "tests/process_history_ui.cjs", "tests/review_run_history.cjs")
 
 
 def test_record_column_resize_lock_and_persistence():

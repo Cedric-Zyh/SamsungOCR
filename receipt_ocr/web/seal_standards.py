@@ -8,6 +8,7 @@ from flask import abort, jsonify, request
 from PIL import Image
 
 from ..domain.seal_standards import seal_candidates, requirement_key
+from ..domain.seal_name_terms import seal_name_terms
 from ..review import prepare_review_payload
 
 
@@ -36,7 +37,12 @@ def _image_path(ctx, url):
 
 
 def list_standards(ctx):
-    return jsonify(items=ctx.database.list_seal_standards(request.args.get("search", "")))
+    return jsonify(items=[_name_terms(standard) for standard in
+                          ctx.database.list_seal_standards(request.args.get("search", ""))])
+
+
+def _name_terms(standard):
+    return {**standard, 'name_terms': seal_name_terms(standard['requirement'])}
 
 
 def standard_sources(ctx, standard_id):
@@ -53,7 +59,7 @@ def standard_sources(ctx, standard_id):
             sources.append({"id": current["id"], "filename": current["filename"],
                             "created_at": current["created_at"], "candidates": candidates,
                             "review_revision": ctx.review_revision(current)})
-    return jsonify(standard=standard, sources=sources)
+    return jsonify(standard=_name_terms(standard), sources=sources)
 
 
 def register_standard(ctx, result_id):
@@ -63,6 +69,10 @@ def register_standard(ctx, result_id):
     rotation = payload.get("rotation", 0)
     if isinstance(rotation, bool) or not isinstance(rotation, (float, int)) or not math.isfinite(rotation) or abs(rotation) > 180:
         return jsonify(error="旋转角度须在 -180 到 180 度之间"), 400
+    override = payload.get("recognized_override")
+    if "recognized_override" in payload and (
+            not isinstance(override, str) or not override.strip() or len(override.strip()) > 1000):
+        return jsonify(error="标准章文字须为 1 到 1000 个字符"), 400
     destination = None
     committed = False
     source_database = ctx.source_database if ctx.source_database is not None else ctx.database
@@ -86,6 +96,7 @@ def register_standard(ctx, result_id):
             if type(payload.get("standard_revision")) is not int or payload["standard_revision"] != expected_revision:
                 return jsonify(error="标准章已变化，请刷新后明确选择加入或替换", code="standard_revision_conflict"), 409
             source = _image_path(ctx, candidate["image_url"])
+            recognized = override.strip() if override is not None else candidate["recognized"]
             directory = ctx.database.path.parent / "seal-standards"
             directory.mkdir(parents=True, exist_ok=True)
             destination = directory / f"{uuid4().hex}.png"
@@ -96,7 +107,9 @@ def register_standard(ctx, result_id):
                 image.save(destination, format="PNG")
             standard = ctx.database.save_seal_standard({
                 "requirement": requirement, "image_name": destination.name,
-                "recognized": candidate["recognized"], "shape": candidate["shape"], "color": candidate["color"],
+                "recognized": recognized, "ocr_recognized": candidate["recognized"],
+                "recognized_source": "manual" if recognized != candidate["recognized"] else "ocr",
+                "shape": candidate["shape"], "color": candidate["color"],
                 "source_result_id": result_id, "source_filename": current["filename"], "candidate_id": candidate["id"],
                 "source_kind": ctx.source_kind,
             }, expected_revision=expected_revision, _connection=connection)
@@ -121,7 +134,7 @@ def register_standard(ctx, result_id):
         # Standards own their PNGs; deleting/expiring a receipt cannot remove
         # them. Keep prior revision files for existing audit snapshots.
         updated = project_source(source_database.get_result(result_id))
-        return jsonify(standard=standard, result=ctx.with_review_revision(updated))
+        return jsonify(standard=_name_terms(standard), result=ctx.with_review_revision(updated))
     except KeyError:
         abort(404)
     except (ValueError, OSError) as exc:

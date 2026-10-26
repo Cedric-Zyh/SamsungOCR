@@ -48,8 +48,30 @@ function harness({mode = 'review', standard = null, sampleView = false} = {}) {
     try {const response=await picker.onSave({candidate:selected,rotation:Number($('[data-standard-rotation]').value)});picker.onSaved(response);}
     catch(error){$('[data-standard-feedback]').textContent=error.message;}
   });
-  return {$,buttons,controls,unrelated,reviewState,calls,routes,resolve:value=>resolveSave(value),reject:error=>rejectSave(error),saved:()=>saved};
+  return {$,buttons,controls,unrelated,reviewState,calls,routes,picker:()=>picker,resolve:value=>resolveSave(value),reject:error=>rejectSave(error),saved:()=>saved};
 }
+
+test('manual standard text is explicitly forwarded for receipt and sample registration', async () => {
+  for (const sampleView of [false,true]) {
+    const h=harness({sampleView}), picker=h.picker();
+    const pending=picker.onSave({candidate:picker.sources[0].candidates[0],rotation:0,recognizedOverride:'人工核对后的文字'});
+    assert.equal(h.calls[0][1].recognized_override,'人工核对后的文字');
+    assert.equal(h.routes[0],sampleView?'sample':'receipt');
+    assert.equal(picker.sources[0].candidates[0].recognized,undefined);
+    h.resolve({result:{id:7}});await pending;
+  }
+});
+
+test('manually corrected archive text is marked and raw OCR remains inspectable and escaped', () => {
+  const {standardDetail}=require('../static/modules/seals/standard_view.mjs');
+  const markup=standardDetail({id:1,requirement:'客户要求',recognized:'正确公司名称',
+    recognized_source:'manual',ocr_recognized:'<错误识别>',revision:1});
+  assert.match(markup,/人工校正/);
+  assert.match(markup,/查看原始识别文字/);
+  assert.match(markup,/正确公司名称/);
+  assert.match(markup,/&lt;错误识别&gt;/);
+  assert.doesNotMatch(markup,/<错误识别>/);
+});
 
 test('viewing and selecting a candidate do not register; save locks the entire review and sends its revision', async () => {
   const h = harness();

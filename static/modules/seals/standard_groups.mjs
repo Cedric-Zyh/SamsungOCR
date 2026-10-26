@@ -34,6 +34,20 @@ function ownerDescription(owner) {
 /** Describe a reviewed requirement without inferring a company from OCR text. */
 export function describeStandard(standard) {
   const requirement = requirementText(standard);
+  const terms = standard?.name_terms;
+  // Production responses use the same parser as vocabulary correction and
+  // the detail panel. Old responses retain their conservative fallback.
+  if (terms && terms.original === requirement) {
+    if (terms.groupable) {
+      const seal = terms.alternatives?.length
+        ? terms.alternatives.map(item=>[item.purpose,item.number].filter(Boolean).join('')).join(' / ')
+        : [terms.purpose, terms.number].filter(Boolean).join('');
+      return {key:`company:${identity(terms.company)}`, company:terms.company,
+        branch:terms.branch || '', seal,
+        label:[terms.branch, seal].filter(Boolean).join(' · ') || requirement};
+    }
+    return {key:`requirement:${identity(requirement)}`, company:'',branch:'',seal:'',label:requirement};
+  }
   const text = compact(requirement);
   const match = text.match(SEAL_SUFFIX);
   const seal = match?.[0] || '';

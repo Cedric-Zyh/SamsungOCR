@@ -3,6 +3,8 @@
 import os
 import threading
 
+from receipt_ocr.runtime.calls import recognition_call, check_prediction_errors
+
 
 MODEL_NAME = "PP-LCNet_x0_25_textline_ori"
 
@@ -37,7 +39,9 @@ def classify_doc_orientation(image_path):
                 model_name=DOC_ORIENTATION_MODEL_NAME,
                 device="cpu",
             )
-        predictions = list(_doc_classifier.predict(input=str(image_path), batch_size=1))
+        with recognition_call(DOC_ORIENTATION_PROVIDER, "方向识别", image_path) as invocation:
+            predictions = list(_doc_classifier.predict(input=str(image_path), batch_size=1))
+            check_prediction_errors(invocation, predictions)
     if not predictions:
         return {"angle": None, "confidence": 0.0, "model": DOC_ORIENTATION_MODEL_NAME}
     prediction = predictions[0]
@@ -76,4 +80,7 @@ def classify_lines(lines):
                 model_name=MODEL_NAME, device="cpu",
                 **({"engine": engine} if engine else {}),
             )
-        return list(_classifier.predict(input=lines, batch_size=1))
+        with recognition_call("paddle_textline_ori", "文字行方向识别", lines) as invocation:
+            predictions = list(_classifier.predict(input=lines, batch_size=1))
+            check_prediction_errors(invocation, predictions)
+            return predictions

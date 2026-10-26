@@ -6,7 +6,13 @@ import json
 
 from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS
 from receipt_ocr.evaluation import GROUND_TRUTH_FIELDS
+from receipt_ocr.domain.sample_problems import (
+    PROBLEM_GROUPS, PROBLEM_TYPES, SAMPLE_FEATURES, resolve_problem_annotations, update_problem_annotations,
+)
+from receipt_ocr.domain.problem_suggestions import suggest_problems
+from receipt_ocr.providers.registry import PROVIDERS
 from .sample_library import LibraryConflict
+from .sample_result_filters import project_sample_seal_result
 
 
 def annotation_revision(entry):
@@ -17,15 +23,58 @@ class SampleAnnotations:
     def __init__(self, library):
         self.library, self.database = library, library.database
 
-    def snapshot(self, filename):
+    def snapshot(self, filename, result_id=None):
         with self.database.connect() as con:
             con.execute('BEGIN')
             entry = self.library.catalog(include_deleted=True, connection=con).get(filename)
             history = [dict(row) for row in con.execute(
                 'SELECT * FROM ground_truth_history WHERE filename=? ORDER BY id DESC LIMIT 100',
                 (filename,))]
+            context = self._problem_context(con, result_id) if result_id is not None else {}
+            machine = self.database.get_result(result_id, _connection=con) if result_id is not None else {}
+        reviews = (entry or {}).get('problem_reviews')
+        machine_summary = project_sample_seal_result(machine).get('seal_check') or {}
         return {'filename': filename, 'exists': entry is not None, 'entry': entry,
-                'revision': annotation_revision(entry), 'history': history}
+                'revision': annotation_revision(entry), 'history': history,
+                **resolve_problem_annotations(entry or {}, result_id),
+                'problem_options': {'types': list(PROBLEM_TYPES), 'features': list(SAMPLE_FEATURES),
+                                    'groups': [{'label': label, 'types': list(types)}
+                                               for label, types in PROBLEM_GROUPS]},
+                'problem_result_summary': {
+                    'seal_status': machine_summary.get('status') or '未形成结论',
+                    'seal_reliable': machine_summary.get('reliable') is True,
+                },
+                'problem_suggestions': suggest_problems(entry or {}, machine),
+                'problem_review_saved': isinstance(reviews, dict) and str(result_id) in reviews,
+                'problem_context': context}
+
+    @staticmethod
+    def _problem_context(con, result_id):
+        job = con.execute('''SELECT j.*, b.name AS task_name FROM recognition_jobs j
+            LEFT JOIN batch_tasks b ON b.id=j.task_id WHERE j.result_id=? ORDER BY j.rowid DESC LIMIT 1''',
+            (result_id,)).fetchone()
+        if job is None:
+            return {'result_id': result_id, 'task_id': '', 'task_name': '', 'tested_at': '', 'methods': []}
+        try:
+            payload = json.loads(job['payload_json'] or '{}')
+        except (ValueError, TypeError):
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        options = payload.get('sample_options')
+        options = options if isinstance(options, dict) else payload
+        config = options.get('recognition_config')
+        config = config if isinstance(config, dict) else {}
+        methods = []
+        for stage, label in (('fields', '字段'), ('products', '商品'), ('handwriting', '手写'),
+                             ('date', '日期'), ('seal', '印章')):
+            selected = config.get(stage)
+            for method in selected if isinstance(selected, list) else []:
+                if not isinstance(method, str):
+                    continue
+                provider = PROVIDERS.get(method)
+                methods.append(f'{label}：{provider.label if provider else method}')
+        return {'result_id': result_id, 'task_id': job['task_id'], 'task_name': job['task_name'] or '',
+                'tested_at': job['finished_at'] or job['started_at'] or job['created_at'], 'methods': methods}
 
     def save(self, result_id, payload):
         if not isinstance(payload, dict):
@@ -39,6 +88,8 @@ class SampleAnnotations:
             if payload.get('revision') != annotation_revision(before):
                 raise LibraryConflict('样单标注已在其他窗口更新，请重新打开样单后核对')
             after = self._updated(before, payload)
+            update_problem_annotations(after, payload, result_id=result_id,
+                                       context=self._problem_context(con, result_id))
             if after != before:
                 con.execute('''INSERT INTO sample_library(filename,entry_json) VALUES(?,?)
                     ON CONFLICT(filename) DO UPDATE SET entry_json=excluded.entry_json''',
@@ -46,7 +97,7 @@ class SampleAnnotations:
                 self.database.record_ground_truth_change(
                     filename=filename, result_id=result_id, before=before, after=after,
                     note=after.get('human_note', ''), action='保存样单标注与备注', _connection=con)
-        return self.snapshot(filename)
+        return self.snapshot(filename, result_id)
 
     @staticmethod
     def _updated(before, payload):

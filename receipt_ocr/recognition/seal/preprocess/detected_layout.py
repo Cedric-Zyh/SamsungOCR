@@ -250,6 +250,8 @@ def prepare_detected_layout(source, directory, index, image, guide, rho, *, read
         if not cv2.imwrite(str(path(key)), pixels):
             raise ValueError('自动分区图片保存失败')
         plan['arcs'][key] = {k: mapping[k] for k in ('degrees', 'radial_range')}
+        if mapping.get('border_adjustment'):
+            plan['border']['company_arc_correction'] = mapping['border_adjustment']
         plan['jobs'].append((key, path(key), 'layout_lower' if key == 'lower' else 'ring',
                              '环形公司名称' if key == 'company' else
                              '上弧文字' if key == 'upper' else '下弧文字'))

@@ -2,7 +2,7 @@
 .standard-picker {width:min(1120px,calc(100vw - 48px));height:min(820px,calc(100dvh - 48px));max-width:none;max-height:none;margin:auto;padding:0;border:1px solid var(--archive-line);border-radius:2px;background:var(--archive-paper);color:var(--archive-text);box-shadow:0 12px 40px #282d2326;overflow:hidden}
 .standard-picker[open] {display:flex;flex-direction:column}
 .standard-picker::backdrop {background:#282d2370}
-.standard-picker :is(button,input) {font:inherit;font-size:13px;border:1px solid var(--archive-line);border-radius:2px;background:var(--archive-paper);color:var(--archive-text);box-shadow:none}
+.standard-picker :is(button,input,textarea) {font:inherit;font-size:13px;border:1px solid var(--archive-line);border-radius:2px;background:var(--archive-paper);color:var(--archive-text);box-shadow:none}
 .standard-picker button {cursor:pointer;min-height:34px;padding:6px 12px}
 .standard-picker button:hover:not(:disabled) {background:var(--archive-accent-wash)}
 .standard-picker button:disabled {opacity:.5;cursor:default}
@@ -37,6 +37,16 @@
 .standard-picker-info {border:1px solid var(--archive-line);padding:10px 12px;flex:none;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .standard-picker-info p {margin:0}
 .standard-picker-info strong {font-weight:500;color:var(--archive-ink)}
+.standard-picker-text-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.standard-picker-text-heading p {flex:1;min-width:0}
+.standard-picker-text-heading button {flex:none;color:var(--brand);padding:2px 8px;min-height:28px}
+.standard-picker-text-editor {margin-top:10px}
+.standard-picker-text-editor label {display:block;color:var(--archive-ink)}
+.standard-picker-text-editor textarea {display:block;width:100%;box-sizing:border-box;margin-top:5px;padding:8px 10px;line-height:1.65;resize:vertical;min-height:78px;max-height:180px}
+.standard-picker-text-editor textarea:focus {outline:2px solid var(--archive-accent);outline-offset:1px}
+.standard-picker-text-editor small,.standard-picker-ocr {display:block;color:var(--archive-muted);margin-top:6px}
+.standard-picker-text-editor>div {display:flex;gap:8px;margin-top:8px}
+.standard-picker-info [hidden] {display:none}
 .standard-picker-info [data-standard-warning] {margin-top:6px;color:var(--archive-muted)}
 .standard-picker-info [data-tone="warning"] {background:#f0dfd8;color:var(--archive-danger);padding:5px 8px}
 .standard-picker-footer {flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-top:1px solid var(--archive-line);font-size:12px}

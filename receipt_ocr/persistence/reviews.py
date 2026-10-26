@@ -10,6 +10,7 @@ from ..domain.decision import has_provider_failure
 from .constants import REVIEW_STATUSES
 from .database_clock import now_iso
 from .issue_migration import migrate_saved_issues
+from .recognition_calls import take_recognition_calls
 
 
 class ReviewOperationsMixin:
@@ -67,6 +68,8 @@ class ReviewOperationsMixin:
 
     def replace_after_retry(self, result_id: int, result: dict, preview_name: str,
                             *, _connection: sqlite3.Connection | None = None) -> dict:
+        result = dict(result)
+        trace, trace_key = take_recognition_calls(result)
         with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
             if _connection is None:
                 connection.execute("BEGIN IMMEDIATE")
@@ -91,6 +94,8 @@ class ReviewOperationsMixin:
                 VALUES(?,?,?,?,?,?)""",
                 (result_id, timestamp, "重新识别", json.dumps(before, ensure_ascii=False), payload, ""),
             )
+            self.save_recognition_calls(before["filename"], trace, result_id=result_id,
+                                        run_key=trace_key, _connection=connection)
             self._adjust_task_pending_review(
                 connection,
                 str(before.get("task_id", "")),

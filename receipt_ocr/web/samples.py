@@ -27,7 +27,7 @@ from .sample_thumbnails import SampleThumbnails
 from .sample_annotations import SampleAnnotations
 from .sample_requirement_groups import classify_requirements, group_name
 from .sample_result_filters import (
-    LIST_RESULT_SQL, SEAL_SOURCES, decode_list_result, sample_result_filters,
+    LIST_RESULT_SQL, SEAL_SOURCES, decode_list_result, sample_result_filters, project_sample_seal_result,
 )
 
 
@@ -218,7 +218,7 @@ class SampleCenter:
         item["sample_center"] = True
         requirement = (item.get("fields") or {}).get("签章要求", "")
         standard = self.ctx.database.get_seal_standard(requirement, _connection=_connection)
-        return with_review_revision(apply_standard_check(item, standard))
+        return with_review_revision(project_sample_seal_result(apply_standard_check(item, standard)))
 
     def result(self, result_id):
         try:
@@ -398,6 +398,11 @@ def register_sample_routes(app, ctx):
     def result(result_id):
         return jsonify(center().result(result_id))
 
+    @bp.get("/api/samples/results/<int:result_id>/recognition-calls")
+    def result_recognition_calls(result_id):
+        from .recognition_calls import recognition_calls_response
+        return recognition_calls_response(center().database, result_id, samples=True)
+
     @bp.post("/api/samples/results/<int:result_id>/seal-standard")
     def save_standard(result_id):
         service = center()
@@ -421,7 +426,7 @@ def register_sample_routes(app, ctx):
     def ground_truth(result_id):
         service = center()
         name = service.result(result_id)["filename"]
-        return jsonify(service.annotations.snapshot(name))
+        return jsonify(service.annotations.snapshot(name, result_id))
 
     @bp.patch('/api/samples/results/<int:result_id>/annotations')
     def save_annotations(result_id):

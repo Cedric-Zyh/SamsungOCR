@@ -5,6 +5,7 @@ import json
 import uuid
 
 from ..persistence.database import now_iso, DEFAULT_RECOGNITION_SETTINGS
+from ..persistence.recognition_calls import take_recognition_calls
 from ..domain.recognition import options_with_current_settings
 from ..runtime.progress import public_progress, merge_progress, seconds_between, STAGE_LABELS, MODEL_LABELS
 
@@ -436,6 +437,9 @@ class JobStore:
             timestamp = now_iso()
             con.execute("UPDATE recognition_jobs SET status='running',started_at=?,attempt=attempt+1,error_message='',progress_json='{}',payload_json=? WHERE id=?",
                         (timestamp, json.dumps(options, ensure_ascii=False), row['id']))
+            self.database.begin_recognition_calls(row['filename'], f"{row['id']}:{int(row['attempt']) + 1}",
+                job_id=row['id'], attempt=int(row['attempt']) + 1,
+                result_id=row['target_result_id'] or row['result_id'], _connection=con)
             self._log(con, row['id'], row['task_id'], 'running', '开始识别',
                       f"第 {int(row['attempt']) + 1} 次处理", 'running', event_at=timestamp)
             self._refresh(con, row['task_id'])
@@ -485,9 +489,12 @@ class JobStore:
             con.execute('UPDATE queue_control SET paused=?,updated_at=? WHERE id=1', (int(paused), now_iso()))
         return self.control()
 
-    def finish(self, claimed, result=None, preview_name='', error=''):
+    def finish(self, claimed, result=None, preview_name='', error='', *, recognition_calls=None):
         """Commit the result and final job state together, preventing duplicate rows on restart."""
         reconcile = ''
+        result = dict(result) if result is not None else None
+        trace, _ = take_recognition_calls(result)
+        trace = recognition_calls if recognition_calls is not None else trace
         with self.database.connect() as con:
             con.execute('BEGIN IMMEDIATE')
             job = con.execute('SELECT * FROM recognition_jobs WHERE id=?', (claimed['id'],)).fetchone()
@@ -523,6 +530,10 @@ class JobStore:
                     preview_name=preview_name if not error else '', task_id=job['task_id'], result=result,
                     error_type='识别失败' if error else '', error_message=error, _connection=con)
                 reconcile = job['task_id']
+            if status != 'cancelled':
+                self.database.save_recognition_calls(job['filename'], trace,
+                    result_id=result_id or target, run_key=f"{job['id']}:{job['attempt']}",
+                    status=status, _connection=con)
             timestamp = now_iso()
             con.execute('UPDATE recognition_jobs SET status=?,finished_at=?,result_id=?,error_message=? WHERE id=?',
                         (status, timestamp, result_id, str(error), job['id']))

@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 
 from receipt_ocr.imaging.ring_border import trace_ellipse_border
+from .company_border import company_border_points
 
 
 def _inner_rows(image, rho, axes):
@@ -166,7 +167,10 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
         continuous_parts, seam = _company_arc_parts(continuous_parts, rho, cx, cy)
         if seam is not None:
             parts = {'company': continuous_parts}
-    points = guide.points
+    points, border_adjustment = (company_border_points(guide) if 'company' in parts
+                                 else (guide.points, None))
+    if border_adjustment is not None:
+        (cx, cy), (a, b), angle = border_adjustment['ellipse']
     angles = np.mod(np.arctan2(points[:, 1]-cy, points[:, 0]-cx), 2*np.pi)
     order = np.argsort(angles)
     angles, points = angles[order], points[order]
@@ -200,8 +204,14 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
         if not minimum <= span <= maximum:
             return None
         start, end = (hi, lo) if key == 'lower' else (lo, hi)
-        inner = max(.38, float(np.quantile(rho[ys, xs], 0 if key == 'company' else .005))-.035)
-        outer = min(.96, float(np.quantile(rho[ys, xs], 1 if key == 'company' else .995))+.035)
+        radii = rho[ys, xs]
+        if border_adjustment is not None:
+            turn = np.deg2rad(angle)
+            dx, dy = xs - cx, ys - cy
+            radii = np.hypot((dx * np.cos(turn) + dy * np.sin(turn)) / (a / 2),
+                             (-dx * np.sin(turn) + dy * np.cos(turn)) / (b / 2))
+        inner = max(.38, float(np.quantile(radii, 0 if key == 'company' else .005))-.035)
+        outer = min(.96, float(np.quantile(radii, 1 if key == 'company' else .995))+.035)
         if outer-inner < .12:
             return None
         theta = np.mod(np.linspace(start, end, 2400), 2*np.pi)
@@ -216,6 +226,8 @@ def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower
             'degrees': [float(np.rad2deg(start)), float(np.rad2deg(end))],
             'radial_range': [inner, outer],
         }
+        if border_adjustment is not None:
+            maps[key]['border_adjustment'] = border_adjustment
     return maps
 
 
@@ -293,6 +305,14 @@ def prepare_multi_zone(source, directory, index, *, reader=None, provider=None, 
     maps = _arc_maps(masked, rho, guide)
     if maps is None:
         return None
+    if reader is not None:
+        from .single_row_logo import verified_single_type_evidence
+        ordinary = verified_single_type_evidence(
+            source, directory, index, image, orientation, reader=reader, provider=provider)
+        if ordinary is not None:
+            if layout_evidence is not None:
+                layout_evidence.update(ordinary)
+            return None
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
 

@@ -10,6 +10,7 @@ from ..domain.documents.pagination import merge_paginated_results, page_group_ca
 from ..domain.fields.schema import derive_signature_check
 from .database_clock import now_iso
 from .read_model import SUMMARY_COLUMNS, load_selected_receipts
+from .recognition_calls import take_recognition_calls
 
 
 class ResultOperationsMixin:
@@ -26,7 +27,9 @@ class ResultOperationsMixin:
         error_message: str = "",
         _connection: sqlite3.Connection | None = None,
     ) -> int:
+        result = dict(result)
         timestamp = result.get("created_at") or now_iso()
+        trace, trace_key = take_recognition_calls(result)
         result["created_at"] = timestamp
         review_status = result.get("review_status", "待复核")
         payload = json.dumps(result, ensure_ascii=False)
@@ -46,6 +49,9 @@ class ResultOperationsMixin:
                 ),
             )
             result_id = int(cursor.lastrowid)
+            self.save_recognition_calls(filename, trace, result_id=result_id, run_key=trace_key,
+                                        status="failed" if error_message else "succeeded",
+                                        _connection=connection)
             if _connection is None:
                 self.reconcile_task_pages(task_id, filename=filename, _connection=connection)
         return result_id

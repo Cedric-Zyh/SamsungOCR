@@ -127,6 +127,58 @@ def test_register_uses_clean_oriented_png_and_survives_receipt_artifact_removal(
     assert len(db.list_seal_standards())==1
 
 
+def test_registration_can_correct_standard_text_without_rewriting_source_ocr(app_store):
+    db, client, add, _ = app_store
+    wrong = '深圳测试有限公司收货专用章（7）'
+    result_id = add(artifact(text=wrong))
+    before = db.get_result(result_id)['processing_artifacts']
+    response = register(client, result_id, recognized_override=REQUIREMENT)
+    assert response.status_code == 200, response.get_json()
+    saved = response.get_json()['standard']
+    assert saved['recognized'] == REQUIREMENT
+    assert saved['ocr_recognized'] == wrong
+    assert saved['recognized_source'] == 'manual'
+    assert db.get_result(result_id)['processing_artifacts'] == before
+    assert client.get('/api/seal-standards').get_json()['items'][0]['ocr_recognized'] == wrong
+
+
+@pytest.mark.parametrize('override', ['', '   ', None, True, 123, '字' * 1001])
+def test_invalid_standard_text_override_cannot_create_an_archive_entry(app_store, override):
+    db, client, add, _ = app_store
+    response = register(client, add(artifact()), recognized_override=override)
+    assert response.status_code == 400
+    assert db.list_seal_standards() == []
+
+
+def test_replacement_resets_manual_text_to_the_new_selected_stamp_unless_edited(app_store):
+    db, client, add, _ = app_store
+    first_id = add(artifact(text='错误识别文字'))
+    first = register(client, first_id, recognized_override=REQUIREMENT).get_json()['standard']
+    next_id = add(artifact(1, '第二次实际识别文字'))
+    response = register(client, next_id, revision=first['revision'])
+    assert response.status_code == 200
+    saved = response.get_json()['standard']
+    assert saved['recognized'] == saved['ocr_recognized'] == '第二次实际识别文字'
+    assert saved['recognized_source'] == 'ocr'
+    assert saved['id'] == first['id'] and saved['revision'] == 2
+
+
+def test_legacy_standard_migration_preserves_original_text_and_does_not_overwrite_empty_ocr():
+    import sqlite3
+    from receipt_ocr.persistence.seal_standards import initialize_seal_standards
+    with sqlite3.connect(':memory:') as con:
+        con.row_factory = sqlite3.Row
+        con.execute('CREATE TABLE seal_standards(id INTEGER PRIMARY KEY, recognized TEXT NOT NULL)')
+        con.execute('INSERT INTO seal_standards VALUES(1,?)', ('旧识别文字',))
+        initialize_seal_standards(con)
+        row = con.execute('SELECT * FROM seal_standards').fetchone()
+        assert row['ocr_recognized'] == row['recognized'] == '旧识别文字'
+        assert row['recognized_source'] == 'ocr'
+        con.execute("UPDATE seal_standards SET recognized=?,recognized_source='manual',ocr_recognized=''", ('人工补充文字',))
+        initialize_seal_standards(con)
+        assert con.execute('SELECT ocr_recognized FROM seal_standards').fetchone()[0] == ''
+
+
 def test_replacement_updates_one_row_and_all_metadata_atomically(app_store):
     db,client,add,_=app_store
     first=register(client,add(artifact())).get_json()['standard']
@@ -309,6 +361,26 @@ def test_view_sample_can_register_shared_standard_without_using_same_id_producti
         assert stamp.getpixel((0, 0)) == (0, 0, 255)
     reopened = client.get(f"/api/samples/results/{sample_id}").get_json()
     assert reopened["seal_standard_check"]["standard"]["id"] == saved["standard"]["id"]
+
+
+def test_sample_standard_accepts_manual_text_and_keeps_both_databases_source_records(app_store):
+    db, client, add, _ = app_store
+    production_id = add(artifact(), requirement='另一正式回单')
+    production_before = db.get_result(production_id)
+    service, sample_id = sample_standard_source()
+    sample_before = service.database.get_result(sample_id)
+    detail = client.get(f'/api/samples/results/{sample_id}').get_json()
+    response = client.post(f'/api/samples/results/{sample_id}/seal-standard', json={
+        'candidate_id': detail['seal_standard_check']['candidates'][0]['id'],
+        'review_revision': detail['review_revision'], 'standard_revision': 0,
+        'recognized_override': '人工核对后的标准章文字'})
+    assert response.status_code == 200, response.get_json()
+    saved = response.get_json()['standard']
+    assert saved['recognized'] == '人工核对后的标准章文字'
+    assert saved['ocr_recognized'] == REQUIREMENT
+    assert saved['recognized_source'] == 'manual'
+    assert service.database.get_result(sample_id) == sample_before
+    assert db.get_result(production_id) == production_before
 
 
 def test_sample_standard_replacement_rejects_stale_views_and_preserves_source_identity(app_store):

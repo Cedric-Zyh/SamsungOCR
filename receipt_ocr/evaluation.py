@@ -326,17 +326,28 @@ def evaluate_backends(results: list[dict], ground_truth: dict) -> list[dict]:
 def operational_report(results: list[dict], review_history: list[dict], accuracy: dict) -> dict:
     review_counts = Counter(item.get("review_status", "待复核") for item in results)
     overall_counts = Counter(item.get("final_result") or item.get("overall", "") for item in results)
-    error_counts = Counter(
-        item.get("error_type") or reason
-        for item in results
-        for reason in (item.get("review_reasons") or ([item.get("error_type")] if item.get("error_type") else []))
-    )
+    error_counts, classified_error_counts, review_reason_counts = Counter(), Counter(), Counter()
+    for item in results:
+        classified = item.get("error_type")
+        classified = classified.strip() if isinstance(classified, str) else ""
+        reasons = list(dict.fromkeys(
+            reason.strip() for reason in (item.get("review_reasons") or [])
+            if isinstance(reason, str) and reason.strip()
+        ))
+        # One receipt contributes at most once to a label. Keep machine reasons
+        # independently available when an explicit classification takes precedence.
+        review_reason_counts.update(reasons)
+        if classified:
+            classified_error_counts.update([classified])
+        error_counts.update([classified] if classified else reasons)
     correction_types = Counter(row.get("error_type") or row.get("action", "人工修改") for row in review_history)
     return {
         "total_results": len(results),
         "review_counts": dict(review_counts),
         "overall_counts": dict(overall_counts),
         "error_types": [{"type": key, "count": value} for key, value in error_counts.most_common()],
+        "classified_error_types": [{"type": key, "count": value} for key, value in classified_error_counts.most_common()],
+        "review_reason_types": [{"type": key, "count": value} for key, value in review_reason_counts.most_common()],
         "correction_types": [{"type": key, "count": value} for key, value in correction_types.most_common()],
         "accuracy": accuracy,
     }

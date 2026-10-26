@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .sample_statistics import sample_statistics
+from .sample_statistics import sample_statistics, summarize_problem_annotations
 
 
 BAD = {'错误', '未识别', '失败'}
@@ -23,6 +23,7 @@ NOTE = '未识别、失败计入正确率分母；未测试、未运行、测试
 STATES = ('正确', '错误', '未识别', '失败', '待标注', '未运行', '未测试', '测试中')
 SEAL_FILTERS = {'remote', 'local', 'false_accept', 'false_reject', 'partial', 'other'}
 DATE_FILTERS = {'wrong_date', 'date_missed', 'date_spurious', 'date_with_value', 'date_blank'}
+PROBLEM_STATUSES = {'unmarked': '尚未标注', 'clear': '已核对无问题', 'issues': '已发现问题'}
 
 
 def cell(row, key):
@@ -194,6 +195,27 @@ def _date_cohorts(workbook, rows, context):
     cohorts.freeze_panes = f'B{header + 1}'
 
 
+def _problem_annotations(workbook, rows, context):
+    summary = summarize_problem_annotations(rows)
+    sheet, header = _summary_sheet(workbook, '人工问题标记', context, ['标注状态', '样单数'])
+    for status, label in PROBLEM_STATUSES.items():
+        _append(sheet, [label, summary['statuses'][status]])
+    _append(sheet, ['有未关联旧标记', summary['legacy_samples']])
+    _append(sheet, ['计数口径', '人工问题仅属于明细中的本次测试，不改变自动评测结果或正确率；问题标记涵盖整张样单。'])
+    _append(sheet, ['多选说明', '同一样单的同一标签只计一次；各标签合计可超过问题样单数。图片与版式特征跨测试保留。'])
+    headers = [header]
+    for title, key in [('本次人工问题', 'types'), ('图片与版式特征', 'features'), ('未关联测试的旧标记', 'legacy_types')]:
+        _append(sheet, [])
+        _append(sheet, [title, '样单数'])
+        headers.append(sheet.max_row)
+        for item in summary[key]:
+            _append(sheet, [item['type'], item['count']])
+        if not summary[key]:
+            _append(sheet, ['暂无标记', 0])
+    _style(sheet, headers)
+    sheet.freeze_panes = f'B{header + 1}'
+
+
 def export_statistics(center, *, company='', requirement='', task_id='', tab='seal', selected='', channel=''):
     if (tab not in {'seal', 'date'} or selected not in FILTERS
             or (tab == 'date' and selected in SEAL_FILTERS)
@@ -244,7 +266,8 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
               *(['签章要求', '标注结论'] if tab == 'seal' else ['标注日期'])]
     for column in columns:
         header.extend(f"{column['label']} · {label}" for label in ('评估结果', '识别内容', '判定', '说明'))
-    header.extend(['测试时间', '测试批次', '测试批次 ID'])
+    header.extend(['测试时间', '测试批次', '测试批次 ID', '本次问题标注状态', '人工问题类型',
+                   '图片与版式特征', '补充备注', '未关联旧标记'])
     append(header)
     header_row = sheet.max_row
     states = {'succeeded': '已完成', 'failed': '运行失败', 'queued': '测试中',
@@ -259,6 +282,11 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
             c = cell(row, column['key'])
             values.extend(c.get(key, '') for key in ('state', 'value', 'decision', 'note'))
         values.extend(row.get(key, '') for key in ('tested_at', 'task_name', 'task_id'))
+        review = row.get('problem_review') or {}
+        values.extend([PROBLEM_STATUSES.get(review.get('status'), '尚未标注'),
+                       '；'.join(dict.fromkeys(review.get('types') or [])) if review.get('status') == 'issues' else '',
+                       '；'.join(dict.fromkeys(row.get('sample_features') or [])), row.get('human_note', ''),
+                       '；'.join(dict.fromkeys(row.get('legacy_problem_types') or []))])
         append(values)
     _style(sheet, (6, header_row))
     sheet.freeze_panes = f'D{header_row + 1}'
@@ -316,6 +344,7 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
     for values in definitions + [['计数口径', '各通道独立计数，同一样单在不同通道可重复出现；错误合计含未识别和失败']]:
         _append(errors, values)
     _style(errors, (errors_header,))
+    _problem_annotations(workbook, rows, context)
 
     for field, title, label in (('company', '按公司统计', '客户公司'), ('requirement', '按签章要求统计', '签章要求')):
         group_columns = [

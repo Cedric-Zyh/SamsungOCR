@@ -293,6 +293,40 @@ def _ellipse_proportional_maps(outer, inner, estimated_inner):
             (cy + x * si + y * co).astype(np.float32))
 
 
+def _ring_text_normal_maps(mask, geometry):
+    """Reject an inferred inner contour when it cuts through several glyphs.
+
+    Closed company strokes can resemble a concentric inner border. A normal
+    offset limited by that contour clips their inward-facing ends. Inspect
+    only image evidence, before OCR, and reuse the wider single-border band
+    only for near-round seals with at least three substantial cut components.
+    Explicit border guides and proportional oval sampling bypass this helper.
+    """
+    outer, inner, estimated_inner = geometry
+    maps = _ellipse_normal_maps(*geometry)
+    axes = outer[2][1]
+    if estimated_inner or max(axes) > min(axes) * 1.25:
+        return maps
+    sampled = cv2.remap(mask, *maps, cv2.INTER_NEAREST,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    height, width = sampled.shape
+    _, _, stats, _ = cv2.connectedComponentsWithStats((sampled > 0).astype(np.uint8))
+    cut_components = sum(
+        top + h >= height - 1
+        and h >= height * .35
+        and 8 <= w <= width * .12
+        and area >= max(25, height)
+        for left, top, w, h, area in stats[1:]
+    )
+    if cut_components < 3:
+        return maps
+    wider = _ellipse_normal_maps(outer, inner, True)
+    # A genuinely deep measured band needs no replacement by a shallower one.
+    old_depth = np.hypot(maps[0][-1] - maps[0][0], maps[1][-1] - maps[1][0])
+    new_depth = np.hypot(wider[0][-1] - wider[0][0], wider[1][-1] - wider[1][0])
+    return wider if np.median(new_depth - old_depth) > 1 else maps
+
+
 def _split_short_seam_strokes(image):
     """Find matching short strokes on both ends, excluding the outer rim."""
     height, width = image.shape
@@ -411,9 +445,12 @@ def _save_ellipse_annulus_unwrapped(
     strips = []
     for phase in ((0.0,) if single_line else (0.0, 2.0 * np.pi / 3.0, 4.0 * np.pi / 3.0)):
         if single_line:
-            sampler = _ellipse_proportional_maps if proportional else _ellipse_normal_maps
-            map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
-                            else sampler(outer, inner, estimated_inner))
+            if ring_guide is not None:
+                map_x, map_y = ring_guide.map_x, ring_guide.map_y
+            elif proportional:
+                map_x, map_y = _ellipse_proportional_maps(*geometry)
+            else:
+                map_x, map_y = _ring_text_normal_maps(mask, geometry)
             strips.append(cv2.remap(gray, map_x, map_y, cv2.INTER_CUBIC,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=255))
             break

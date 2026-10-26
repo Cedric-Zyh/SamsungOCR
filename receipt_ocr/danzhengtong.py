@@ -1,5 +1,6 @@
 """Single-document async gateway adapter for the production service."""
 from copy import deepcopy
+from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import mimetypes
@@ -10,10 +11,12 @@ import threading
 
 from .danzhengtong_errors import provider_error, safe_error_text
 from .runtime.progress import report_dzt_progress, recognition_paused
+from .runtime.calls import recognition_call
 
 ROOT = Path(__file__).resolve().parents[1]
 _SINGLE_DOCUMENT = threading.Lock()
 _software_settings = None
+_call_handoff = ContextVar("danzhengtong_call_handoff", default=None)
 
 
 def set_software_settings(settings):
@@ -102,7 +105,11 @@ class Client:
     def submit_file(self, source, *, file_name=None):
         self._validate_credentials()  # Fail before uploading if submission cannot run.
         uploaded = self.upload_file(source, file_name=file_name)
-        body = self.submit(uploaded['fileName'], uploaded['fileId'])
+        with recognition_call('danzhengtong', '整页单证识别', source) as invocation:
+            body = self.submit(uploaded['fileName'], uploaded['fileId'])
+        handoff = _call_handoff.get()
+        if handoff is not None:
+            handoff.append(invocation)
         self.jobs[body['data']['reqUuid']]['upload'] = uploaded['trace']
         return body
 
@@ -146,15 +153,17 @@ class Client:
         return body
 
     def submit(self, file_name, file_id):
+        self._validate_credentials()
         report_dzt_progress('submitting', simulated=False)
         payload = self.build_request(file_name, file_id)
-        body = self._request('POST', '/ocr/general-async/v1/extractGeneralDataAsync', json=payload)
-        data = body.get('data') or {}
-        if body.get('status') is not True or not isinstance(data, dict) or not data.get('reqUuid'):
-            raise provider_error('提交识别', self.settings, body=body, detail='受理失败或缺少 reqUuid')
-        safe_payload = {k: ('***' if k in {'appId', 'appKey', 'appSecret'} else v) for k, v in payload.items()}
-        self.jobs[data['reqUuid']] = {'request': safe_payload, 'submission': deepcopy(body), 'status': 'submitted'}
-        return body
+        with recognition_call('danzhengtong', '整页单证识别', file_name):
+            body = self._request('POST', '/ocr/general-async/v1/extractGeneralDataAsync', json=payload)
+            data = body.get('data') or {}
+            if body.get('status') is not True or not isinstance(data, dict) or not data.get('reqUuid'):
+                raise provider_error('提交识别', self.settings, body=body, detail='受理失败或缺少 reqUuid')
+            safe_payload = {k: ('***' if k in {'appId', 'appKey', 'appSecret'} else v) for k, v in payload.items()}
+            self.jobs[data['reqUuid']] = {'request': safe_payload, 'submission': deepcopy(body), 'status': 'submitted'}
+            return body
 
     def receive_callback(self, body):
         data = body.get('data') or {}
@@ -175,9 +184,17 @@ class Client:
     def recognize(self, source, *, file_name=None):
         # The existing queue is serial; also serialize direct/retry callers here.
         with _SINGLE_DOCUMENT:
-            submitted = self.submit_file(source, file_name=file_name)
+            handoff = []
+            handoff_token = _call_handoff.set(handoff)
+            try:
+                submitted = self.submit_file(source, file_name=file_name)
+            finally:
+                _call_handoff.reset(handoff_token)
             req_uuid = submitted['data']['reqUuid']
             job = self.jobs[req_uuid]
+            invocation = handoff[-1] if handoff else None
+            if invocation is not None:
+                invocation.resume()
             deadline = time.monotonic() + self.poll_timeout
             job['query'] = {'strategy': 'poll', 'interval_seconds': 2, 'attempts': 0, 'status': 'waiting'}
             report_dzt_progress('waiting', simulated=False, poll_count=0, timeout_seconds=self.poll_timeout)
@@ -235,10 +252,15 @@ class Client:
                     report_dzt_progress('completed', simulated=False)
                     return normalized, {'mode': 'real', 'simulated': False, 'reqUuid': req_uuid, **deepcopy(job)}
             except Exception as exc:
+                if invocation is not None:
+                    invocation.fail(exc)
                 job['status'] = 'failed'
                 job['query']['status'] = 'failed'
                 # Keep the accepted UUID available for manual queries; never resubmit here.
                 raise RuntimeError(f'{exc}；reqUuid={req_uuid}') from None
+            finally:
+                if invocation is not None:
+                    invocation.finish()
 
 
 def normalize_result(commit):

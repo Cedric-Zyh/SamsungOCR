@@ -201,6 +201,7 @@ class SampleLibrary:
                         # Foreign keys cascade job events and result audits.
                         con.execute('DELETE FROM recognition_jobs WHERE filename=?', (name,))
                         con.execute('DELETE FROM results WHERE filename=?', (name,))
+                        con.execute('DELETE FROM latest_recognition_calls WHERE filename=?', (name,))
                         con.execute('DELETE FROM sample_library WHERE filename=?', (name,))
                     from receipt_ocr.jobs.store import JobStore
                     for task in tasks:

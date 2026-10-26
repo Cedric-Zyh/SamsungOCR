@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.recognition.seal import pipeline
@@ -50,9 +50,13 @@ def test_complete_type_read_reaches_final_texts_and_uses_its_own_image(monkeypat
     assert artifacts[0]["reads"][0]["image_url"] == "/verified.png"
 
 
-def test_single_row_keeps_verified_read_extent_separate_from_ink_mask(monkeypatch, tmp_path):
+def test_single_row_reads_exact_detector_extent_with_blank_padding(monkeypatch, tmp_path):
     source = tmp_path / "stamp.png"
-    Image.new("RGB", (200, 200), "white").save(source)
+    stamp = Image.new("RGB", (200, 200), "white")
+    draw = ImageDraw.Draw(stamp)
+    draw.rectangle((25, 85, 35, 115), fill="red")  # adjacent ring glyph
+    draw.rectangle((40, 95, 45, 105), fill="black")  # leading row glyph
+    stamp.save(source)
     polygon = [[40, 90], [120, 90], [120, 110], [40, 110]]
     monkeypatch.setattr("receipt_ocr.recognition.seal.ocr.interface.detect_boxes",
                         lambda path, **k: ([{"text": "收货专用", "confidence": .99,
@@ -63,9 +67,20 @@ def test_single_row_keeps_verified_read_extent_separate_from_ink_mask(monkeypatc
     monkeypatch.setattr(combined_orientation, "_orient_complete_row", lambda source, best, *a, **k: best)
     _, result = combined_orientation.prepare_round_stamp_combined(source, tmp_path / "oriented.png")
     assert result["type_band_text"] == "收货专用章"
-    assert result["oriented_type_row_read_box"] == result["oriented_type_row_box"]
-    assert result["oriented_type_row_read_box"][2] > result["oriented_type_row_exact_box"][2]
+    assert result["oriented_type_row_read_box"] == result["oriented_type_row_exact_box"]
+    assert result["oriented_type_row_box"][2] > result["oriented_type_row_read_box"][2]
+    assert result["type_row_blank_padding"] == 6
     assert result["oriented_type_row_polygons"] == [polygon]
     with Image.open(result["type_band_path"]) as image:
         left, top, right, bottom = result["oriented_type_row_read_box"]
-        assert image.size == (round(right) - round(left), round(bottom) - round(top))
+        assert image.size == (round(right) - round(left) + 12, round(bottom) - round(top) + 12)
+        assert (255, 0, 0) not in image.getdata()
+        assert image.getpixel((6, 11)) == (0, 0, 0)
+        assert image.getpixel((0, 11)) == (255, 255, 255)
+    # The evidence tile must show the same padded pixels used during rotation.
+    from receipt_ocr.imaging.bands import save_round_seal_type_band
+    center = save_round_seal_type_band(source, tmp_path / "center.png",
+                                      focus_box=result["oriented_type_row_read_box"],
+                                      blank_padding=result["type_row_blank_padding"])
+    with Image.open(center) as image, Image.open(result["type_band_path"]) as verified:
+        assert image.tobytes() == verified.tobytes()

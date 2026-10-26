@@ -10,6 +10,7 @@ from .database_clock import now_iso
 from .read_model import initialize_read_model
 from .issue_migration import migrate_saved_issues
 from .seal_standards import initialize_seal_standards
+from .recognition_calls import initialize_recognition_calls
 
 
 def initialize_database(database) -> None:
@@ -49,6 +50,7 @@ def initialize_database(database) -> None:
             for name, definition in migrations.items():
                 if name not in columns:
                     connection.execute(f"ALTER TABLE results ADD COLUMN {name} {definition}")
+            initialize_recognition_calls(connection)
             # Filename-derived keys let each new page reconcile only its own
             # receipt. Backfill legacy rows once without decoding OCR payloads.
             for row in connection.execute("SELECT id,filename FROM results WHERE page_key=''").fetchall():

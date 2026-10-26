@@ -34,6 +34,11 @@ def progress_context(**details):
         _progress_context.reset(token)
 
 
+def current_progress_context():
+    """Read stage metadata without exposing the mutable ContextVar value."""
+    return dict(_progress_context.get())
+
+
 def recognition_paused():
     check = _pause_checker.get()
     return bool(check and check())
@@ -55,7 +60,8 @@ STAGE_LABELS = dict(routing="整页文字与版式", fields="印刷字段", prod
                     handwriting="手写签名", date="签收日期", seal="客户印章",
                     finalizing="结果核验与整理", saving="保存结果")
 MODEL_LABELS = dict(paddle_v6="Paddle v6 Small", paddle_seal="Paddle 印章专用",
-                    qingtong="清瞳", danzhengtong="单证通", system="系统")
+                    qingtong="清瞳", danzhengtong="单证通", system="系统",
+                    paddle_doc_ori="Paddle 图片方向", paddle_textline_ori="Paddle 文字行方向")
 
 
 def report_model_progress(stage, phase, **details):

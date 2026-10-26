@@ -24,6 +24,7 @@ from .postprocess.multi_zone import finalize_multi_zone
 from .postprocess.rectangle_form import mark_receiving_form_fields
 from .postprocess.type_row import prefer_complete_type_read
 from .postprocess.ring_alternative import select_ring_alternative
+from .postprocess.name_correction import correct_local_seal_names
 
 
 _RECTANGULAR_COMBINE_MIN_CONFIDENCE = 0.75
@@ -349,5 +350,6 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 except Exception as exc:
                     artifact["ring_normal_alternative"] = {
                         "status": "failed", "matching": False, "error": str(exc)}
+            texts[region_text_start:] = correct_local_seal_names(artifact, texts[region_text_start:])
             artifacts.append(artifact)
     return texts, artifacts

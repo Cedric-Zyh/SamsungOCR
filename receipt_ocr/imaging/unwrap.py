@@ -8,7 +8,7 @@ from .contracts import SealRegion
 from .io import _read_image
 from .colors import _ocr_color_mask
 from .shapes import seal_region_is_rectangular
-from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ellipse_normal_maps, _ellipse_proportional_maps
+from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ring_text_normal_maps, _ellipse_proportional_maps
 
 
 def _robust_round_seal_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -71,9 +71,12 @@ def save_ring_text_band_preview(
     geometry = ring_guide.annulus if ring_guide is not None else _fit_ellipse_annulus(mask)
     preview = np.full_like(image, 255)
     if geometry is not None:
-        sampler = _ellipse_proportional_maps if proportional else _ellipse_normal_maps
-        map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
-                        else sampler(*geometry))
+        if ring_guide is not None:
+            map_x, map_y = ring_guide.map_x, ring_guide.map_y
+        elif proportional:
+            map_x, map_y = _ellipse_proportional_maps(*geometry)
+        else:
+            map_x, map_y = _ring_text_normal_maps(mask, geometry)
         band = np.zeros(mask.shape, dtype=np.uint8)
         for row, value in ((0, 255), (-1, 0)):
             polygon = np.rint(np.column_stack((map_x[row], map_y[row]))).astype(np.int32)

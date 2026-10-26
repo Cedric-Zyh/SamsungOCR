@@ -133,7 +133,7 @@ def test_export_coverage_annotations_error_types_and_groups(samples, evaluated_r
     response = client.get('/api/samples/statistics/export')
     assert response.status_code == 200
     workbook = load_workbook(BytesIO(response.data))
-    assert workbook.sheetnames == ['印章结果', '覆盖与标注', '错误类型', '按公司统计', '按签章要求统计', '共同样本对比', '判定分歧']
+    assert workbook.sheetnames == ['印章结果', '覆盖与标注', '错误类型', '人工问题标记', '按公司统计', '按签章要求统计', '共同样本对比', '判定分歧']
     coverage = {row[0]: row[1] for row in workbook['覆盖与标注'].values if row[0]}
     assert {key: coverage[key] for key in ('样单总数', '已测试', '未测试', '已标注', '待标注', '应匹配', '应不匹配')} == {
         '样单总数': 9, '已测试': 8, '未测试': 1, '已标注': 8, '待标注': 1, '应匹配': 7, '应不匹配': 1}
@@ -165,6 +165,49 @@ def test_date_export_breaks_down_wrong_missing_and_spurious_dates(samples, evalu
     cohorts = {row[0]: row for row in workbook['日期分组'].values if row[0] in {'有日期', '空白日期'}}
     assert cohorts['有日期'][:8] == ('有日期', 6, 5, 2, 1, 1, 1, 0.4)
     assert cohorts['空白日期'][:8] == ('空白日期', 2, 2, 1, 1, 0, 0, 0.5)
+
+
+def test_export_human_problem_markers_are_separate_deduplicated_and_literal(samples, evaluated_rows):
+    _, client = samples
+    baseline = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    evaluated_rows[0].update(problem_review={'status': 'issues', 'types': ['日期读错', '日期读错', '印章判定错误']},
+                             sample_features=['遮挡', '遮挡'], human_note='=1+1', legacy_problem_types=['旧印章问题'])
+    evaluated_rows[1].update(problem_review={'status': 'issues', 'types': ['日期读错']}, sample_features=['遮挡'])
+    evaluated_rows[2].update(problem_review={'status': 'clear', 'types': ['不应计入']})
+    workbook = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    header, rows = details(workbook.active)
+    assert header[-5:] == ('本次问题标注状态', '人工问题类型', '图片与版式特征', '补充备注', '未关联旧标记')
+    assert rows[0][-5:] == ('已发现问题', '日期读错；印章判定错误', '遮挡', '=1+1', '旧印章问题')
+    assert rows[2][-5:-3] == ('已核对无问题', None)
+    assert rows[3][-5] == '尚未标注'
+    manual = list(workbook['人工问题标记'].values)
+    assert next(row for row in manual if row[0] == '已发现问题')[1] == 2
+    assert next(row for row in manual if row[0] == '日期读错')[1] == 2
+    assert next(row for row in manual if row[0] == '印章判定错误')[1] == 1
+    assert next(row for row in manual if row[0] == '遮挡')[1] == 2
+    assert next(row for row in manual if row[0] == '有未关联旧标记')[1] == 1
+    assert not any(row[0] == '不应计入' for row in manual)
+    assert list(workbook['错误类型'].values) == list(baseline['错误类型'].values)
+    assert all(item.data_type != 'f' for worksheet in workbook for row in worksheet for item in row)
+
+
+def test_export_keeps_remote_local_and_unspecified_seal_markers_distinct(samples, evaluated_rows):
+    _, client = samples
+    baseline = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    evaluated_rows[0]['problem_review'] = {'status': 'issues', 'types': [
+        '清瞳印章判定错误', '本地印章判定错误', '清瞳印章判定错误',
+    ]}
+    evaluated_rows[1]['problem_review'] = {'status': 'issues', 'types': ['印章判定错误']}
+    workbook = load_workbook(BytesIO(client.get('/api/samples/statistics/export').data))
+    _, rows = details(workbook.active)
+    assert rows[0][-4] == '清瞳印章判定错误；本地印章判定错误'
+    assert rows[1][-4] == '印章判定错误'
+    manual = list(workbook['人工问题标记'].values)
+    assert next(row for row in manual if row[0] == '已发现问题')[1] == 2
+    for kind in ('清瞳印章判定错误', '本地印章判定错误', '印章判定错误'):
+        assert next(row for row in manual if row[0] == kind)[1] == 1
+    assert list(workbook['错误类型'].values) == list(baseline['错误类型'].values)
+    assert list(workbook['共同样本对比'].values) == list(baseline['共同样本对比'].values)
 
 
 def test_export_coverage_separates_pending_and_trims_requirement_groups(samples, evaluated_rows):

@@ -57,6 +57,7 @@ from receipt_ocr.web import review as review_handlers
 from receipt_ocr.web import remote_settings
 from receipt_ocr.web import seal_standards as standard_handlers
 from receipt_ocr.domain.seal_standards import apply_standard_check
+from receipt_ocr.recognition.seal.postprocess.name_correction import company_name_correction_scope
 from receipt_ocr.web.settings import normalize_recognition_settings as _normalize_recognition_settings
 
 
@@ -249,12 +250,13 @@ def _configured_analyze(*args, recognition_config=None, previous_fields=None, **
     saved_qingtong = database.get_json_setting('qingtong_credentials', None)
     if isinstance(saved_qingtong, dict):
         analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
-    result = recognition_service.recognize(
-        *args,
-        recognition_config=recognition_config,
-        previous_fields=previous_fields,
-        **kwargs,
-    )
+    with company_name_correction_scope(database.list_seal_standards()):
+        result = recognition_service.recognize(
+            *args,
+            recognition_config=recognition_config,
+            previous_fields=previous_fields,
+            **kwargs,
+        )
     requirement = (result.get("fields") or {}).get("签章要求", "")
     return apply_standard_check(result, database.get_seal_standard(requirement))
 
@@ -464,6 +466,11 @@ def delete_queue_jobs():
 
 def process_history():
     return queue_handlers.process_history(_queue_dependencies())
+
+
+def result_recognition_calls(result_id):
+    from .recognition_calls import recognition_calls_response
+    return recognition_calls_response(database, result_id)
 
 
 
@@ -784,6 +791,11 @@ def seal_standard_sources(standard_id):
     return standard_handlers.standard_sources(_standard_dependencies(), standard_id)
 
 
+def seal_standard_recognition_info(standard_id):
+    from .seal_recognition_info import standard_recognition_info
+    return standard_recognition_info(_standard_dependencies(), standard_id)
+
+
 def register_seal_standard(result_id):
     return standard_handlers.register_standard(_standard_dependencies(), result_id)
 
@@ -801,6 +813,7 @@ from .routes import register_routes
 register_routes(app, {
     'list_seal_standards': list_seal_standards,
     'seal_standard_sources': seal_standard_sources,
+    'seal_standard_recognition_info': seal_standard_recognition_info,
     'register_seal_standard': register_seal_standard,
     'index': index,
     'ocr_backends': ocr_backends,
@@ -827,6 +840,7 @@ register_routes(app, {
     'cancel_jobs': cancel_jobs,
     'delete_queue_jobs': delete_queue_jobs,
     'process_history': process_history,
+    'result_recognition_calls': result_recognition_calls,
     'analyze_upload': analyze_upload,
     'daily_results': daily_results,
     'list_results': list_results,

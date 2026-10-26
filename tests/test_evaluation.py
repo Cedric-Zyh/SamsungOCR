@@ -7,6 +7,7 @@ from receipt_ocr.evaluation import (
     build_ground_truth_entry,
     evaluate_backends,
     evaluate_results,
+    operational_report,
     save_ground_truth_entry,
 )
 from receipt_ocr.domain.parsing import PRODUCT_COLUMNS
@@ -206,3 +207,34 @@ def test_explicitly_labeled_blank_fields_count_as_evaluated():
     assert metrics['field_correct'] == 1
     assert '拒收数量' in metrics['field_coverage']['evaluated_fields']
     assert '拒收数量' not in metrics['field_coverage']['unlabeled_fields']
+
+
+def test_operational_report_counts_a_manual_type_once_and_retains_machine_reasons():
+    report = operational_report([
+        {'error_type': '图像质量问题', 'review_reasons': ['日期证据不足', '印章证据不足', '日期证据不足']},
+        {'error_type': '图像质量问题', 'review_reasons': ['印章证据不足']},
+        {'error_type': '日期识别错误', 'review_reasons': []},
+    ], [], {'field_accuracy': 1})
+    counts = lambda rows: {row['type']: row['count'] for row in rows}
+    assert report['total_results'] == 3
+    assert counts(report['error_types']) == {'图像质量问题': 2, '日期识别错误': 1}
+    assert counts(report['classified_error_types']) == counts(report['error_types'])
+    assert counts(report['review_reason_types']) == {'日期证据不足': 1, '印章证据不足': 2}
+    assert report['accuracy'] == {'field_accuracy': 1}
+
+
+def test_operational_report_deduplicates_fallback_reasons_but_counts_each_history_event():
+    report = operational_report([
+        {'review_reasons': ['日期证据不足', '日期证据不足', '印章证据不足', '']},
+        {'error_type': '', 'review_reasons': ['日期证据不足']},
+        {},
+    ], [
+        {'error_type': '日期识别错误', 'action': '人工复核'},
+        {'error_type': '日期识别错误', 'action': '人工复核'},
+        {'action': '重新识别'},
+    ], {})
+    counts = lambda rows: {row['type']: row['count'] for row in rows}
+    assert counts(report['error_types']) == {'日期证据不足': 2, '印章证据不足': 1}
+    assert report['classified_error_types'] == []
+    assert counts(report['review_reason_types']) == counts(report['error_types'])
+    assert counts(report['correction_types']) == {'日期识别错误': 2, '重新识别': 1}

@@ -47,6 +47,39 @@ def _has_rectangular_frame(contour, rect) -> bool:
     return bool(supported_sides == 3 and extent >= .90)
 
 
+def adaptive_rectangular_frame(image, color='red'):
+    """Find the actual outer rectangle through a coloured paper wash.
+
+    A second chroma population is measurement evidence only. Keep all source
+    pixels for OCR, and require a large, corner-supported frame at every
+    threshold so a star or a text box inside a faint oval cannot replace it.
+    """
+    pixels = image.astype(np.int16)
+    dominant = pixels[:, :, 2] if color == 'red' else pixels[:, :, 0]
+    other = np.maximum(pixels[:, :, 0], pixels[:, :, 1]) if color == 'red' else np.maximum(pixels[:, :, 1], pixels[:, :, 2])
+    chroma = np.clip(dominant - other, 0, 255).astype(np.uint8)
+    threshold, _ = cv2.threshold(chroma, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if threshold <= 25:
+        return None
+    kernel_size = max(3, round(min(chroma.shape) * .018))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    for cutoff in (int(threshold), 25):
+        mask = (chroma > cutoff).astype(np.uint8)
+        grouped = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours, _ = cv2.findContours(grouped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        contour = max(contours, key=cv2.contourArea)
+        rect = cv2.minAreaRect(contour)
+        area = float(np.prod(rect[1]))
+        hull = cv2.convexHull(contour)
+        vertices = len(cv2.approxPolyDP(hull, cv2.arcLength(hull, True) * .025, True))
+        if (area >= chroma.size * .35 and cv2.contourArea(hull) / max(1, area) >= .84
+                and vertices <= 8 and _has_rectangular_frame(contour, rect)):
+            return rect, cutoff
+    return None
+
+
 def seal_region_is_rectangular(
     source: str | Path,
     region: SealRegion,
@@ -107,7 +140,8 @@ def seal_region_is_rectangular(
     # the stamp's outer boundary is an unambiguous rectangle.
     perimeter = cv2.arcLength(hull, True)
     vertices = len(cv2.approxPolyDP(hull, perimeter * 0.025, True))
-    return bool(extent >= 0.84 and vertices <= 8 and _has_rectangular_frame(contour, rect))
+    return bool((extent >= 0.84 and vertices <= 8 and _has_rectangular_frame(contour, rect))
+                or adaptive_rectangular_frame(crop, region.color) is not None)
 
 
 def seal_region_is_elliptical(

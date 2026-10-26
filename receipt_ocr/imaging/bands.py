@@ -81,6 +81,7 @@ def save_round_seal_type_band(
     *,
     orientation_aligned: bool = False,
     focus_box: list[float] | tuple[float, float, float, float] | None = None,
+    blank_padding: int = 0,
 ) -> Path:
     """Save the inner type row of a color-isolated round stamp.
 
@@ -103,6 +104,10 @@ def save_round_seal_type_band(
     band = image[top:bottom, left:right]
     if band.size == 0:
         raise ValueError("圆章章类型分带为空")
+    if blank_padding:
+        band = cv2.copyMakeBorder(band, blank_padding, blank_padding,
+                                 blank_padding, blank_padding,
+                                 cv2.BORDER_CONSTANT, value=(255, 255, 255))
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", band)

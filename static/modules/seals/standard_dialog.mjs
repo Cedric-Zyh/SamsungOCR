@@ -11,6 +11,8 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   const {$, $$} = ui, dialog = $('#seal-standard-dialog');
   if (!dialog || dialog.open) return;
   const entries = registrationEntries(sources);
+  const textDrafts = new Map();
+  let editingText = false, beforeEdit = '';
   let selected = entries.findIndex(e => e.candidate.can_register), original = false, zoom = 1, saving = false;
   if (selected < 0 && entries.length) selected = 0;
   const title = standard ? '替换标准章' : '添加标准章';
@@ -26,13 +28,43 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
       <div class="standard-picker-tabs"><button type="button" data-standard-image="processed" aria-pressed="true">处理图</button><button type="button" data-standard-image="original" aria-pressed="false">查看原图</button></div>
       <div class="standard-picker-viewport"><div class="standard-picker-image-box"><img data-standard-image-preview alt="标准章预览"></div><p data-standard-image-empty hidden>暂无可用图片</p></div>
       <div class="standard-picker-rotation"><label>顺时针旋转 <input type="number" min="-180" max="180" step="1" value="0" data-standard-rotation aria-label="标准章旋转角度"> °</label><button type="button" data-standard-turn="-90">左转 90°</button><button type="button" data-standard-turn="90">右转 90°</button><button type="button" data-standard-reset>重置</button></div>
-      <div class="standard-picker-info"><p>识别文字：<strong data-standard-recognized></strong></p><p data-standard-warning></p></div>
+      <div class="standard-picker-info"><div class="standard-picker-text-heading"><p><span data-standard-text-label>识别文字</span>：<strong data-standard-recognized></strong></p><button type="button" data-standard-edit-text>修改文字</button></div>
+        <div class="standard-picker-text-editor" data-standard-text-editor hidden><label>标准章文字<textarea rows="3" maxlength="1000" required data-standard-text-input aria-label="标准章文字"></textarea></label><small>按章图核对文字。仅修改标准章档案，原始识别结果保留。</small><div><button type="button" data-standard-text-done>完成修改</button><button type="button" data-standard-text-cancel>取消修改</button></div></div>
+        <p class="standard-picker-ocr" data-standard-original-text hidden>原始识别：<span data-standard-ocr-text></span></p><p data-standard-warning></p></div>
     </section></div>
     <footer class="standard-picker-footer"><div><p>保存后可用于后续回单核验</p><p data-standard-feedback role="status" aria-live="polite"></p></div><div class="standard-picker-buttons"><button type="button" data-standard-close>取消</button><button type="button" class="primary-button" data-standard-save>${standard ? '确认替换标准章' : '加入印章中心'}</button></div></footer>`;
   const get = s => $(s, dialog), all = s => $$(s, dialog);
   const rotation = get('[data-standard-rotation]'), feedback = get('[data-standard-feedback]');
+  const textInput = get('[data-standard-text-input]');
   const image = get('[data-standard-image-preview]'), box = get('.standard-picker-image-box');
   let imageFailed = false;
+  function recognizedText() { return textDrafts.get(selected) ?? entries[selected]?.candidate.recognized ?? ''; }
+  function textChanged() { return recognizedText().trim() !== String(entries[selected]?.candidate.recognized || '').trim(); }
+  function syncText() {
+    const c = entries[selected]?.candidate, edited = textChanged();
+    get('[data-standard-recognized]').textContent = recognizedText() || '未识别到文字';
+    get('[data-standard-text-label]').textContent = edited ? '标准章文字（已修改）' : '识别文字';
+    get('[data-standard-text-editor]').hidden = !editingText;
+    get('.standard-picker-text-heading').hidden = editingText;
+    get('[data-standard-edit-text]').hidden = editingText;
+    get('[data-standard-edit-text]').disabled = !c?.can_register;
+    get('[data-standard-original-text]').hidden = !edited || editingText;
+    get('[data-standard-ocr-text]').textContent = c?.recognized || '未识别到文字';
+    const warning = get('[data-standard-warning]');
+    warning.hidden = editingText;
+    warning.textContent = !c ? '' : !c.can_register ? '缺少完整章色图或形状信息，请重新识别后加入。'
+      : edited ? '已人工修改标准章文字，请核对章图后保存。'
+      : c.text_status === '匹配' ? (c.text_match_message || '印章文字与签章要求匹配，请核对完整章图和方向。')
+      : (c.text_match_message || '识别文字与签章要求尚未匹配，可修改文字后保存。');
+    warning.dataset.tone = c?.can_register && (edited || c.text_status === '匹配') ? 'normal' : 'warning';
+  }
+  function validText() {
+    if ((editingText || textChanged()) && (!textInput.checkValidity() || !recognizedText().trim())) {
+      feedback.textContent = '请填写标准章文字，最多 1000 个字符。';
+      editingText = true; syncText(); textInput.focus(); textInput.reportValidity(); return false;
+    }
+    return true;
+  }
   function syncSave() { get('[data-standard-save]').disabled = saving || !entries[selected]?.candidate.can_register || imageFailed; }
   function transform() {
     image.style.transform = `rotate(${original ? 0 : Number(rotation.value) || 0}deg)`;
@@ -53,14 +85,10 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   }
   function select(index) {
     selected = index; const c = entries[index]?.candidate;
+    editingText = false; textInput.value = recognizedText();
     original = !c?.image_url; zoom = 1; rotation.value = '0'; feedback.textContent = '';
     all('[data-picker-index]').forEach(b => b.setAttribute('aria-pressed',String(Number(b.dataset.pickerIndex) === index)));
-    get('[data-standard-recognized]').textContent = c?.recognized || '未识别到文字';
-    const warning = get('[data-standard-warning]');
-    warning.textContent = !c ? '' : !c.can_register ? '缺少完整章色图或形状信息，请重新识别后加入。'
-      : c.text_status === '匹配' ? (c.text_match_message || '印章文字与签章要求匹配，请核对完整章图和方向。')
-      : (c.text_match_message || '识别文字与签章要求尚未匹配，请核对后保存。');
-    warning.dataset.tone = c?.text_status === '匹配' && c?.can_register ? 'normal' : 'warning';
+    syncText();
     showImage();
   }
   image.onerror = () => { imageFailed = true; feedback.textContent = '图片加载失败，请重新打开或重新识别后再试。'; syncSave(); };
@@ -78,17 +106,36 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   all('[data-standard-image]').forEach(b => b.addEventListener('click', () => {original=b.dataset.standardImage==='original';zoom=1;showImage();}));
   all('[data-standard-zoom]').forEach(b => b.addEventListener('click', () => {zoom=Math.max(.5,Math.min(3,zoom+(b.dataset.standardZoom==='in'?.25:-.25)));transform();}));
   rotation.addEventListener('input', transform);
+  get('[data-standard-edit-text]').addEventListener('click', () => {
+    if (saving || !entries[selected]?.candidate.can_register) return;
+    beforeEdit = recognizedText(); textInput.value = beforeEdit; editingText = true;
+    feedback.textContent = ''; syncText(); textInput.focus();
+  });
+  textInput.addEventListener('input', () => {
+    textDrafts.set(selected, textInput.value); feedback.textContent = ''; syncText();
+  });
+  get('[data-standard-text-done]').addEventListener('click', () => {
+    if (!validText()) return;
+    textDrafts.set(selected, textInput.value.trim()); textInput.value = recognizedText();
+    editingText = false; syncText(); get('[data-standard-edit-text]').focus();
+  });
+  get('[data-standard-text-cancel]').addEventListener('click', () => {
+    textDrafts.set(selected, beforeEdit); textInput.value = beforeEdit; editingText = false;
+    feedback.textContent = ''; syncText(); get('[data-standard-edit-text]').focus();
+  });
   all('[data-standard-turn]').forEach(b => b.addEventListener('click', () => {rotation.value=String(((Number(rotation.value)||0)+Number(b.dataset.standardTurn)+540)%360-180);transform();}));
   get('[data-standard-reset]').addEventListener('click', () => {rotation.value='0';zoom=1;transform();});
   get('[data-standard-save]').addEventListener('click', async () => {
     const entry = entries[selected];
     if (saving || !entry?.candidate.can_register || imageFailed) return;
     if (!rotation.checkValidity()) {rotation.reportValidity();return;}
+    if (!validText()) return;
     saving = true; feedback.textContent = '正在保存标准章…';
-    const controls = all('button,input').map(el => [el,el.disabled]);
+    const controls = all('button,input,textarea').map(el => [el,el.disabled]);
     controls.forEach(([el]) => el.disabled=true);
     let response;
-    try { response=await onSave({...entry,rotation:Number(rotation.value)||0}); }
+    try { response=await onSave({...entry,rotation:Number(rotation.value)||0,
+      ...(textChanged() ? {recognizedOverride:recognizedText().trim()} : {})}); }
     catch(error) {feedback.textContent=error.message;}
     finally {saving=false;controls.forEach(([el,disabled])=>el.disabled=disabled);syncSave();}
     if (response) {close();onSaved(response);}

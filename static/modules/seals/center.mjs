@@ -3,6 +3,7 @@ import {escapeHtml} from '../core/ui.mjs';
 import {standardDetail, standardDate, shapeLabel, colorLabel} from './standard_view.mjs';
 import {groupStandards} from './standard_groups.mjs';
 import {bindStandardPreview} from './standard_preview.mjs';
+import {recognitionInfoMarkup, recognitionInfoError, bindCorrectionSources} from './recognition_info.mjs';
 
 const searchKey = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase();
 
@@ -97,6 +98,32 @@ export function createSealCenter({ui, services, openSource}) {
     detail.innerHTML = standardDetail(standard);
     disposePreview = bindStandardPreview(detail);
     detail.scrollTop = 0;
+    const infoHost = $('[data-standard-recognition-info]', detail);
+    const loadInfo = async () => {
+      if (!infoHost) return;
+      if (typeof services.sealStandards.recognitionInfo !== 'function') {
+        infoHost.innerHTML = '<p class="seal-name-load-state">识别资料暂不可用，请刷新页面。</p>';
+        return;
+      }
+      infoHost.setAttribute('aria-busy', 'true');
+      infoHost.innerHTML = '<p class="seal-name-load-state">正在加载名称词条与纠错记录…</p>';
+      try {
+        const data = await services.sealStandards.recognitionInfo(id);
+        if (serial !== detailRequest || node.classList.contains('hidden')) return;
+        if (data.standard_id !== id || data.revision !== standard.revision) {
+          throw new Error('档案已更新，请刷新后查看识别资料。');
+        }
+        infoHost.innerHTML = recognitionInfoMarkup(data);
+        bindCorrectionSources(infoHost, {ui, openSource});
+      } catch (error) {
+        if (serial !== detailRequest || node.classList.contains('hidden')) return;
+        infoHost.innerHTML = recognitionInfoError(error.message);
+        $('[data-name-info-retry]', infoHost)?.addEventListener('click', loadInfo);
+      } finally {
+        if (serial === detailRequest) infoHost.removeAttribute('aria-busy');
+      }
+    };
+    loadInfo();
     const source = $('[data-standard-source]', detail);
     let sourceOpening = false;
     if (source && openSource) source.addEventListener('click', async () => {
@@ -130,11 +157,12 @@ export function createSealCenter({ui, services, openSource}) {
         }
         trigger.disabled=false; trigger.textContent='替换标准章';
         openStandardDialog({ui,standard:data.standard,requirement:data.standard.requirement,sources:data.sources,
-          onSave:async ({source,candidate,rotation}) => {
+          onSave:async ({source,candidate,rotation,recognizedOverride}) => {
             if(saving) throw new Error('正在保存，请稍候。');
             saving=true;
             try { return await services.sealStandards.save(source.id,{candidate_id:candidate.id,
-              standard_revision:data.standard.revision,review_revision:source.review_revision,rotation}); }
+              standard_revision:data.standard.revision,review_revision:source.review_revision,rotation,
+              ...(recognizedOverride === undefined ? {} : {recognized_override:recognizedOverride})}); }
             finally { saving=false; }
           },
           onSaved:response => {

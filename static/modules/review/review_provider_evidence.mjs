@@ -13,9 +13,11 @@ function danzhengtongResults(item, stage) {
   return isDanzhengtong(check) ? [{check}] : [];
 }
 
-function evidenceStatus(check, value, error) {
+function evidenceStatus(check, value, error, sample = false) {
   if (error || check.status === '识别失败') return '识别失败';
-  if (!String(value || '').trim()) return '未识别';
+  if (!String(value || '').trim()) return sample ? '不匹配' : '未识别';
+  if (sample) return ['匹配','不匹配','部分匹配'].includes(check.status) ? check.status
+    : check.status === '匹配待确认' ? '匹配' : '部分匹配';
   if (check.status === '匹配' && check.reliable === false) return '匹配待确认';
   return check.status || '待确认';
 }
@@ -77,13 +79,13 @@ export function sealEvidenceMarkup(item) {
     const failed = qingtong.status === '识别失败';
     const templateStatus = template.requirement_match?.status || template.status || (template.matched ? '匹配' : '不匹配');
     const ocrStatus = ocr.comparison?.status || ocr.status || (ocr.matched ? '匹配' : '不匹配');
-    rows.push(evidenceRow('清瞳 · 印章模板识别', evidenceStatus({status: templateStatus}, template.label, failed),
+    rows.push(evidenceRow('清瞳 · 印章模板识别', evidenceStatus({status: templateStatus}, template.label, failed, item.sample_center),
       template.label || '未返回模板名称', `模板名称独立对照本单签章要求 · 模板相似度 ${template.similarity == null ? '未提供' : percent(template.similarity)}（仅供参考）`));
-    rows.push(evidenceRow('清瞳 · 印章文字 OCR', evidenceStatus({status: ocrStatus}, ocr.text, failed),
+    rows.push(evidenceRow('清瞳 · 印章文字 OCR', evidenceStatus({status: ocrStatus}, ocr.text, failed, item.sample_center),
       ocr.text || '未返回文字结果', '独立对照本单签章要求'));
   }
   for (const {check, variant} of danzhengtongResults(item, 'seal')) {
-    rows.push(evidenceRow(`${providerLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, check.recognized, variant?.error),
+    rows.push(evidenceRow(`${providerLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, check.recognized, variant?.error, item.sample_center),
       check.recognized || '未返回文字结果', '独立对照本单签章要求'));
   }
   for (const {check, variant} of localSealResults(item)) {
@@ -91,8 +93,9 @@ export function sealEvidenceMarkup(item) {
     // may carry display_text assembled from several unrelated stamp regions.
     const value = simplifySealText(check.recognized || check.display_text || (check.all_recognized || []).join('；'));
     const confidence = check.confidence == null ? '' : ` · 置信度 ${percent(check.confidence)}`;
-    const note = `${check.region_source ? '清瞳印章区域内' : '本地印章区域'}处理图 OCR${confidence} · 独立对照本单签章要求${check.reliable === false ? '，需人工确认' : ''}`;
-    rows.push(evidenceRow(`${localProviderLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, value, variant?.error),
+    const fieldNote = check.field_comparison?.message ? ` · ${check.field_comparison.message}` : '';
+    const note = `${check.region_source ? '清瞳印章区域内' : '本地印章区域'}处理图 OCR${confidence} · 独立对照本单签章要求${check.reliable === false && !item.sample_center ? '，需人工确认' : ''}${fieldNote}`;
+    rows.push(evidenceRow(`${localProviderLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, value, variant?.error, item.sample_center),
       value || '未返回文字结果', note));
   }
   if (rows.length && primary.message) rows.push(`<p>${escapeHtml(primary.message)}</p>`);

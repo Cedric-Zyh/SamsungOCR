@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.web.sample_statistics import evaluate_sample
+from receipt_ocr.web.sample_statistics import evaluate_sample, summarize_problem_annotations
 from receipt_ocr.web.samples import SampleCenter
 from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
 from test_sample_center import samples
@@ -97,6 +97,78 @@ def test_legacy_dual_and_local_channel_stay_separate():
     assert row["seals"]["qingtong_template"]["state"] == "正确"
     assert row["seals"]["qingtong_ocr"]["state"] == "错误"
     assert row["seals"]["local:legacy_local"]["state"] == "错误"
+
+
+def test_human_problem_markers_belong_to_the_selected_test_and_never_change_evaluation():
+    result = {'date_check': {'actual': '2025-02-13'}, 'recognition_variants': {'seal': [remote()]}}
+    original = evaluate_sample('one.png', TRUTH, job(result))
+    truth = {**TRUTH, 'human_note': '原图有遮挡', 'sample_features': ['遮挡'],
+             'problem_reviews': {'7': {'status': 'issues', 'types': ['日期读错', '印章判定错误']},
+                                 '8': {'status': 'clear', 'types': []}}}
+    current = evaluate_sample('one.png', truth, job(result))
+    assert current['problem_review']['status'] == 'issues'
+    assert current['problem_review']['types'] == ['日期读错', '印章判定错误']
+    assert current['human_note'] == '原图有遮挡'
+    assert current['sample_features'] == ['遮挡']
+    assert current['date'] == original['date']
+    assert current['seals'] == original['seals']
+    later = evaluate_sample('one.png', truth, {**job(result), 'result_id': 8})
+    assert later['problem_review']['status'] == 'clear'
+    assert later['problem_review']['types'] == []
+    unmarked = evaluate_sample('one.png', truth, {**job(result), 'result_id': 9})
+    assert unmarked['problem_review']['status'] == 'unmarked'
+    assert unmarked['problem_review']['types'] == []
+    assert unmarked['sample_features'] == ['遮挡']
+
+
+def test_human_problem_distribution_counts_samples_and_unique_tags_separately():
+    first = {'filename': 'one.png', 'problem_review': {'status': 'issues', 'types': ['日期读错', '日期读错', '印章判定错误']},
+             'sample_features': ['遮挡', '遮挡'], 'legacy_problem_types': ['旧印章问题']}
+    second = {'filename': 'two.png', 'problem_review': {'status': 'clear', 'types': ['不应计入']}}
+    summary = summarize_problem_annotations([first, first, second, {'filename': 'three.png'}])
+    assert summary['total'] == 3
+    assert summary['statuses'] == {'unmarked': 1, 'clear': 1, 'issues': 1}
+    assert {item['type']: item['count'] for item in summary['types']} == {'日期读错': 1, '印章判定错误': 1}
+    assert summary['features'] == [{'type': '遮挡', 'count': 1}]
+    assert summary['legacy_samples'] == 1
+    assert summary['legacy_types'] == [{'type': '旧印章问题', 'count': 1}]
+
+
+def test_remote_seal_marker_does_not_turn_a_correct_final_or_local_result_into_an_error():
+    result = {'seal_check': reading(), 'recognition_variants': {'seal': [
+        remote(template='不匹配', ocr='不匹配'),
+        {'method': 'paddle_v6', 'details': {'seal_check': reading()}},
+    ]}}
+    before = deepcopy(result)
+    baseline = evaluate_sample('one.png', TRUTH, job(result))
+    truth = {**TRUTH, 'problem_reviews': {'7': {
+        'status': 'issues', 'types': ['清瞳印章判定错误'],
+    }}}
+    marked = evaluate_sample('one.png', truth, job(result))
+    assert marked['problem_review']['types'] == ['清瞳印章判定错误']
+    assert marked['seals']['qingtong_template']['state'] == '错误'
+    assert marked['seals']['qingtong_ocr']['state'] == '错误'
+    assert marked['seals']['local:paddle_v6']['state'] == '正确'
+    assert marked['seals'] == baseline['seals']
+    assert result == before and result['seal_check']['status'] == '匹配'
+
+
+def test_channel_specific_and_legacy_seal_labels_stay_separate_in_manual_counts():
+    both = {'filename': 'one.png', 'problem_review': {'status': 'issues', 'types': [
+        '清瞳印章判定错误', '本地印章判定错误', '清瞳印章判定错误',
+    ]}}
+    summary = summarize_problem_annotations([both, both])
+    assert summary['total'] == 1
+    assert summary['statuses']['issues'] == 1
+    assert {item['type']: item['count'] for item in summary['types']} == {
+        '清瞳印章判定错误': 1, '本地印章判定错误': 1,
+    }
+    old = {'filename': 'old.png', 'problem_review': {'status': 'issues', 'types': ['印章判定错误']}}
+    with_old = summarize_problem_annotations([both, old])
+    assert with_old['statuses']['issues'] == 2
+    assert {item['type']: item['count'] for item in with_old['types']} == {
+        '清瞳印章判定错误': 1, '本地印章判定错误': 1, '印章判定错误': 1,
+    }
 
 
 def test_statistics_latest_batch_scope_and_production_isolation(samples):

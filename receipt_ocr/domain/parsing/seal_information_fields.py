@@ -1,10 +1,11 @@
 """Strict field boundaries for seals containing contact information.
 
 Inputs have already undergone the seal text typography normalization. Contact
-fields may be extra only when their boundaries are unambiguous; identity
-fields never may.
+fields may be extra only when their boundaries are unambiguous. Service-station
+name prefixes have a separate, explicit centre-and-code rule with a notice.
 """
 import re
+from .seal_station_fields import compare_station_fields
 
 
 _LABEL = re.compile(r"授权代码:?|地址:|电话:")
@@ -81,6 +82,9 @@ def _fields(text):
 
 def compare_information_fields(expected, actual):
     """Return evidence only for an unambiguous, complete field-level match."""
+    station = compare_station_fields(expected, actual)
+    if station:
+        return station
     required, recognized = _fields(expected), _fields(actual)
     if required and "授权代码" in required:
         recognized = _unlabelled_information_fields(actual) or recognized

@@ -2,6 +2,32 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {describeStandard, groupStandards} = require('../static/modules/seals/standard_groups.mjs');
 
+test('server terms control archive grouping and preserve independent identity codes',()=>{
+  const make=(requirement,terms)=>({requirement,name_terms:{original:requirement,...terms}});
+  const company='深圳欧瑞特供应链管理有限公司';
+  const items=[make(company+'福州仓库收货专用章(1)',{company,branch:'福州仓库',purpose:'收货专用章',number:'(1)',groupable:true}),
+    make(company+'南京分公司收货章',{company,branch:'南京分公司',purpose:'收货章',groupable:true})];
+  assert.equal(groupStandards(items).length,1);
+  assert.equal(describeStandard(items[0]).label,'福州仓库 · 收货专用章(1)');
+  const codes=['6055487','4910964'].map(code=>make('三星电子服务中心授权代码:'+code,
+    {company:'三星电子服务中心',groupable:false,identity_fields:[{kind:'authorization_code',value:code}]}));
+  assert.equal(groupStandards(codes).length,2);
+  const store=make('华润万象汇三星授权体验店',{company:'华润万象汇三星授权体验店',groupable:true});
+  assert.equal(describeStandard(store).company,'华润万象汇三星授权体验店');
+  // Stale metadata cannot override a changed requirement.
+  assert.notEqual(describeStandard({...store,requirement:'其他有限公司公章'}).company,store.requirement);
+});
+
+test('alternative descriptions keep both purposes and their own stamp numbers',()=>{
+  const company='青岛和沃电子技术有限公司';
+  const requirement=company+'业务专用章/'+company+'维修业务专用章（1）';
+  const standard={requirement,name_terms:{original:requirement,company,groupable:true,
+    alternatives:[{purpose:'业务专用章',number:''},{purpose:'维修业务专用章',number:'(1)'}]}};
+  const description=describeStandard(standard);
+  assert.equal(description.company,company);
+  assert.equal(description.seal,'业务专用章 / 维修业务专用章(1)');
+});
+
 test('all branches of the exact legal company group together with distinct purposes and seal numbers', () => {
   const company = '深圳欧瑞特供应链管理有限公司';
   const standards = [

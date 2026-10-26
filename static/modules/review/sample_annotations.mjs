@@ -1,5 +1,6 @@
 /** Sample labels never overwrite the machine evidence used by comparisons. */
 import {normalizedReviewDate} from './review_readiness.mjs';
+import {renderProblemAnnotations, collectProblemAnnotations, problemAnnotationError} from './problem_annotations.mjs';
 const fieldNames = {truth_customer: '客户名称', truth_requirement: '签章要求', truth_required_date: '要求到货'};
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const prefillBindings = new WeakMap();
@@ -93,15 +94,8 @@ export function renderSampleAnnotations(ui, reviewState, truth, root) {
   setValue('truth_seal_should_match', typeof entry.seal_should_match === 'boolean'
     ? String(entry.seal_should_match) : detectedSeal, !!detectedSeal);
   updatePrefillNote(prefill);
-  for (const key of ['human_note', 'error_type']) {
-    const input = $(`[name=${key}]`, root);
-    const value = entry[key] ?? reviewState.current?.[key] ?? '';
-    if (key === 'error_type' && value && input.options && ![...input.options].some(option => option.value === value)) {
-      const option = input.ownerDocument.createElement('option');
-      option.value = option.textContent = value; input.append(option);
-    }
-    input.value = value;
-  }
+  $('[name=human_note]', root).value = entry.human_note ?? reviewState.current?.human_note ?? '';
+  renderProblemAnnotations(ui, truth, root);
   $('[data-truth-status]', root).textContent = '可编辑';
   $('[data-sample-annotations]', root).disabled = false;
   $('[data-save-sample]', root).disabled = false;
@@ -120,7 +114,7 @@ export function collectSampleAnnotations(ui, root, revision) {
     date_present: present === '' ? null : present === 'true',
     actual_date: present === 'true' ? value('truth_actual_date') : '',
     seal_should_match: match === '' ? null : match === 'true',
-    human_note: value('human_note'), error_type: value('error_type'),
+    human_note: value('human_note'), ...collectProblemAnnotations(ui, root),
   };
 }
 
@@ -132,6 +126,8 @@ export function createSampleAnnotationSubmission({ui, reviewState, services, ren
     const root = $('#review-content'), id = reviewState.current.id;
     const payload = collectSampleAnnotations(ui, root, reviewState.sampleAnnotationRevision);
     if (payload.date_present === true && !payload.actual_date) return toast('请填写实际签收日期', 'warning');
+    const problemError = problemAnnotationError(payload);
+    if (problemError) return toast(problemError, 'warning');
     const controls = $$('button,input,textarea,select', root).map(el => [el, el.disabled]);
     reviewState.reviewSaving = true;
     reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;

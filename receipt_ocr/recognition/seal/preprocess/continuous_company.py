@@ -6,6 +6,7 @@ not divide the first/last company glyphs into a backwards lower arc.
 """
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -13,6 +14,8 @@ import numpy as np
 from receipt_ocr.imaging.ring_border import trace_ellipse_border
 from receipt_ocr.providers.paddle_runtime import variant_of
 from .detected_layout import fitted_guide
+from .component_noise import component_noise_candidate
+from .company_border import company_border_points
 
 
 def continuous_company_eligible(artifact):
@@ -33,7 +36,9 @@ def continuous_company_eligible(artifact):
 
 def _forward_strip(image, guide, start, end, inner, outer, color):
     (cx, cy), _, _ = guide.annulus[0][2]
-    points = guide.points
+    points, correction = company_border_points(guide)
+    if correction is not None:
+        (cx, cy), _, _ = correction['ellipse']
     angles = np.mod(np.arctan2(points[:, 1]-cy, points[:, 0]-cx), 2*np.pi)
     order = np.argsort(angles)
     angles, points = angles[order], points[order]
@@ -76,9 +81,55 @@ def continuous_company_pixels(image, guide, *, color='red'):
     end = max(right, key=lambda gap: gap[1]-gap[0])[0]+3 if right else 450
     pixels = _forward_strip(image, guide, start, end, .60, .94, color)
     pixels = cv2.copyMakeBorder(pixels, 12, 12, 20, 20, cv2.BORDER_CONSTANT, value=255)
+    border = guide.summary()
+    _, correction = company_border_points(guide)
+    if correction is not None:
+        border = dict(border, company_arc_correction=correction)
     return pixels, {'method': 'forward_border_company_v1', 'degrees': [start, end],
                     'radial_range': [.60, .94], 'tracking_radial_range': [.80, .90],
-                    'gaps': gaps, 'border': guide.summary()}
+                    'gaps': gaps, 'border': border}
+
+
+def calibrate_estimated_border(image, guide, *, color='red'):
+    """Correct an oversized fallback ellipse using visible circumferential ink.
+
+    This does not change a successfully traced border. A narrow radial peak
+    must be supported on several sides of the stamp; a few glyphs or a dense
+    security pattern cannot establish a replacement border. No OCR is used.
+    """
+    original = guide.summary()
+    if original.get('method') != 'ellipse_estimate':
+        return guide
+    strip = _forward_strip(image, guide, 90, 450, .65, 1.15, color)
+    ink = strip < 170
+    support = ink.mean(axis=1)
+    peak = int(support.argmax())
+    scale = 1.15 - peak / (strip.shape[0] - 1) * .50
+    # Correct only a materially oversized estimate, within the measured band.
+    if not .80 <= scale <= .97 or support[peak] < .45:
+        return guide
+    left = right = peak
+    while left > 0 and support[left - 1] >= support[peak] - .12:
+        left -= 1
+    while right + 1 < len(support) and support[right + 1] >= support[peak] - .12:
+        right += 1
+    if right - left + 1 > 32:
+        return guide
+    neighbours = support[max(0, peak - 16):min(len(support), peak + 17)]
+    if support[peak] - float(np.quantile(neighbours, .25)) < .12:
+        return guide
+    quarters = np.array_split(ink[peak], 4)
+    if sum(float(part.mean()) >= .20 for part in quarters) < 3:
+        return guide
+    center = np.asarray(guide.annulus[0][2][0])
+    points = center + scale * (guide.points - center)
+    evidence = {
+        'method': 'radial_border_refit', 'scale': float(scale),
+        'supported_fraction': float(support[peak]), 'original': original,
+    }
+    # Continuous sampling uses only the centre from annulus and these points.
+    return SimpleNamespace(annulus=guide.annulus, points=points,
+                           summary=lambda: deepcopy(evidence))
 
 
 def read_continuous_company(artifact, directory, index, prefix, *, reader, provider):
@@ -87,8 +138,14 @@ def read_continuous_company(artifact, directory, index, prefix, *, reader, provi
     No expected wording is accepted by this function. Changes to the artifact
     are committed only after sampling and OCR complete successfully.
     """
-    if variant_of(provider) != 'v6' or not continuous_company_eligible(artifact):
+    if variant_of(provider) != 'v6':
         return False
+    original_artifact = artifact
+    if not continuous_company_eligible(artifact):
+        candidate = component_noise_candidate(artifact, directory, index, prefix)
+        if candidate is None or not continuous_company_eligible(candidate):
+            return False
+        artifact = candidate
     directory = Path(directory)
     source_url = artifact.get('ring_input_source_url') or artifact.get('body_url')
     masked_url = artifact.get('ring_input_url')
@@ -105,6 +162,7 @@ def read_continuous_company(artifact, directory, index, prefix, *, reader, provi
     guide = trace_ellipse_border(source, color=color) or fitted_guide(intact, color=color)
     if guide is None:
         return False
+    guide = calibrate_estimated_border(intact, guide, color=color)
     pixels, geometry = continuous_company_pixels(image, guide, color=color)
     destination = directory / f'seal-{index}-zones-company-continuous.png'
     if not cv2.imwrite(str(destination), pixels):
@@ -114,7 +172,7 @@ def read_continuous_company(artifact, directory, index, prefix, *, reader, provi
         return False
     url = f'{prefix.rstrip("/")}/{destination.name}' if prefix else ''
     identifier = f'{artifact["region_id"]}:zones-company-continuous'
-    original = deepcopy(artifact['multi_zone_layout'])
+    original = deepcopy(original_artifact['multi_zone_layout'])
     for item in [*artifact.get('inputs', []), *artifact.get('reads', [])]:
         if item.get('channel') not in {'ring', 'layout_lower'}:
             continue
@@ -142,4 +200,7 @@ def read_continuous_company(artifact, directory, index, prefix, *, reader, provi
                     ring_border_detection=geometry['border'],
                     ring_input_operation='分别识别章型与编号，仅填白内部笔画，沿连续外环完整展开公司名称')
     artifact.pop('lower_arc_text', None)
+    if artifact is not original_artifact:
+        original_artifact.clear()
+        original_artifact.update(artifact)
     return True

@@ -42,7 +42,8 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
       const status = ReceiptWorkbench.checkStatus(item, key);
       const card = $(`[data-check-card="${key}"]`, content);
       const needsStandard = key === 'seal' && item.seal_standard_check?.requirement
-        && item.seal_standard_check.status !== 'matched' && item.seal_check?.human_confirmed_match !== true;
+        && item.seal_standard_check.status !== 'matched' && item.seal_check?.human_confirmed_match !== true
+        && !(reviewState.sampleView && status === '匹配');
       const blocking = ['date', 'seal'].includes(key) && (status !== '匹配' || needsStandard);
       card.open = blocking;
       card.classList.toggle('check-attention', blocking);
@@ -60,7 +61,6 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     renderStandard?.(item, content, mode);
     setupSignatureConfirmation(item, content);
     $('[name=human_note]', content).value = item.human_note || '';
-    $('[name=error_type]', content).value = item.error_type || '';
     reviewState.sampleAnnotationRevision = null;
     if (reviewState.sampleView) {
       $('[name=truth_date_present]', content).addEventListener('change', () => syncSampleDate(ui, content));

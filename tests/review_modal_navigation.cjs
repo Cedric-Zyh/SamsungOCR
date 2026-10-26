@@ -13,7 +13,7 @@ function element(document, tagName = 'DIV') {
   const classes = new Set(), listeners = new Map();
   return {
     tagName, dataset: {}, attributes: {}, children: [], parentNode: null, parentElement: null,
-    value: '', textContent: '', innerHTML: '', disabled: false, open: false, isConnected: true,
+    value: '', textContent: '', innerHTML: '', disabled: false, hidden: false, inert: false, open: false, isConnected: true,
     scrollTop: 0, scrollLeft: 0, style: {setProperty() {}}, showCount: 0, closeCount: 0,
     classList: {
       add: (...values) => values.forEach(value => classes.add(value)),
@@ -664,5 +664,75 @@ test('returning to statistics does not wait for ancillary review history and its
   resolveHistory(); await opening;
   assert.equal(h.dialog.open, true);
   assert.equal(h.state.review.current.id, 47);
+  assertStatisticsContext(h);
+});
+
+function installCallDetails(h) {
+  const filename = h.state.review.current.filename, getResult = h.behavior.api, calls = [];
+  h.behavior.api = async route => {
+    calls.push(route);
+    if (route.endsWith('/recognition-calls')) return {
+      filename, available: true, status: 'succeeded',
+      summary: {total: 2, succeeded: 2, failed: 0, cache_hits: 1},
+      processing_seconds: 3,
+      calls: [1, 2].map(id => ({id, stage: 'seal', stage_label: '客户印章', method: 'paddle_v6',
+        method_label: 'Paddle', action: '文字识别', input_name: `seal-part-${id}.png`,
+        seconds: id, status: 'succeeded'})),
+    };
+    return getResult(route);
+  };
+  const click = selector => {
+    const target = element(h.document, 'BUTTON');
+    target.closest = candidate => candidate === selector ? target : null;
+    return h.$('#review-runs-panel').emit('click', {target});
+  };
+  return {calls, click};
+}
+
+test('physical call details leave sample browsing position intact and switch with the next receipt', async () => {
+  const h = await sampleBrowseHarness(), details = installCallDetails(h);
+  await h.$('#review-runs-open').emit('click');
+  assert.match(h.$('#review-runs-body').innerHTML, /seal-part-1.png/);
+  assert.equal(h.$('#review-browse-position').textContent, '2 / 3');
+  await h.$('#review-browse-next').emit('click');
+  assert.equal(h.state.review.current.id, 43);
+  assert.equal(h.$('#review-runs-panel').hidden, true);
+  assert.equal(h.$('#review-form').inert, false);
+  assert.equal(h.$('#review-browse-position').textContent, '3 / 3');
+  await h.$('#review-browse-prev').emit('click');
+  assert.equal(h.state.review.current.id, 42);
+  assert.equal(h.dialog.showCount, 1);
+  assert.deepEqual(details.calls.filter(route => route.endsWith('/recognition-calls')),
+    ['/api/samples/results/42/recognition-calls']);
+});
+
+test('closing call details invalidates a pending response and preserves unsaved edits and scroll', async () => {
+  const h = await sampleBrowseHarness(), details = installCallDetails(h);
+  h.review.setReviewDirty();
+  const form = h.$('#review-form'); form.scrollTop = 230; form.value = 'existing draft';
+  let resolve;
+  h.behavior.api = () => new Promise(done => { resolve = done; });
+  const opening = h.$('#review-runs-open').emit('click');
+  await details.click('[data-runs-close]');
+  resolve({filename:'42.jpg', available:true, summary:{total:99}, calls:[]}); await opening;
+  assert.equal(h.state.review.current.id, 42);
+  assert.equal(h.state.review.reviewDirty, true);
+  assert.equal(h.$('#review-runs-panel').hidden, true);
+  assert.equal(form.inert, false); assert.equal(form.scrollTop, 230);
+  assert.equal(form.value, 'existing draft');
+  assert.doesNotMatch(h.$('#review-runs-body').innerHTML, />99</);
+  assert.equal(h.document.activeElement, h.$('#review-runs-open'));
+});
+
+test('returning from physical call details retains the original statistics filters page and focus', async () => {
+  const h = await statisticsReviewHarness(); installCallDetails(h);
+  await h.$('#review-runs-open').emit('click');
+  assert.equal(h.state.review.current.id, 47);
+  assert.equal(h.$('#review-dialog .review-dialog-close span').textContent, '返回统计');
+  assertStatisticsContext(h);
+  h.review.closeModal(); await settleDialogs();
+  assert.equal(h.dialog.open, false);
+  assert.equal(h.location.hash, '#samples');
+  assert.equal(h.document.activeElement, h.source);
   assertStatisticsContext(h);
 });

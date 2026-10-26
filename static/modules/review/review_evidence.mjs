@@ -2,6 +2,7 @@ import {createApiClients} from '../core/api.mjs';
 import {percent, escapeHtml} from '../core/ui.mjs';
 import {createArtifactImages} from './artifact_images.mjs';
 import {renderSampleAnnotations} from './sample_annotations.mjs';
+import {problemHistoryChanges} from './problem_annotations.mjs';
 import {simplifySealText} from '../core/seal_script.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
@@ -69,7 +70,9 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         : ''}</section>`;
     }
     if (item.multi_zone_layout) {
-      const explanation = item.multi_zone_layout.method === 'ellipse_department_rows'
+      const explanation = item.multi_zone_layout.method === 'ellipse_code_phone_rows'
+        ? '用完整电话号码确定方向；仅填白电话笔画，分别读取上弧站代码、横排电话和下弧公司名称。'
+        : item.multi_zone_layout.method === 'ellipse_department_rows'
         ? '章内部门与章型文字分别识别；填白内部文字后，再展开读取公司名称。'
         : item.multi_zone_layout.method === 'ellipse_continuous_name'
         ? '章型和编号分别识别；填白内部文字后，沿连续外环完整展开公司名称，保留首尾文字。'
@@ -91,7 +94,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     }
     const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const measuredRow = ['verified_glyph_row', 'verified_local_row'].includes(item.ring_input_mask_method);
+    const measuredRow = ['verified_glyph_row', 'verified_local_row', 'verified_residual_row_glyphs'].includes(item.ring_input_mask_method);
     const tightMask = measuredRow || item.ring_input_mask_method === 'contained_text_ink';
     const ringInputLabel = item.ring_number_mask?.status === 'applied'
       ? '旋正章色图 · 横排文字与已确认编号笔画填白（环形展开来源）'
@@ -473,6 +476,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       if (before.date_present !== after.date_present) changed.push(`日期标注: ${dateLabel(before.date_present)} → ${dateLabel(after.date_present)}`);
       if (before.human_note !== after.human_note) changed.push(`备注: ${before.human_note || '空'} → ${after.human_note || '空'}`);
       if (before.error_type !== after.error_type) changed.push(`错误类型: ${before.error_type || '无'} → ${after.error_type || '无'}`);
+      changed.push(...problemHistoryChanges(before, after));
       const oldProductRows = before.product_table?.rows || [], newProductRows = after.product_table?.rows || [];
       newProductRows.forEach((row, index) => Object.keys(row.values || {}).forEach(column => {
         const oldValue = oldProductRows[index]?.values?.[column] || '', newValue = row.values?.[column] || '';

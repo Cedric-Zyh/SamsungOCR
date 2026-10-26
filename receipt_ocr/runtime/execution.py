@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Lock
 from time import perf_counter
 
+from .calls import record_recognition_cache_hit
+
 
 @dataclass
 class Execution:
@@ -88,6 +90,7 @@ def recognize_page(source, backend, recognize):
     key = (str(Path(source).resolve()), backend)
     if execution is not None and key in execution.pages:
         execution.cache_hits += 1
+        record_recognition_cache_hit()
         return deepcopy(execution.pages[key])
     with measure('page_ocr'):
         rows = recognize(source, backend=backend)
@@ -102,6 +105,7 @@ def record_page_reuse():
     if execution is not None:
         with execution.timing_lock:
             execution.cache_hits += 1
+        record_recognition_cache_hit()
 
 
 def reuse_text_boxes(source, model_signature, recognize):
@@ -137,6 +141,7 @@ def reuse_text_boxes(source, model_signature, recognize):
             return recognize()
         with execution.timing_lock:
             execution.text_box_cache_hits += 1
+        record_recognition_cache_hit()
         return result, True
     result, cacheable = recognize()
     try:

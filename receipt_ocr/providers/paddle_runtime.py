@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.progress import model_operation
+from ..runtime.calls import recognition_call, check_prediction_errors
 
 import os
 import math
@@ -271,8 +272,9 @@ def recognize_seal_text(image_path: str | Path) -> list[TextObservation]:
     with model_operation("paddle_seal", "识别印章区域"), _prediction_slot():
         with measure("paddle_seal_model_setup"):
             pipeline = _seal_pipeline()
-        with measure("paddle_seal_inference"):
+        with measure("paddle_seal_inference"), recognition_call("paddle_seal", "识别印章区域", path) as invocation:
             results = list(pipeline.predict(input=str(path)))
+            check_prediction_errors(invocation, results)
     output = []
     for result in results:
         if result.get("error"):
@@ -318,8 +320,9 @@ def recognize_line(
     with model_operation(provider_of(model_variant), '识别文字行'), _prediction_slot():
         with measure('paddle_model_setup'):
             recognizer = _line_recognizer(model_variant)
-        with measure('paddle_line_inference'):
+        with measure("paddle_line_inference"), recognition_call(provider_of(model_variant), "识别文字行", path) as invocation:
             results = list(recognizer.predict(input=str(path)))
+            check_prediction_errors(invocation, results)
     output: list[TextObservation] = []
     for result in results:
         text = str(result.get("rec_text", "")).strip()
@@ -371,8 +374,9 @@ def recognize_text(
     with model_operation(provider_of(model_variant), '文字检测与识别'), _prediction_slot():
         with measure('paddle_model_setup'):
             pipeline = _pipeline(model_variant)
-        with measure('paddle_text_inference'):
+        with measure("paddle_text_inference"), recognition_call(provider_of(model_variant), "文字检测与识别", inference_path) as invocation:
             results = list(pipeline.predict(input=str(inference_path)))
+            check_prediction_errors(invocation, results)
     for result in results:
         texts = result.get("rec_texts", [])
         scores = result.get("rec_scores", [])
@@ -439,8 +443,9 @@ def _predict_text_boxes(path, model_variant, width, height):
     with _prediction_slot():
         with measure("paddle_text_box_setup"):
             pipeline = _pipeline(model_variant)
-        with measure("paddle_text_box_inference"):
+        with measure("paddle_text_box_inference"), recognition_call(provider_of(model_variant), "文字框检测与识别", path) as invocation:
             results = list(pipeline.predict(input=str(path)))
+            check_prediction_errors(invocation, results)
 
     cacheable = not any(result.get('error') for result in results)
     output: list[dict] = []

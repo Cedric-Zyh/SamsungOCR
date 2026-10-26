@@ -4,8 +4,10 @@ Only scalar evidence is selected from stored JSON; images, OCR observations and
 provider payloads never travel with a polling request for the sample grid.
 """
 import json
+from copy import deepcopy
 
 from receipt_ocr.domain.parsing.parsing_dates import parse_date
+from receipt_ocr.domain.sample_seal_decision import SAMPLE_SEAL_DECISIONS, sample_seal_decision
 
 
 SEAL_SOURCES = [
@@ -28,7 +30,8 @@ def _object_sql(root, fields):
     return 'json_object(' + ','.join(parts) + ')'
 
 
-_TEXT_CHECK = dict.fromkeys(('status', 'recognized', 'display_text', 'reliable', 'backend', 'source', 'recognition_mode'))
+_TEXT_CHECK = dict.fromkeys(('status', 'recognized', 'display_text', 'reliable', 'backend', 'source',
+                            'recognition_mode', 'requirement', 'comparison_policy', 'human_confirmed_match'))
 _SEAL_CHECK = {
     **_TEXT_CHECK, 'local_channel': _TEXT_CHECK,
     'dual_check': {'selected': {
@@ -139,7 +142,7 @@ def _accuracy(truth, kind, state, value):
     return '正确' if (state == '匹配') == expected and state != '部分匹配' else '错误'
 
 
-def _channel(check, *, value='', job=None, enabled=None, error='', truth=None, kind='seal'):
+def _channel(check, *, value='', job=None, enabled=None, error='', truth=None, kind='seal', requirement=''):
     check, job = check or {}, job or {}
     status = job.get('status')
     value = str(value or '').strip()
@@ -156,10 +159,9 @@ def _channel(check, *, value='', job=None, enabled=None, error='', truth=None, k
     elif check.get('status') in {'未执行', '未运行'}:
         state, value = '未运行', ''
     elif not value:
-        state = '未识别'
-    elif (kind == 'seal' and check.get('status') == '匹配'
-          and check.get('reliable') is not None and not check['reliable']):
-        state = '需人工复核'
+        state = '不匹配' if kind == 'seal' else '未识别'
+    elif kind == 'seal':
+        state = sample_seal_decision(check, requirement=requirement, value=value)
     else:
         state = check.get('status') or '需人工复核'
         if state in {'待确认', '匹配待确认'}:
@@ -197,7 +199,9 @@ def sample_result_filters(job, truth, *, result=None):
     def enabled(method):
         return method in methods
     def cell(check, value='', **kwargs):
-        return _channel(check, value=value, job=job, truth=truth, **kwargs)
+        requirement = ((result.get('fields') or {}).get('签章要求')
+                       or (truth.get('fields') or {}).get('签章要求') or '')
+        return _channel(check, value=value, job=job, truth=truth, requirement=requirement, **kwargs)
     def text(check):
         return check.get('recognized') or check.get('display_text') or ''
     seals = {'combined': cell(primary, text(primary), enabled=bool(methods) if config is not None else None)}
@@ -222,5 +226,52 @@ def sample_result_filters(job, truth, *, result=None):
         check = check.get('local_channel') if _present(check.get('local_channel') or {}) else check
         key = method if method == 'danzhengtong' else 'local:' + method
         seals[key] = cell(check, text(check), enabled=enabled(method), error=variant.get('error') or '')
+    # Successful evidence from any enabled channel outranks a review-workflow
+    # fallback. Keep provider verdicts independent and retain explicit human or
+    # measured shape rejections; neither is an unresolved review status.
+    human = primary.get('human_confirmed_match')
+    fixed = ((isinstance(human, (bool, int)) and human in (0, 1))
+             or (primary.get('status') == '不匹配'
+                 and primary.get('comparison_policy') == 'manual_standard_text_and_shape'))
+    if not fixed:
+        remote_summary = cell(remote, text(remote), enabled=enabled('qingtong'), error=remote_error)
+        candidates = [current for current in [*seals.values(), remote_summary]
+                      if current['state'] in SAMPLE_SEAL_DECISIONS]
+        if candidates:
+            rank = {'匹配': 3, '部分匹配': 2, '不匹配': 1}
+            seals['combined'] = dict(max(candidates, key=lambda current: rank[current['state']]))
     return {'date': cell(date_check, date_check.get('actual'), kind='date',
                          enabled=bool(config.get('date')) if config is not None else None), 'seals': seals}
+
+
+def project_sample_seal_result(result):
+    """Adapt sample detail views without rewriting saved OCR or receipt rules."""
+    result = deepcopy(result)
+    filters = sample_result_filters({'status': 'succeeded'}, {}, result=result)
+    requirement = (result.get('fields') or {}).get('签章要求') or ''
+    messages = {'匹配': '印章匹配', '部分匹配': '印章文字部分匹配', '不匹配': '印章不匹配'}
+
+    def normalize(check):
+        if not check or check.get('status') in {'识别失败', '未运行', '未执行'}:
+            return
+        decision = sample_seal_decision(check, requirement=requirement)
+        check.update(status=decision, message=messages[decision])
+
+    primary = result.get('seal_check') or {}
+    for variant in (result.get('recognition_variants') or {}).get('seal') or []:
+        check = (variant.get('details') or {}).get('seal_check') or {}
+        normalize(check)
+        normalize(check.get('local_channel') or {})
+    for key in ('local_channel', 'qingtong_channel'):
+        normalize(primary.get(key) or {})
+    combined = filters['seals']['combined']
+    if combined['state'] in SAMPLE_SEAL_DECISIONS:
+        primary.update(status=combined['state'], recognized=combined['value'],
+                       display_text=combined['value'], message=messages[combined['state']],
+                       reliable=combined['state'] == '匹配', sample_decision_policy='any_matching_channel')
+        result['seal_check'] = primary
+        if combined['state'] == '匹配' and isinstance(result.get('review_issues'), list):
+            result['review_issues'] = [entry for entry in result['review_issues']
+                                       if entry.get('scope') != 'seal' or entry.get('code') == 'provider_failure']
+            result['review_reasons'] = list(dict.fromkeys(entry['message'] for entry in result['review_issues']))
+    return result

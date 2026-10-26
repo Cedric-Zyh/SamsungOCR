@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 from receipt_ocr.runtime.execution import timed
 from receipt_ocr.runtime.progress import model_operation
+from receipt_ocr.runtime.calls import recognition_call
 
 
 # ``seal_api.py`` lives under ``receipt_ocr/recognition/seal``.  The key file
@@ -70,7 +71,8 @@ class SealApiClient:
                 }
             path = Path(image_path)
             try:
-                with path.open("rb") as handle:
+                with path.open("rb") as handle, recognition_call(
+                        "qingtong", "印章识别", path) as invocation:
                     response = requests.post(
                         f"{self.base_url}/api/v1/recognize",
                         headers={"X-API-Key": self.api_key},
@@ -99,6 +101,7 @@ class SealApiClient:
                 "response": payload,
             }
             if not ok:
+                invocation.fail()
                 if response.ok and business_code is None:
                     reason = "响应缺少业务状态码"
                 elif response.ok:

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {statisticsOverview, statisticsSummary} = require('../static/modules/samples/statistics_view.mjs');
+const {statisticsOverview, statisticsSummary, problemAnnotationsPanel} = require('../static/modules/samples/statistics_view.mjs');
 const {statisticsDistribution} = require('../static/modules/samples/statistics.mjs');
 
 const options = columns => ({tab:'seal', columns, groupBy:'company', showAllGroups:false,
@@ -43,4 +43,44 @@ test('summary problem counts drill into all schemes, with no links for zero coun
   assert.match(html, /data-stat-drill="pending_truth" data-stat-channel=""/);
   assert.match(html, /data-stat-drill="untested" data-stat-channel=""/);
   assert.doesNotMatch(statisticsSummary([], 'seal'), /data-stat-drill/);
+});
+
+test('human problem distribution deduplicates tags and samples without changing scheme evaluation', () => {
+  const first = sample('a', '正确', {filename:'one.png', problem_review:{status:'issues', types:['日期读错', '日期读错', '<印章&问题>']},
+    sample_features:['遮挡', '遮挡'], legacy_problem_types:['旧错误']});
+  const rows = [first, first, sample('a', '错误', {filename:'two.png', problem_review:{status:'clear', types:['不应计入']}}),
+    sample('a', '正确', {filename:'three.png'})];
+  const panel = problemAnnotationsPanel(rows);
+  assert.match(panel, /已发现问题 1 张/);
+  assert.match(panel, /尚未标注 1/);
+  assert.match(panel, /已核对无问题 1/);
+  assert.match(panel, /日期读错<\/th><td>1<\/td>/);
+  assert.match(panel, /遮挡<\/th><td>1<\/td>/);
+  assert.match(panel, /&lt;印章&amp;问题&gt;/);
+  assert.match(panel, /1 张样单有未关联测试的旧标记/);
+  assert.match(panel, /不改变自动评测结果或正确率/);
+  assert.doesNotMatch(panel, /不应计入|<印章/);
+  const before = statisticsOverview(rows, options([{key:'a', label:'方案 A'}]));
+  const after = statisticsOverview(rows.map(({problem_review, sample_features, ...row}) => row), options([{key:'a', label:'方案 A'}]));
+  const schemeTable = html => html.slice(0, html.indexOf('<details'));
+  assert.equal(schemeTable(before), schemeTable(after));
+});
+
+test('manual seal labels distinguish remote and local channels while preserving old unspecific tags', () => {
+  const both = sample('local:paddle_v6', '正确', {filename:'one.png', problem_review:{status:'issues', types:[
+    '清瞳印章判定错误', '本地印章判定错误', '清瞳印章判定错误',
+  ]}});
+  const onePanel = problemAnnotationsPanel([both, both]);
+  assert.match(onePanel, /已发现问题 1 张/);
+  assert.match(onePanel, /清瞳印章判定错误<\/th><td>1<\/td>/);
+  assert.match(onePanel, /本地印章判定错误<\/th><td>1<\/td>/);
+  const old = sample('local:paddle_v6', '正确', {filename:'old.png',
+    problem_review:{status:'issues', types:['印章判定错误']}});
+  const panel = problemAnnotationsPanel([both, old]);
+  assert.match(panel, /已发现问题 2 张/);
+  assert.match(panel, /<th scope="row">印章判定错误<\/th><td>1<\/td>/);
+  const config = options([{key:'local:paddle_v6', label:'本地印章'}]);
+  const schemeTable = html => html.slice(0, html.indexOf('<details'));
+  assert.equal(schemeTable(statisticsOverview([both], config)),
+    schemeTable(statisticsOverview([{...both, problem_review:undefined}], config)));
 });

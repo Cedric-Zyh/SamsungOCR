@@ -31,6 +31,7 @@ from .han_ring import prepare_han_ring
 from .multi_zone import prepare_multi_zone
 from .local_type_row import prepare_local_type_row
 from .type_row_mask import separate_type_row_bridges
+from .residual_type_row import recover_residual_type_row
 from .horizontal_consensus import prepare_horizontal_consensus, protect_consensus_border
 from ..ocr.interface import OcrReader
 
@@ -236,6 +237,42 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 artifact["color_isolated_oriented_url"] = add("oriented", working, "方向校正图")
         except Exception as exc:
             artifact["errors"].append({"step": "orientation", "message": str(exc)})
+    if (shape != "rectangle" and orientation_mode == "combined" and variant_of(provider) == "v6"
+            and not orientation.get("type_band_text")):
+        try:
+            from .code_phone import prepare_code_phone_layout
+            plan = prepare_code_phone_layout(color, directory, index,
+                                            reader=OcrReader(), provider=provider, color=region.color)
+            if plan is not None:
+                artifact["orientation"] = plan["orientation"]
+                artifact["color_isolated_oriented_url"] = add(
+                    "code-phone-oriented", plan["oriented"], "按电话方向旋正")
+                artifact["body_url"] = artifact["color_isolated_oriented_url"]
+                artifact["multi_zone_layout"] = {
+                    "method": plan["method"], "status": "prepared", "rows": [],
+                    "expected_inner_roles": ["station_code", "phone"], "arcs": plan["arcs"],
+                    "overlay_url": add("code-phone-regions", plan["overlay"], "自动文字分区")}
+                artifact["ring_input_source_url"] = artifact["body_url"]
+                artifact["ring_input_url"] = add("code-phone-ring-input", plan["ring_input"], "电话笔画填白后")
+                artifact["ring_input_mask_url"] = add("code-phone-mask", plan["mask"], "实际填白笔画")
+                artifact["ring_border_detection"] = plan["border"]
+                artifact["ring_input_operation"] = "用电话确定方向，仅填白该行笔画，站代码与公司名称分别展开"
+                jobs = []
+                for name, label, channel in [('code', '上弧站代码', 'layout_inner'),
+                                              ('phone', '横排电话', 'layout_inner'),
+                                              ('company', '下弧公司名称', 'ring')]:
+                    file = plan["paths"][name]
+                    url = add(f"code-phone-{name}", file, label, channel)
+                    row = plan["reads"][name]
+                    inputs[-1].update(zone_name=name, detected_rows=[{
+                        "text": row.text, "confidence": row.confidence,
+                        "x": 0., "y": 0., "width": 1., "height": 1.}])
+                    jobs.append((inputs[-1], file))
+                    if name == "company":
+                        artifact.update(unwrapped_url=url, unwrapped_text="", unwrap_texts=[])
+                return artifact, jobs
+        except Exception as exc:
+            artifact["code_phone_fallback"] = str(exc)
     artifact["orientation"] = orientation
     unrotated_round = shape == "round" and working == color
     if (consensus is None and shape != "rectangle"
@@ -367,6 +404,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
         center = path("center")
         ring_input = path("ring-input")
         ring = path("ring")
+        residual_guide = None
         try:
             aligned = bool(artifact.get("color_isolated_oriented_url")) or shape == "ellipse"
             mask_box = source_focus
@@ -399,7 +437,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     shutil.copyfile(consensus["center"], center)
                 elif local_row is None:
                     save_round_seal_type_band(working, center, orientation_aligned=aligned,
-                                              focus_box=orientation.get("oriented_type_row_read_box") or focus)
+                                              focus_box=orientation.get("oriented_type_row_read_box") or focus,
+                                              blank_padding=int(orientation.get("type_row_blank_padding") or 0))
                 box = tuple(int(round(value)) for value in mask_box)
                 center_url = add("center", center, "检测到的横向文字区域（仅定位/章型 OCR）", "center")
                 jobs.append((inputs[-1], center))
@@ -444,6 +483,17 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 )
                 if consensus is not None:
                     protect_consensus_border(working, ring_input, mask_path, consensus["guide"])
+                if shape == "round":
+                    residual = recover_residual_type_row(
+                        working, ring_input, mask_path, polygons=mask_polygons,
+                        orientation=orientation, geometry_source=color,
+                        ring_guide=consensus["guide"] if consensus is not None else None,
+                        color=region.color,
+                    )
+                    if residual is not None:
+                        residual_guide, evidence = residual
+                        bridge_evidence.clear()
+                        bridge_evidence.update(evidence)
                 artifact["ring_input_mask_url"] = add("type-mask", mask_path, "横排文字实际填白范围")
                 ring_input_label = "旋正章色图 · 仅横排文字笔画填白（环形展开来源）"
                 artifact["ring_input_operation"] = "仅填白检测文字多边形内的独立笔画，保留跨边界的外圈和相邻文字，再展开读取环字"
@@ -462,6 +512,9 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     artifact["ring_input_mask_method"] = bridge_evidence["method"]
                     artifact["ring_input_bridge_separation"] = bridge_evidence
                     artifact["ring_input_operation"] = "按已识别的完整横排分离细线连接，仅填白原文字框内的字形笔画，保护实测外圈，再展开读取环字"
+                    if residual_guide is not None:
+                        artifact["ring_input_operation"] = "按实测横排文字笔画填白，保留外圈及相邻环字，再展开读取环字"
+                        artifact["ring_input_box_source"] = "横排文字检测范围（填白以实测字形掩码为准）"
                 if mask_polygons:
                     artifact["ring_input_polygons"] = mask_polygons
                 # A separate number read remains an independent field, but
@@ -509,8 +562,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             # image.  Use the ellipse-aware sampler for both round and oval
             # stamps: the outer border remains visible after the cover, while
             # the inner border may be missing and must be estimated.
-            ring_guide = consensus["guide"] if consensus is not None else None
-            if consensus is not None:
+            ring_guide = residual_guide or (consensus["guide"] if consensus is not None else None)
+            if ring_guide is not None:
                 artifact["ring_geometry"] = "fixed_pre_mask_ellipse"
             if shape == "ellipse":
                 # Measure the intact ring before the centre-row white mask can

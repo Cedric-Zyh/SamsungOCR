@@ -51,6 +51,11 @@ test('filter popover keeps active conditions and count, starts closed, and remov
   let changes=0;
   const filters = createResultFilters({environment,ui:{$},changed:()=>changes++});
   filters.initialize();
+  const sealOptions = $('#sample-filter-seal').innerHTML;
+  assert.match(sealOptions, /value="匹配">匹配/);
+  assert.match(sealOptions, /value="不匹配">不匹配/);
+  assert.match(sealOptions, /value="部分匹配">部分匹配/);
+  assert.doesNotMatch(sealOptions, /需人工复核|满足要求|部分满足|未识别/);
   assert.equal($('#sample-result-filters-body').hidden,true);
   $('#sample-result-filters-toggle').handlers.click();
   assert.equal($('#sample-result-filters-toggle').attributes['aria-expanded'],'true');
@@ -124,7 +129,7 @@ test('grid/list switch preserves checked samples and batch toolbar appears only 
 test('source evidence is independent and escapes values embedded in card attributes', () => {
   const item = {status:'已完成',result_filters:{seals:{qingtong_ocr:cell('不匹配','<img onerror="bad">')}}};
   const html = sampleFilterEvidence(item,{sealSource:'qingtong_ocr'});
-  assert.match(html,/清瞳 · 文字 OCR：不满足要求/);
+  assert.match(html,/清瞳 · 文字 OCR：不匹配/);
   assert.match(html,/&lt;img/);
   assert.doesNotMatch(html,/<img/);
 });

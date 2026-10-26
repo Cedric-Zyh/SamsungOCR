@@ -7,7 +7,10 @@ as the result of an individual provider channel.
 import json
 from datetime import date
 import re
+from collections import Counter
 
+from receipt_ocr.domain.sample_problems import resolve_problem_annotations
+from receipt_ocr.domain.sample_seal_decision import sample_seal_decision
 from receipt_ocr.providers.registry import PROVIDERS
 
 
@@ -26,10 +29,12 @@ def _cell(state, value="", decision="", note=""):
     return {"state": state, "value": str(value or ""), "decision": decision, "note": note}
 
 
-def _evaluate(check, *, value, expected, date_channel=False, error="", missing="未运行"):
+def _evaluate(check, *, value, expected, date_channel=False, error="", missing="未运行", requirement=""):
     decision = str(check.get("status") or "")
     if missing != "executed":
         return _cell(missing, value, decision)
+    if not date_channel and not error and decision != "识别失败":
+        decision = sample_seal_decision(check, value=value, requirement=requirement)
     if expected is None:
         return _cell("待标注", value, decision, error)
     if error or decision == "识别失败":
@@ -94,6 +99,7 @@ def evaluate_sample(name, truth, job):
 
     failure = job.get("error_message") or ("本次测试失败" if status == "failed" else "")
     fields = truth.get("fields") or {}
+    requirement = (result.get("fields") or {}).get("签章要求") or fields.get("签章要求", "")
     expected_seal = ("匹配" if truth["seal_should_match"] else "不匹配") if isinstance(truth.get("seal_should_match"), bool) else None
     expected_date = ("" if truth.get("date_present") is False else truth.get("actual_date"))
     date_check = result.get("date_check") or {}
@@ -115,7 +121,7 @@ def evaluate_sample(name, truth, job):
             (remote.get("message") or "清瞳识别失败") if remote.get("status") == "识别失败" else "")
         seals[f"qingtong_{key}"] = _evaluate(
             decision, value=check.get(field, ""), expected=expected_seal,
-            error=remote_error or failure, missing=availability("qingtong" in methods))
+            error=remote_error or failure, missing=availability("qingtong" in methods), requirement=requirement)
     for method in local_methods:
         variant = next((v for v in variants if v.get("method") == method), None)
         fallback = {}
@@ -128,7 +134,7 @@ def evaluate_sample(name, truth, job):
         seals[f"local:{method}"] = _evaluate(
             check, value=check.get("recognized") or check.get("display_text", ""),
             expected=expected_seal, error=(variant or {}).get("error") or failure,
-            missing=availability(method in methods))
+            missing=availability(method in methods), requirement=requirement)
     return {
         "filename": name, "company": str(fields.get("客户名称") or "").strip() or "未分类",
         "result_id": job.get("result_id"), "job_status": status,
@@ -136,7 +142,33 @@ def evaluate_sample(name, truth, job):
         "tested_at": job.get("finished_at") or job.get("started_at") or job.get("created_at", ""),
         "expected_date": expected_date, "requirement": fields.get("签章要求", ""),
         "expected_seal": expected_seal, "date": date_cell, "seals": seals,
+        "human_note": truth.get("human_note", ""),
+        **resolve_problem_annotations(truth, job.get("result_id")),
     }
+
+
+def summarize_problem_annotations(rows):
+    """Count human observations independently of machine evaluation or channels."""
+    statuses = Counter()
+    types, features, legacy = Counter(), Counter(), Counter()
+    legacy_samples = 0
+    # A sample may have several tags, but must count once for each individual tag.
+    members = {row['filename']: row for row in rows}.values()
+    for row in members:
+        review = row.get('problem_review') or {}
+        status = review.get('status', 'unmarked')
+        statuses[status if status in {'clear', 'issues'} else 'unmarked'] += 1
+        if status == 'issues':
+            types.update(set(row.get('problem_review', {}).get('types') or []))
+        features.update(set(row.get('sample_features') or []))
+        old = set(row.get('legacy_problem_types') or [])
+        legacy.update(old)
+        legacy_samples += bool(old)
+    ordered = lambda counter: [{'type': label, 'count': count}
+                               for label, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))]
+    return {'statuses': {key: statuses[key] for key in ('unmarked', 'clear', 'issues')},
+            'types': ordered(types), 'features': ordered(features), 'legacy_types': ordered(legacy),
+            'legacy_samples': legacy_samples, 'total': sum(statuses.values())}
 
 
 def _batch_metadata(batch):

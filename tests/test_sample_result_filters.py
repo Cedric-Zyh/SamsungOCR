@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from receipt_ocr.web.sample_result_filters import (
-    FILTER_RESULT_SQL, LIST_RESULT_SQL, decode_list_result, sample_result_filters,
+    FILTER_RESULT_SQL, LIST_RESULT_SQL, decode_list_result, sample_result_filters, project_sample_seal_result,
 )
 from receipt_ocr.web.samples import SampleCenter
 from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
@@ -54,7 +54,7 @@ def test_provider_verdicts_are_independent_and_accuracy_is_separate_from_require
     assert seals['qingtong_template']['accuracy'] == '错误'
     assert seals['qingtong_ocr']['state'] == '不匹配'
     assert seals['qingtong_ocr']['accuracy'] == '正确'
-    assert seals['local:paddle_v6']['state'] == '需人工复核'
+    assert seals['local:paddle_v6']['state'] == '匹配'
     assert seals['local:paddle_seal']['state'] == '未运行'
     assert seals['danzhengtong']['state'] == '部分匹配'
     assert seals['danzhengtong']['accuracy'] == '错误'
@@ -91,7 +91,7 @@ def test_failed_provider_unreadable_image_disabled_stage_and_missing_evidence_ar
     assert row['date']['state'] == '未识别'
     assert row['seals']['qingtong_ocr']['state'] == '调用失败'
     assert row['seals']['qingtong_ocr']['value'] == ''
-    assert row['seals']['local:paddle_v6']['state'] == '需人工复核'
+    assert row['seals']['local:paddle_v6']['state'] == '匹配'
     row, _ = project({}, plan={'date': [], 'seal': ['qingtong']})
     assert row['date']['state'] == '未运行'
     assert row['seals']['qingtong_ocr']['state'] == '缺少结果'
@@ -107,6 +107,76 @@ def test_legacy_ocr_only_and_local_channel_use_their_own_evidence():
     assert row['seals']['qingtong_ocr']['state'] == '不匹配'
     assert row['seals']['local:legacy_local']['state'] == '部分匹配'
     assert row['seals']['local:paddle_v6']['state'] == '未运行'
+
+
+def test_matching_provider_outranks_review_but_does_not_change_other_channels():
+    result = evidence()
+    result['seal_check'] = {'status': '需人工复核', 'recognized': '客户甲', 'reliable': False}
+    result['recognition_variants']['seal'][1]['details']['seal_check'] = {
+        'status': '部分匹配', 'recognized': '客户甲', 'reliable': False}
+    row, _ = project(result)
+    assert row['seals']['combined']['state'] == '匹配'
+    assert row['seals']['combined']['value'] == '客户甲收货章'
+    assert row['seals']['local:paddle_v6']['state'] == '部分匹配'
+    assert row['seals']['qingtong_ocr']['state'] == '不匹配'
+    assert all(cell['state'] != '需人工复核' for cell in row['seals'].values())
+
+
+@pytest.mark.parametrize('value,expected', [
+    ('客户甲有限公司收货专用章(1)', '匹配'),
+    ('客户甲有限公司收货专用章', '部分匹配'),
+    ('客户乙有限公司收货专用章(1)', '不匹配'), ('', '不匹配'),
+])
+def test_completed_review_status_is_resolved_using_actual_text(value, expected):
+    requirement = '客户甲有限公司收货专用章(1)'
+    result = {'fields': {'签章要求': requirement}, 'seal_check': {
+        'status': '需人工复核', 'recognized': value, 'reliable': False}}
+    row, _ = project(result, plan={'seal': ['paddle_v6']})
+    assert row['seals']['combined']['state'] == expected
+
+
+@pytest.mark.parametrize('extra', [
+    {'human_confirmed_match': False},
+    {'comparison_policy': 'manual_standard_text_and_shape'},
+])
+def test_explicit_human_or_shape_rejection_is_not_an_unresolved_review(extra):
+    result = evidence()
+    result['seal_check'] = {'status': '不匹配', 'recognized': '综合章', **extra}
+    row, _ = project(result)
+    assert row['seals']['combined']['state'] == '不匹配'
+
+
+def test_disabled_or_failed_matching_channel_cannot_promote_the_combined_result():
+    result = evidence()
+    result['seal_check'] = {'status': '部分匹配', 'recognized': '客户甲'}
+    result['recognition_variants']['seal'][1]['details']['seal_check']['status'] = '部分匹配'
+    row, _ = project(result, plan={'seal': ['paddle_v6']})
+    assert row['seals']['combined']['state'] == '部分匹配'
+    result['recognition_variants']['seal'][0]['error'] = '接口失败'
+    row, _ = project(result)
+    assert row['seals']['combined']['state'] == '部分匹配'
+
+
+def test_detail_projection_uses_same_priority_without_rewriting_saved_evidence_or_date():
+    result = evidence()
+    result['seal_check'] = {'status': '需人工复核', 'recognized': '客户甲', 'reliable': False}
+    result['review_issues'] = [{'scope': 'seal', 'message': '印章需人工复核'},
+                               {'scope': 'date', 'message': '日期未识别'}]
+    before = deepcopy(result)
+    detail = project_sample_seal_result(result)
+    assert detail['seal_check']['status'] == '匹配'
+    assert detail['seal_check']['recognized'] == '客户甲收货章'
+    assert detail['seal_check']['reliable'] is True
+    assert detail['review_issues'] == [{'scope': 'date', 'message': '日期未识别'}]
+    assert detail['date_check'] == result['date_check']
+    assert result == before
+
+
+def test_legacy_unscoped_date_warnings_are_not_erased_by_a_sample_seal_match():
+    result = evidence()
+    result['review_reasons'] = ['签收日期尚未识别']
+    detail = project_sample_seal_result(result)
+    assert detail['review_reasons'] == result['review_reasons']
 
 
 @pytest.mark.parametrize('result', [

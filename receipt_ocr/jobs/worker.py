@@ -87,6 +87,7 @@ class JobWorker:
                     self._wake.wait(1)
                     continue
                 result, preview, error = None, '', ''
+                recognition_calls = None
                 try:
                     with progress_reporting(lambda event, claimed=job: self.store.update_progress(claimed, event),
                                             paused=self.store.is_paused):
@@ -94,11 +95,16 @@ class JobWorker:
                 except Exception as exc:
                     self.logger.exception('Queued receipt recognition failed')
                     error = str(exc) or type(exc).__name__
+                    recognition_calls = getattr(exc, 'recognition_calls', None)
                 # If persistence is temporarily busy, retry the commit using
                 # the computed result, rather than running OCR/API again.
                 while True:
                     try:
-                        self.store.finish(job, result, preview, error)
+                        if recognition_calls is None:
+                            self.store.finish(job, result, preview, error)
+                        else:
+                            self.store.finish(job, result, preview, error,
+                                              recognition_calls=recognition_calls)
                         break
                     except Exception:
                         self.logger.exception('Queue result commit failed')

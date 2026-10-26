@@ -16,7 +16,7 @@ export function createReviewStandard({ui, reviewState, services, onSaved, syncRe
       const sampleView = !!reviewState.sampleView;
       openPicker({ui, standard, requirement:check.requirement || item.fields?.['签章要求'],
         sources:[{id:item.id,filename:item.filename,candidates:check.candidates,review_revision:item.review_revision}],
-        onSave:async ({candidate,rotation}) => {
+        onSave:async ({candidate,rotation,recognizedOverride}) => {
           if (reviewState.reviewSaving) throw new Error('正在保存，请稍候。');
           if (reviewState.current?.id !== item.id || !!reviewState.sampleView !== sampleView) throw new Error('当前回单已变化，请重新打开。');
           if (reviewState.reviewDirty) throw new Error('本单有未保存的修改，请先保存稍后处理，再加入或替换标准章。');
@@ -26,7 +26,8 @@ export function createReviewStandard({ui, reviewState, services, onSaved, syncRe
           controls.forEach(([el])=>el.disabled=true);syncReviewReadiness?.();
           try {
             const save = sampleView ? services.samples.saveStandard : services.sealStandards.save;
-            return await save(item.id,{candidate_id:candidate.id,standard_revision:standard?.revision||0,review_revision:item.review_revision,rotation});
+            return await save(item.id,{candidate_id:candidate.id,standard_revision:standard?.revision||0,review_revision:item.review_revision,rotation,
+              ...(recognizedOverride === undefined ? {} : {recognized_override:recognizedOverride})});
           } finally {
             reviewState.reviewSaving=false;controls.forEach(([el,disabled])=>el.disabled=disabled);syncReviewReadiness?.();
           }
