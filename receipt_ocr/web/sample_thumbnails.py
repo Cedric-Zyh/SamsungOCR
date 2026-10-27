@@ -11,12 +11,13 @@ from PIL import Image, ImageOps
 
 class SampleThumbnails:
     VERSION = 'jpeg-480-square-v1'
+    # Share bounded stripes across cache instances, so one process cannot
+    # replace a thumbnail while another instance still has it open on Windows.
+    _locks = [threading.Lock() for _ in range(32)]
 
     def __init__(self, directory):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        # Bounded lock storage; concurrent requests for one image decode it once.
-        self._locks = [threading.Lock() for _ in range(32)]
 
     def _signature(self, source):
         stat = source.stat()
@@ -55,7 +56,16 @@ class SampleThumbnails:
                         continue
                     # Other processes can generate the same key safely: readers
                     # see either a complete old file or a complete replacement.
-                    os.replace(temporary, target)
+                    try:
+                        os.replace(temporary, target)
+                    except PermissionError:
+                        # A different process may have published this same key
+                        # and still be reading it. Reuse that complete file;
+                        # permission failures without a winner remain errors.
+                        if not target.is_file():
+                            raise
+                        if signature != self._signature(source):
+                            continue
                     try:
                         data = target.read_bytes()
                     except FileNotFoundError:

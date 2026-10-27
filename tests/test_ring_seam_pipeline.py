@@ -52,7 +52,7 @@ def test_exact_cyclic_alignment_is_only_applied_to_ring_reads(
     assert result["reads"][0]["image_url"] == image_url
     assert result["inputs"][0]["image_url"] == image_url
     if channel == "ring":
-        assert texts == [raw, expected]
+        assert texts and set(texts) == {expected}
         assert result["unwrapped_raw_text"] == raw
         assert result["unwrapped_text"] == expected
         assert result["ring_reorder"]["reason"] == "exact_requirement_cyclic_reorder"

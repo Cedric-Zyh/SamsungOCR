@@ -60,6 +60,21 @@ def test_image_comparison_detects_single_pixels_missing_files_and_palette_change
                for row in benchmark.compare_images(first, second)['differences'])
 
 
+@pytest.mark.parametrize('separator', ['/', '\\'])
+def test_normalization_handles_both_path_spellings_without_changing_ocr(tmp_path, separator):
+    root = tmp_path / 'output'
+    path = str(root.resolve() / 'artifacts' / 'seal.png').replace('\\', '/').replace('/', separator)
+    temporary = separator.join(['tmp', 'receipt-four-way-first', 'coarse-90.png'])
+    value = {'path': path, 'ocr': r'公司\A/B', 'temporary': separator + temporary,
+             'message': 'cannot read ' + path,
+             'outside': str(root.resolve()) + '-other/seal.png'}
+    actual = benchmark.normalize_result(value, root)
+    assert actual['path'] == '<RUN>/artifacts/seal.png'
+    assert actual['ocr'] == value['ocr'] and actual['outside'] == value['outside']
+    assert actual['message'] == 'cannot read <RUN>/artifacts' + separator + 'seal.png'
+    assert 'receipt-four-way-<RUN>' in actual['temporary']
+
+
 def test_replay_returns_complete_independent_response_and_counts_calls(tmp_path):
     source = tmp_path / 'source.jpg'
     external = {'enabled': True, 'ok': True, 'response': {'data': [{'xyxy': [1, 2, 3, 4], 'text_formatted': '章'}]}}
@@ -128,9 +143,21 @@ def test_network_guard_blocks_http_tcp_and_urllib_but_allows_unix_ipc():
             with socket.socket(socket.AF_INET) as connection:
                 with pytest.raises(RuntimeError, match='disabled'):
                     connection.connect(('127.0.0.1', 1))
-            assert socket.socket.connect(SimpleNamespace(family=socket.AF_UNIX), 'unused') == 'unix-ok'
+            if hasattr(socket, 'AF_UNIX'):
+                assert socket.socket.connect(SimpleNamespace(family=socket.AF_UNIX), 'unused') == 'unix-ok'
             assert len(attempts) == 4
     assert socket.create_connection is original
+
+
+def test_network_guard_still_blocks_ip_when_unix_sockets_are_unavailable(monkeypatch):
+    monkeypatch.delattr(socket, 'AF_UNIX', raising=False)
+    with benchmark.block_network() as attempts:
+        with pytest.raises(RuntimeError, match='disabled'):
+            socket.create_connection(('127.0.0.1', 1))
+        with socket.socket(socket.AF_INET6) as connection:
+            with pytest.raises(RuntimeError, match='disabled'):
+                connection.connect(('::1', 1))
+    assert len(attempts) == 2
 
 
 def test_cache_bypass_accepts_new_kwargs_and_restores_original_after_failure():

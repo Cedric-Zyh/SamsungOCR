@@ -6,10 +6,14 @@ from dataclasses import dataclass, field
 from functools import wraps
 from hashlib import sha256
 from pathlib import Path
+import sys
 from threading import Lock
 from time import perf_counter
 
 from .calls import record_recognition_cache_hit, record_model_initialization
+
+
+_WINDOWS = sys.platform == 'win32'
 
 
 @dataclass
@@ -138,7 +142,8 @@ def reuse_text_boxes(source, model_signature, recognize):
     if key in execution.text_boxes:
         result = deepcopy(execution.text_boxes[key])
         try:
-            stable = version == _file_version(path)
+            stable = (sha256(path.read_bytes()).digest() == content
+                      and version == _file_version(path))
         except OSError:
             stable = False
         if not stable:
@@ -161,4 +166,32 @@ def reuse_text_boxes(source, model_signature, recognize):
 
 def _file_version(path):
     stat = path.stat()
-    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    # On Windows/Python 3.11 st_ctime is creation time. Restoring mtime after
+    # a rewrite must not hide that rewrite, including an A -> B -> A sequence.
+    return (*version, _windows_change_time(path)) if _WINDOWS else version
+
+
+def _windows_change_time(path):
+    """Read FILE_BASIC_INFO.ChangeTime; unavailable metadata disables reuse."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_longlong) for name in (
+            'CreationTime', 'LastAccessTime', 'LastWriteTime', 'ChangeTime')]
+        _fields_.append(('FileAttributes', wintypes.DWORD))
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    query.restype = wintypes.BOOL
+    info = FileBasicInfo()
+    with open(str(path), 'rb') as source:
+        handle = msvcrt.get_osfhandle(source.fileno())
+        if not query(handle, 0, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    if info.ChangeTime <= 0:
+        raise OSError('File change time is unavailable')
+    return int(info.ChangeTime)

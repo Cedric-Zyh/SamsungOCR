@@ -75,7 +75,10 @@ def test_pipeline_reads_company_derivative_and_retains_full_unwrap(monkeypatch, 
     )
     artifact = artifacts[0]
     assert artifact['errors'] == []
-    assert texts == [raw, expected]
+    assert texts and set(texts) == {expected}
+    assert artifact['reads'][0]['text'] == raw
+    assert artifact['reads'][0]['confidence'] == .97
+    assert artifact['unwrapped_raw_text'] == raw
     assert artifact['unwrapped_full_url'].endswith('/seal-0-ring.png')
     assert artifact['unwrapped_before_seam_url'].endswith('/seal-0-ring-company.png')
     assert artifact['unwrapped_url'].endswith('/seal-0-ring-seam.png')

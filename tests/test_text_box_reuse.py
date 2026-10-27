@@ -240,6 +240,90 @@ def test_file_changes_during_hash_or_cached_lookup_fall_back_to_prediction(boxes
     assert len(calls) == 2
 
 
+def test_cached_lookup_rechecks_bytes_even_if_file_versions_are_unchanged(boxes, monkeypatch):
+    source, _, calls, _ = boxes
+
+    @recognition_run
+    def run():
+        first = paddle_runtime.detect_text_boxes(source)
+        version = execution._file_version(source)
+        versions = []
+
+        def unchanged_version(path):
+            versions.append(True)
+            if len(versions) == 2:
+                Image.new('RGB', (80, 40), 'blue').save(source)
+            return version
+
+        monkeypatch.setattr(execution, '_file_version', unchanged_version)
+        assert paddle_runtime.detect_text_boxes(source) != first
+        return {}
+
+    assert run()['processing_timings']['text_box_ocr_cache_hits'] == 0
+    assert len(calls) == 2
+
+
+def test_windows_change_time_rejects_aba_with_unchanged_stat_timestamps(boxes, monkeypatch):
+    source, duplicate, calls, state = boxes
+    Image.new('RGB', (80, 40), 'blue').save(duplicate)
+    state.rewrite, state.aba = duplicate.read_bytes(), True
+    initial_stat = source.stat()
+    generation = [0]
+    original_stat, original_write = Path.stat, Path.write_bytes
+
+    def unchanged_stat(path, *args, **kwargs):
+        return initial_stat if path == source else original_stat(path, *args, **kwargs)
+
+    def tracked_write(path, data):
+        count = original_write(path, data)
+        if path == source:
+            generation[0] += 1
+        return count
+
+    monkeypatch.setattr(execution, '_WINDOWS', True)
+    monkeypatch.setattr(execution, '_windows_change_time', lambda path: generation[0])
+    monkeypatch.setattr(Path, 'stat', unchanged_stat)
+    monkeypatch.setattr(Path, 'write_bytes', tracked_write)
+
+    @recognition_run
+    def run():
+        rewritten = paddle_runtime.detect_text_boxes(source)
+        state.rewrite = None
+        assert paddle_runtime.detect_text_boxes(source) != rewritten
+        return {}
+
+    assert run()['processing_timings']['text_box_ocr_cache_hits'] == 0
+    assert len(calls) == 2 and generation[0] == 2
+
+
+def test_unavailable_windows_change_time_falls_back_to_prediction(boxes, monkeypatch):
+    source, _, calls, _ = boxes
+
+    def unavailable(path):
+        raise OSError('file change information unavailable')
+
+    monkeypatch.setattr(execution, '_WINDOWS', True)
+    monkeypatch.setattr(execution, '_windows_change_time', unavailable)
+
+    @recognition_run
+    def run():
+        assert paddle_runtime.detect_text_boxes(source)
+        assert paddle_runtime.detect_text_boxes(source)
+        return {}
+
+    assert run()['processing_timings']['text_box_ocr_cache_hits'] == 0
+    assert len(calls) == 2
+
+
+@pytest.mark.skipif(not execution._WINDOWS, reason='Native Windows file-information API')
+def test_native_windows_change_time_query_closes_its_file_handle(tmp_path):
+    source = tmp_path / 'file.bmp'
+    source.write_bytes(b'input')
+    assert execution._windows_change_time(source) > 0
+    source.unlink()
+    assert not source.exists()
+
+
 @pytest.mark.parametrize('failure', ['stat', 'read'])
 def test_cache_file_read_failures_do_not_replace_existing_prediction_behavior(boxes, monkeypatch, failure):
     source, _, calls, _ = boxes

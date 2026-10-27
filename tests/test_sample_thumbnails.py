@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from pathlib import Path
 import json
 import os
 import threading
@@ -118,13 +119,21 @@ def test_concurrent_thumbnail_requests_share_one_decode(tmp_path, monkeypatch):
         image.verify()
 
 
-def test_independent_cache_instances_publish_complete_jpegs(tmp_path):
+def test_independent_cache_instances_publish_complete_jpegs(tmp_path, monkeypatch):
     source = tmp_path / 'sample.jpg'
     exif = Image.Exif()
     exif[274] = 6
     Image.new('RGB', (600, 900), 'white').save(source, exif=exif)
     caches = [SampleThumbnails(tmp_path / 'cache') for _ in range(4)]
     barrier = threading.Barrier(len(caches))
+    original_open = Image.open
+    calls = []
+
+    def observed_open(*args, **kwargs):
+        calls.append(args[0])
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(Image, 'open', observed_open)
 
     def request_thumbnail(cache):
         barrier.wait()
@@ -133,7 +142,32 @@ def test_independent_cache_instances_publish_complete_jpegs(tmp_path):
     with ThreadPoolExecutor(max_workers=len(caches)) as pool:
         responses = list(pool.map(request_thumbnail, caches))
     assert all(response == responses[0] for response in responses)
+    assert len(calls) == 1
     assert len(list(caches[0].directory.iterdir())) == 1
     with Image.open(BytesIO(responses[0][0])) as image:
         assert image.size == (480, 320)
         assert image.getexif().get(274) is None
+
+
+@pytest.mark.parametrize('winner', [False, True])
+def test_replace_permission_failure_only_reuses_an_already_published_thumbnail(tmp_path, monkeypatch, winner):
+    source = tmp_path / 'sample.png'
+    Image.new('RGB', (600, 900), 'red').save(source)
+    cache = SampleThumbnails(tmp_path / 'cache')
+
+    def competing_replace(temporary, target):
+        if winner:
+            Path(target).write_bytes(Path(temporary).read_bytes())
+        raise PermissionError('another process has the destination open')
+
+    monkeypatch.setattr(os, 'replace', competing_replace)
+    if winner:
+        data, key = cache.get(source)
+        with Image.open(BytesIO(data)) as image:
+            image.verify()
+        assert len(list(cache.directory.glob('*.jpg'))) == 1 and key
+    else:
+        with pytest.raises(PermissionError):
+            cache.get(source)
+        assert not list(cache.directory.glob('*.jpg'))
+    assert not list(cache.directory.glob('*.tmp'))

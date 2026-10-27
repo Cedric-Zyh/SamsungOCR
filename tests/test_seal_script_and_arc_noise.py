@@ -31,7 +31,7 @@ def test_script_equivalence_does_not_supply_missing_or_incorrect_content(expecte
 
 
 def test_display_and_comparison_use_the_same_character_table():
-    source = (Path(__file__).resolve().parents[1] / 'static/modules/core/seal_script.mjs').read_text()
+    source = (Path(__file__).resolve().parents[1] / 'static/modules/core/seal_script.mjs').read_text(encoding='utf-8')
     literal = source.split('const pairs = Array.from(', 1)[1].split(');', 1)[0]
     assert json.loads(literal) == _PAIRS
     assert simplify_seal_text('深圳歐瑞特收貨專用章（1）') == '深圳欧瑞特收货专用章（1）'

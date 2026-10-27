@@ -32,7 +32,7 @@ import urllib.request
 
 DEFAULT_RESULT_IDS = (1858, 1857, 1846, 1842, 1843, 1875, 1814)
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
-TEMP_DIRECTORY = re.compile(r'(?<=/)(receipt-four-way-|seal-horizontal-|receipt-printed-page-|receipt-grade-)[A-Za-z0-9_-]+(?=/|$)')
+TEMP_DIRECTORY = re.compile(r'(?<=[/\\])(receipt-four-way-|seal-horizontal-|receipt-printed-page-|receipt-grade-)[A-Za-z0-9_-]+(?=[/\\]|$)')
 
 
 @contextmanager
@@ -155,6 +155,7 @@ def load_standards(database):
 def normalize_result(result, artifact_root):
     """Drop only measured runtime fields; retain OCR, IDs, links and evidence."""
     root = str(Path(artifact_root).resolve())
+    portable_root = root.replace('\\', '/').rstrip('/')
 
     def normalize(value, top=False):
         if isinstance(value, dict):
@@ -163,7 +164,14 @@ def normalize_result(result, artifact_root):
         if isinstance(value, (list, tuple)):
             return [normalize(item) for item in value]
         if isinstance(value, str):
-            value = value.replace(root + '/', '<RUN>/')
+            portable = value.replace('\\', '/')
+            if portable == portable_root:
+                value = '<RUN>'
+            elif portable.startswith(portable_root + '/'):
+                value = '<RUN>/' + portable[len(portable_root) + 1:]
+            else:
+                for spelling in (root, portable_root, portable_root.replace('/', '\\')):
+                    value = value.replace(spelling + '/', '<RUN>/').replace(spelling + '\\', '<RUN>/')
             if value == root:
                 value = '<RUN>'
             return TEMP_DIRECTORY.sub(lambda match: match.group(1) + '<RUN>', value)
