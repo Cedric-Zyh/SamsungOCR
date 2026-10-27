@@ -45,6 +45,22 @@ def _name_terms(standard):
     return {**standard, 'name_terms': seal_name_terms(standard['requirement'])}
 
 
+def update_standard_layout(ctx, standard_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get('horizontal_text') not in ('unmarked', 'present', 'absent'):
+        return jsonify(error='请选择有、无或未标注'), 400
+    revision = payload.get('standard_revision')
+    if type(revision) is not int:
+        return jsonify(error='请刷新标准章后重新设置'), 400
+    try:
+        standard = ctx.database.update_seal_standard_layout(standard_id, payload['horizontal_text'], expected_revision=revision)
+    except KeyError:
+        abort(404)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 409 if '已变化' in str(exc) else 400
+    return jsonify(standard=_name_terms(standard))
+
+
 def standard_sources(ctx, standard_id):
     standard = next((s for s in ctx.database.list_seal_standards() if s["id"] == standard_id), None)
     if standard is None:
@@ -91,6 +107,10 @@ def register_standard(ctx, result_id):
             candidate = next((c for c in seal_candidates(current) if c["id"] == payload.get("candidate_id")), None)
             if candidate is None or not candidate["can_register"]:
                 raise ValueError("请选择有完整章色处理图、形状和颜色的客户印章")
+            horizontal_text = payload.get('horizontal_text', 'unmarked')
+            if (horizontal_text not in ('unmarked', 'present', 'absent')
+                    or candidate['shape'] not in {'round', 'ellipse'} and horizontal_text != 'unmarked'):
+                raise ValueError('章内横排文字设置无效；仅圆章和椭圆章可设置')
             previous = ctx.database.get_seal_standard(requirement, _connection=connection)
             expected_revision = previous["revision"] if previous else 0
             if type(payload.get("standard_revision")) is not int or payload["standard_revision"] != expected_revision:
@@ -110,6 +130,7 @@ def register_standard(ctx, result_id):
                 "recognized": recognized, "ocr_recognized": candidate["recognized"],
                 "recognized_source": "manual" if recognized != candidate["recognized"] else "ocr",
                 "shape": candidate["shape"], "color": candidate["color"],
+                "horizontal_text": horizontal_text,
                 "source_result_id": result_id, "source_filename": current["filename"], "candidate_id": candidate["id"],
                 "source_kind": ctx.source_kind,
             }, expected_revision=expected_revision, _connection=connection)

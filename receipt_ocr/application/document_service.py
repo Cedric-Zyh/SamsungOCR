@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from receipt_ocr.storage.artifact_dedup import deduplicate_artifacts
 from receipt_ocr.runtime.calls import capture_recognition_calls
+from receipt_ocr.providers.model_manager import local_model_manager
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ class DocumentRecognitionService:
             raise FileNotFoundError("原始图片不存在，请补充图片后重新识别")
         token = uuid4().hex
         preview_name = f"{token}.jpg"
-        with capture_recognition_calls(source=source, artifact_dir=self.artifact_dir / token,
+        with local_model_manager.activity(), capture_recognition_calls(source=source, artifact_dir=self.artifact_dir / token,
                                        artifact_url_prefix=f"/files/artifacts/{token}") as calls:
             result = self.analyze(
                 source, self.preview_dir / preview_name,

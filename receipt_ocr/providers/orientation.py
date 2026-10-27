@@ -4,6 +4,7 @@ import os
 import threading
 
 from receipt_ocr.runtime.calls import recognition_call, check_prediction_errors
+from receipt_ocr.runtime.execution import measure
 
 
 MODEL_NAME = "PP-LCNet_x0_25_textline_ori"
@@ -18,29 +19,36 @@ _doc_classifier = None
 
 _lock = threading.Lock()
 
+def _document_classifier():
+    global _doc_classifier
+    from receipt_ocr.providers.paddle_runtime import paddle_model_home
+    with _lock:
+        if _doc_classifier is None:
+            with measure('paddle_doc_orientation_model_setup'):
+                os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
+                os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+                os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+                from paddleocr import DocImgOrientationClassification
+
+                # Use the same native Paddle weights as the verified classifier;
+                # the page OCR engine may request a separate ONNX model download.
+                _doc_classifier = DocImgOrientationClassification(
+                    model_name=DOC_ORIENTATION_MODEL_NAME,
+                    device="cpu",
+                )
+        return _doc_classifier
+
+
 def classify_doc_orientation(image_path):
     """Return Paddle's four-way document orientation prediction for one crop."""
-    global _doc_classifier
-    from receipt_ocr.providers.paddle_runtime import paddle_model_home, _prediction_slot
+    from receipt_ocr.providers.paddle_runtime import _prediction_slot
     from receipt_ocr.runtime.scope import provider_allowed
-
     if not provider_allowed(DOC_ORIENTATION_PROVIDER):
         return {"angle": None, "confidence": 0.0, "model": DOC_ORIENTATION_MODEL_NAME}
-    with _prediction_slot(), _lock:
-        if _doc_classifier is None:
-            os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
-            os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
-            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            from paddleocr import DocImgOrientationClassification
-
-            # Use the same native Paddle weights as the verified classifier;
-            # the page OCR engine may request a separate ONNX model download.
-            _doc_classifier = DocImgOrientationClassification(
-                model_name=DOC_ORIENTATION_MODEL_NAME,
-                device="cpu",
-            )
+    with _prediction_slot():
+        classifier = _document_classifier()
         with recognition_call(DOC_ORIENTATION_PROVIDER, "方向识别", image_path) as invocation:
-            predictions = list(_doc_classifier.predict(input=str(image_path), batch_size=1))
+            predictions = list(classifier.predict(input=str(image_path), batch_size=1))
             check_prediction_errors(invocation, predictions)
     if not predictions:
         return {"angle": None, "confidence": 0.0, "model": DOC_ORIENTATION_MODEL_NAME}
@@ -63,24 +71,31 @@ def classify_doc_orientation(image_path):
         "confidence": round(confidence, 4),
     }
 
+def _line_classifier():
+    global _classifier
+    from receipt_ocr.providers.paddle_runtime import paddle_model_home, paddle_engine
+    with _lock:
+        if _classifier is None:
+            with measure('paddle_line_orientation_model_setup'):
+                os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
+                os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+                os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+                from paddleocr import TextLineOrientationClassification
+
+                engine = paddle_engine()
+                _classifier = TextLineOrientationClassification(
+                    model_name=MODEL_NAME, device="cpu",
+                    **({"engine": engine} if engine else {}),
+                )
+        return _classifier
+
+
 def classify_lines(lines):
     """Load the small orientation model once; images never leave the machine."""
-    global _classifier
-    from receipt_ocr.providers.paddle_runtime import paddle_model_home, _prediction_slot, paddle_engine
-
-    with _prediction_slot(), _lock:
-        if _classifier is None:
-            os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
-            os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
-            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            from paddleocr import TextLineOrientationClassification
-
-            engine = paddle_engine()
-            _classifier = TextLineOrientationClassification(
-                model_name=MODEL_NAME, device="cpu",
-                **({"engine": engine} if engine else {}),
-            )
+    from receipt_ocr.providers.paddle_runtime import _prediction_slot
+    with _prediction_slot():
+        classifier = _line_classifier()
         with recognition_call("paddle_textline_ori", "文字行方向识别", lines) as invocation:
-            predictions = list(_classifier.predict(input=lines, batch_size=1))
+            predictions = list(classifier.predict(input=lines, batch_size=1))
             check_prediction_errors(invocation, predictions)
             return predictions

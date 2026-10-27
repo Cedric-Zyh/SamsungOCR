@@ -4,6 +4,7 @@ import {standardDetail, standardDate, shapeLabel, colorLabel} from './standard_v
 import {groupStandards} from './standard_groups.mjs';
 import {bindStandardPreview} from './standard_preview.mjs';
 import {recognitionInfoMarkup, recognitionInfoError, bindCorrectionSources} from './recognition_info.mjs';
+import {bindHorizontalSetting} from './horizontal_setting.mjs';
 
 const searchKey = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase();
 
@@ -15,9 +16,13 @@ export function createSealCenter({ui, services, openSource}) {
   const groupOpen = new Map();
   const root = () => $('[data-page="seal-center"]');
 
+  function itemCopy(description) {
+    const parts = [description.branch, description.identities, description.seal].filter(Boolean);
+    return {title: parts[0] || (description.company ? '标准章' : description.label), kind: parts.slice(1).join(' · ')};
+  }
+
   function itemMarkup({standard: s, description}) {
-    const title = description.branch || description.seal || (description.company ? '标准章' : description.label);
-    const kind = description.branch ? description.seal : '';
+    const {title, kind} = itemCopy(description);
     const date = standardDate(s.updated_at);
     return `<button type="button" class="seal-library-item ${s.id === selectedId ? 'is-selected' : ''}" data-standard-id="${s.id}" aria-pressed="${s.id === selectedId}" aria-label="${escapeHtml(s.requirement)}" title="${escapeHtml(s.requirement)}">
       <img src="${escapeHtml(s.image_url)}" alt="" loading="lazy"><span class="seal-library-copy"><b>${escapeHtml(title)}</b>${kind ? `<span class="seal-library-kind">${escapeHtml(kind)}</span>` : ''}<small title="更新于 ${escapeHtml(date)}">${shapeLabel(s.shape)} · ${colorLabel(s.color)}${date ? ` · ${escapeHtml(date.slice(5, 10))} 更新` : ''}</small></span><svg class="seal-library-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>`;
@@ -30,26 +35,28 @@ export function createSealCenter({ui, services, openSource}) {
     // expansion must not overwrite the user's normal browsing choices.
     if (renderedSearch === '') $$('[data-standard-group]', node).forEach(group => groupOpen.set(group.dataset.standardGroup, group.open));
     const search = searchKey($('#seal-center-search').value);
-    const visible = groups.map(group => ({...group, matches: group.items.filter(({standard}) => !search || searchKey(standard.requirement).includes(search))})).filter(group => group.matches.length);
+    const visible = groups.map(group => ({...group, matches: group.items.filter(({standard, description}) => !search
+      || searchKey([standard.requirement, description.company, description.label].join(' ')).includes(search))})).filter(group => group.matches.length);
     const matches = visible.flatMap(group => group.matches.map(item => item.standard));
     const previousId = selectedId;
     if (!matches.some(s => s.id === selectedId)) selectedId = (matches.find(s => s.id === lastSelectedId) || matches[0])?.id ?? null;
     const scrollTop = search === renderedSearch ? list.scrollTop : 0;
     renderedSearch = search;
     $('[data-standard-count]', node).textContent = String(standards.length);
-    $('[data-standard-count]', node).setAttribute('aria-label', `${standards.length} 枚标准章`);
+    $('[data-standard-count]', node).setAttribute('aria-label', `${standards.length} 条标准章档案`);
     $('[data-standard-summary]', node).textContent = search
-      ? `${visible.length} 组 · ${matches.length} 枚匹配 / 共 ${standards.length} 枚`
-      : `共 ${groups.length} 组 · ${standards.length} 枚`;
+      ? `${visible.length} 组 · ${matches.length} 条匹配 / 共 ${standards.length} 条`
+      : `共 ${groups.length} 组 · ${standards.length} 条`;
     $('[data-standard-list-status]', node).textContent = matches.length ? '' : search
-      ? '没有找到匹配的档案，试试公司、分公司或章号。'
+      ? '没有找到匹配的档案，试试名称、代码、电话或章号。'
       : '暂无标准章。请在回单复核页选择一枚客户章加入。';
     list.innerHTML = visible.map(group => {
       const selected = group.matches.some(item => item.standard.id === selectedId);
       if (expandSelection && selected) groupOpen.set(group.key, true);
       const open = search || groupOpen.get(group.key) || false;
-      const count = group.matches.length === group.items.length ? `${group.items.length} 枚` : `${group.matches.length} / ${group.items.length} 枚`;
-      return `<details class="seal-library-group ${selected ? 'is-current' : ''}" data-standard-group="${escapeHtml(group.key)}" ${open ? 'open' : ''}><summary class="seal-group-heading"><span class="seal-group-name">${escapeHtml(group.title)}</span><span class="seal-group-count">${count}</span></summary><div class="seal-group-items">${group.matches.map(item => itemMarkup(item)).join('')}</div></details>`;
+      const count = group.matches.length === group.items.length ? `${group.items.length} 条` : `${group.matches.length} / ${group.items.length} 条`;
+      const note = group.sameName ? '<small class="seal-group-note">同名归档</small>' : '';
+      return `<details class="seal-library-group ${selected ? 'is-current' : ''}" data-standard-group="${escapeHtml(group.key)}" ${open ? 'open' : ''}><summary class="seal-group-heading"><span class="seal-group-name">${escapeHtml(group.title)}${note}</span><span class="seal-group-count">${count}</span></summary><div class="seal-group-items">${group.matches.map(item => itemMarkup(item)).join('')}</div></details>`;
     }).join('');
     $$('[data-standard-group]', node).forEach(group => group.addEventListener('toggle', () => {
       if (group.isConnected && !search) groupOpen.set(group.dataset.standardGroup, group.open);
@@ -98,6 +105,15 @@ export function createSealCenter({ui, services, openSource}) {
     detail.innerHTML = standardDetail(standard);
     disposePreview = bindStandardPreview(detail);
     detail.scrollTop = 0;
+    bindHorizontalSetting(detail, {standard, save:services.sealStandards.updateLayout,
+      setSaving:value => { saving = value; },
+      onSaved:updated => {
+        if (serial !== detailRequest) return;
+        standards = standards.map(item => item.id === id ? updated : item);
+        groups = groupStandards(standards);
+        renderList();
+        toast('章内横排文字设置已保存，下次识别或重新测试生效。');
+      }});
     const infoHost = $('[data-standard-recognition-info]', detail);
     const loadInfo = async () => {
       if (!infoHost) return;
@@ -135,7 +151,10 @@ export function createSealCenter({ui, services, openSource}) {
     });
     const related = groups.find(group => group.items.some(item => item.standard.id === id))?.items.filter(item => item.standard.id !== id) || [];
     if (related.length) {
-      detail.insertAdjacentHTML('beforeend', `<section class="seal-related" aria-label="同公司印章"><div class="seal-related-heading"><h3>同公司印章 <small>${related.length} 枚</small></h3><span>点击查看，章号与分公司分别核对</span></div><div class="seal-related-list">${related.map(({standard: s, description}) => `<button type="button" class="seal-related-item" data-related-standard="${s.id}" title="${escapeHtml(s.requirement)}"><img src="${escapeHtml(s.image_url)}" alt="" loading="lazy"><span class="seal-related-copy"><b>${escapeHtml(description.branch || description.seal || '公司印章')}</b><small>${escapeHtml(description.branch ? description.seal : `${shapeLabel(s.shape)} · ${colorLabel(s.color)}`)}</small></span></button>`).join('')}</div></section>`);
+      detail.insertAdjacentHTML('beforeend', `<section class="seal-related" aria-label="同组标准章"><div class="seal-related-heading"><h3>同组标准章 <small>${related.length} 条</small></h3><span>分支、代码与章号分别核对</span></div><div class="seal-related-list">${related.map(({standard: s, description}) => {
+        const {title, kind} = itemCopy(description);
+        return `<button type="button" class="seal-related-item" data-related-standard="${s.id}" title="${escapeHtml(s.requirement)}"><img src="${escapeHtml(s.image_url)}" alt="" loading="lazy"><span class="seal-related-copy"><b>${escapeHtml(title)}</b><small>${escapeHtml(kind || `${shapeLabel(s.shape)} · ${colorLabel(s.color)}`)}</small></span></button>`;
+      }).join('')}</div></section>`);
       $$('[data-related-standard]', detail).forEach(button => button.addEventListener('click', () => {
         if (saving) return;
         const targetId = Number(button.dataset.relatedStandard);
@@ -157,11 +176,12 @@ export function createSealCenter({ui, services, openSource}) {
         }
         trigger.disabled=false; trigger.textContent='替换标准章';
         openStandardDialog({ui,standard:data.standard,requirement:data.standard.requirement,sources:data.sources,
-          onSave:async ({source,candidate,rotation,recognizedOverride}) => {
+          onSave:async ({source,candidate,rotation,recognizedOverride,horizontalText}) => {
             if(saving) throw new Error('正在保存，请稍候。');
             saving=true;
             try { return await services.sealStandards.save(source.id,{candidate_id:candidate.id,
               standard_revision:data.standard.revision,review_revision:source.review_revision,rotation,
+              ...(horizontalText === undefined ? {} : {horizontal_text:horizontalText}),
               ...(recognizedOverride === undefined ? {} : {recognized_override:recognizedOverride})}); }
             finally { saving=false; }
           },

@@ -8,7 +8,9 @@ import re
 from .seal_station_fields import compare_station_fields
 
 
-_LABEL = re.compile(r"授权代码:?|地址:|电话:")
+# OCR may read the address-label colon as a comma. Treat only that explicit
+# label boundary as equivalent; punctuation inside names/codes stays literal.
+_LABEL = re.compile(r"授权代码:?|地址[:,，]|电话:")
 _CONTACT = {"地址", "电话"}
 _LEADING_PHONE = re.compile(
     r"(?:电话:)?(?P<phone>0[0-9]{2,3}-[0-9]{7,8})"
@@ -66,7 +68,7 @@ def _fields(text):
         return None
     fields = {"名称": name}
     for index, marker in enumerate(markers):
-        key = marker.group().rstrip(":")
+        key = marker.group().rstrip(":,，")
         end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
         value = text[marker.end():end]
         if not value or key in fields:

@@ -4,6 +4,8 @@ import {createArtifactImages} from './artifact_images.mjs';
 import {renderSampleAnnotations} from './sample_annotations.mjs';
 import {problemHistoryChanges} from './problem_annotations.mjs';
 import {simplifySealText} from '../core/seal_script.mjs';
+import {renderReceivingEvidence} from './receiving_evidence.mjs';
+import {renderReceivingNumberEvidence} from './receiving_number_evidence.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
@@ -75,26 +77,31 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         : item.multi_zone_layout.method === 'ellipse_department_rows'
         ? '章内部门与章型文字分别识别；填白内部文字后，再展开读取公司名称。'
         : item.multi_zone_layout.method === 'ellipse_continuous_name'
-        ? '章型和编号分别识别；填白内部文字后，沿连续外环完整展开公司名称，保留首尾文字。'
+        ? (item.company_noise?.status === 'adopted'
+          ? '章型和编号分别识别；公司环字隔离首尾杂纹，三路重读一致后采用，原图与原读数保留供核对。'
+          : '章型和编号分别识别；填白内部文字后，沿连续外环完整展开公司名称，保留首尾文字。')
         : '自动定位完整横排文字，保留外圈两端；按实际文字分布展开弧段，电话单独记录。';
       const regionCard = input => {
         const reads = (item.reads || []).filter(read => read.input_id === input.id);
         const label = reads.find(read => read.zone_label)?.zone_label || input.label;
         return artifactCard(label, input.image_url, reads.map(read => read.text).join(' | '),
-          input.channel === 'ring' || input.zone_name === 'upper' || input.zone_name === 'lower');
+          input.channel === 'ring' || input.zone_name === 'company' || input.zone_name === 'upper' || input.zone_name === 'lower');
       };
       const regionInputs = (item.inputs || []).filter(input => input.zone_name);
       const regions = regionInputs.filter(input => !input.superseded_by).map(regionCard).join('');
       const previous = regionInputs.filter(input => input.superseded_by).map(regionCard).join('');
+      const previousLabel = item.company_noise?.status && item.company_noise.status !== 'not_applicable'
+        ? '原始与校验识别（仅供核对）' : '原分段识别（仅供核对）';
       return `<section class="seal-input-chain"><h5>印章分区识别</h5><small>${explanation}</small><div class="artifact-grid">${
         artifactCard('旋正增强图', oriented)
       }${artifactCard('自动文字分区', item.multi_zone_layout.overlay_url)}${
         artifactCard('内部文字填白后', item.ring_input_url)
-      }${regions}</div>${previous ? `<details><summary>原分段识别（仅供核对）</summary><div class="artifact-grid">${previous}</div></details>` : ''}</section>`;
+      }${regions}</div>${previous ? `<details><summary>${previousLabel}</summary><div class="artifact-grid">${previous}</div></details>` : ''}</section>`;
     }
     const numberRecovery = item.stamp_number_recovery?.status === 'restored' ? item.stamp_number_recovery : null;
     const hasMaskedTypeRow = Array.isArray(item.ring_input_box) && item.ring_input_box.length === 4;
-    const measuredRow = ['verified_glyph_row', 'verified_local_row', 'verified_residual_row_glyphs'].includes(item.ring_input_mask_method);
+    const multipleRows = item.ring_input_mask_method === 'verified_horizontal_rows';
+    const measuredRow = ['verified_glyph_row', 'verified_local_row', 'verified_residual_row_glyphs', 'verified_horizontal_rows'].includes(item.ring_input_mask_method);
     const tightMask = measuredRow || item.ring_input_mask_method === 'contained_text_ink';
     const ringInputLabel = item.ring_number_mask?.status === 'applied'
       ? '旋正章色图 · 横排文字与已确认编号笔画填白（环形展开来源）'
@@ -110,6 +117,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       ? '汉字段展开图（公司名称识别输入）'
       : item.ring_company_selection
       ? `${unwrapLabel}（公司名称输入，已排除小字号段）`
+      : item.ring_geometry === 'round_observed_rim_letter_band'
+      ? `${unwrapLabel}（外圈已校准，内界保留安全余量）`
       : item.ring_geometry === 'stable_strong_ellipse_normals'
       ? `${unwrapLabel}（边框重新定位，双档识别一致）`
       : item.ring_geometry === 'fitted_ellipse_normals'
@@ -129,9 +138,15 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const cards = [
       artifactCard(numberRecovery ? '旋正后的章色图（已保留编号笔画）' : '旋正后的章色图（未覆盖）', oriented),
       artifactCard('检测到的横向文字区域（仅定位/章型 OCR）', item.round_type_band_url, item.round_type_row_text || item.round_type_band_text || ''),
+      ...(item.horizontal_rows || []).filter(row => row.kind !== 'type').map(row =>
+        artifactCard('章内横排文字（独立识别）', row.image_url, row.text || '')),
       artifactCard(ringInputLabel, item.ring_input_url),
-      artifactCard(item.ring_han_selection ? '自动定位的汉字弧段（展开前）' : '环形文字带（展开前）', item.ring_text_band_url),
+      artifactCard(item.ring_han_selection ? '自动定位的汉字弧段（展开前）'
+        : item.round_rim_calibration?.status === 'applied' ? '校准后的环形文字带（展开前）'
+        : '环形文字带（展开前）', item.ring_text_band_url),
       artifactCard(unwrapCardLabel, item.unwrapped_url, item.unwrapped_text || '', true),
+      item.unwrapped_uncalibrated_url ? artifactCard(
+        '校准前展开图（仅供核对）', item.unwrapped_uncalibrated_url, '', true) : '',
       alternativeSelected && item.ring_primary?.image_url ? artifactCard(
         '原主路展开图（未采用，保留核对）',
         item.ring_primary.image_url, item.ring_primary.text || '', true)
@@ -145,7 +160,9 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       item.unwrapped_full_url ? artifactCard(item.ring_han_selection
         ? '完整环形展开图（其他文字与数字仅供核对）'
         : '完整环形展开图（含小字号段，仅供核对）', item.unwrapped_full_url, '', true) : '',
-      item.ring_border_url ? artifactCard(item.ring_strong_border
+      item.ring_border_url ? artifactCard(item.round_rim_calibration?.status === 'applied'
+        ? '圆章边界核对（绿色实测，黄色补全，蓝线为保守取样内界）'
+        : item.ring_strong_border
         ? '重新定位的椭圆边框（两档定位一致）'
         : '检测到的椭圆边框（绿色实测，黄色补全）', item.ring_border_url) : '',
       item.stamp_number_url ? artifactCard(numberLabel, item.stamp_number_url, item.stamp_number_text || '') : '',
@@ -159,6 +176,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       ? '<small class="low-note">当前记录缺少环形 OCR 实际输入图，请重新识别生成新版证据。</small>'
       : item.ring_han_selection
         ? '<small>先按外圈位置保留完整字高，再自动分离汉字段；两档增强识别一致后用于公司名称识别。其他文字与数字保留供核对，不参与公司名称匹配。</small>'
+      : multipleRows
+        ? '<small>分别识别章内横排文字和章型行，按各行检测范围填白笔画，保留外边框及外圈文字，再展开读取环字。</small>'
       : measuredRow
         ? `<small>按完整横排文字范围识别并填白该行笔画，保留外边框；再从第 3 张图展开读取环字。${escapeHtml(box)}</small>`
       : tightMask
@@ -167,13 +186,17 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         ? '<small>环形 OCR 读取已排除小字号段的公司名称展开图；完整展开图保留供核对。</small>'
       : hasMaskedTypeRow
         ? `<small>环形 OCR 实际读取的是第 3 张图；只将 OCR dt_polys 合并出的检测框填白，${numberRecovery ? '环形输入仍使用编号修复前的章色图' : '旋正后的章色图保持原样'}${escapeHtml(box)}</small>`
-        : '<small>未检测到横向文字，环形 OCR 直接读取旋正后的整章图。</small>';
-    return `<section class="seal-input-chain"><h5>印章 OCR 输入链路</h5>${missing}<div class="artifact-grid">${cards}</div></section>`;
+        : item.horizontal_text_policy?.skipped_horizontal_search === true
+          ? '<small>环形 OCR 直接读取章色图，继续进行外圈定位和环字展开。</small>'
+          : '<small>未检测到横向文字，环形 OCR 直接读取旋正后的整章图。</small>';
+    const manualLayout = item.horizontal_text_policy?.skipped_horizontal_search === true
+      ? '<small>标准章人工设置：无横排文字；已跳过横排定位、多角度搜索及增强重试。</small>' : '';
+    return `<section class="seal-input-chain"><h5>印章 OCR 输入链路</h5>${manualLayout}${missing}<div class="artifact-grid">${cards}</div></section>`;
   }
 
   function modernSealReads(item) {
     const rows = (item.reads || []).filter(row => row?.text).map(row => {
-      const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'number' ? '章内编号' : row.channel === 'serial' ? '环形编号' : row.channel || 'OCR');
+      const channel = row.zone_label || (row.channel === 'ring' ? '环形文字' : row.channel === 'center' ? '章型分带' : row.channel === 'horizontal' ? '章内横排文字' : row.channel === 'number' ? '章内编号' : row.channel === 'serial' ? '环形编号' : row.channel || 'OCR');
       const confidence = row.confidence == null ? '' : ` · ${percent(row.confidence)}`;
       const display = simplifySealText(row.text);
       const original = display !== row.text ? ` title="原始 OCR：${escapeHtml(row.text)}"` : '';
@@ -329,7 +352,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         const orientationStatus = docOrientation && !(Number(item.orientation.confidence) >= 0.9)
           ? '文档方向预测置信度不足，保留原方向；旧结果可重新识别'
           : docOrientation ? '文档方向粗校正，未确认章中文字方向' : item.orientation?.status || '';
-        const orientedLabel = docOrientation ? '文档方向预测图（未确认）' : '旋正后的保留章色图';
+        const orientedLabel = item.pale_grid_enhancement ? '淡色红章增强（逐行识别来源）'
+          : docOrientation ? '文档方向预测图（未确认）' : '旋正后的保留章色图';
         const orientationInfo = item.orientation
           ? `<article class="artifact-group"><h4>${item.shape === '椭圆' ? '椭圆章文字方向' : (item.shape === '圆形' ? '圆章文字方向' : item.shape === '矩形' ? '矩形印章方向' : '印章文字方向')} <small>${escapeHtml(orientationStatus)}${item.orientation.angle != null ? ` · 检测角度 ${Number(item.orientation.angle).toFixed(1)}°` : ''}${item.orientation.confidence ? ` · ${percent(item.orientation.confidence)}` : ''}${item.orientation.ellipse_ocr_source ? ' · OCR 已使用最终拉伸校正图' : ''}</small></h4></article>` : '';
         const consensus = reference?.consensus_matches || [];
@@ -391,7 +415,9 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         const primaryCards = modernRound
           ? artifactCard('印章原始区域', item.original_url)
           : `${artifactCard('印章原始区域', item.original_url)}${item.color_isolated_oriented_url ? artifactCard(orientedLabel, item.color_isolated_oriented_url) : ''}${ellipse && item.ellipse_normalized_url ? artifactCard('椭圆拉伸校正图（后续 OCR 输入）', item.ellipse_normalized_url) : ''}${item.round_type_band_url ? artifactCard(typeBandLabel, item.round_type_band_url) : ''}${item.ring_input_url ? artifactCard('章型分带白底覆盖图（环形 OCR 实际输入）', item.ring_input_url) : ''}${item.code_line_url ? artifactCard('矩形编号章数字行', item.code_line_url) : ''}${artifactCard(unwrapLabel, item.unwrapped_url)}`;
-        const modernChain = modernRound ? modernSealInputChain(item, typeBandLabel, unwrapLabel) : '';
+        const modernChain = renderReceivingEvidence(item, {artifactCard, escapeHtml})
+          + renderReceivingNumberEvidence(item, {artifactCard, escapeHtml})
+          + (modernRound ? modernSealInputChain(item, typeBandLabel, unwrapLabel) : '');
         const debugCards = `${artifactCard('颜色分离高对比图', item.isolated_url)}${item.color_isolated_url ? artifactCard('保留章色白底图', item.color_isolated_url) : ''}${rectangularRowCards}${reference?.candidate_chromatic_crop_url ? artifactCard('章色稳健裁剪图（SIFT）', reference.candidate_chromatic_crop_url) : ''}${reference?.candidate_trimmed_chromatic_crop_url ? artifactCard('去稀疏噪点章色裁剪图（SIFT）', reference.candidate_trimmed_chromatic_crop_url) : ''}${(item.unwrapped_band_urls || []).map((url, index) => artifactCard(`${ellipse ? '椭圆' : '圆章'}展开独立分带 ${index + 1}`, url)).join('')}${item.robust_unwrapped_url ? artifactCard(`稳健边界${ellipse ? '椭圆' : '圆章'}展开图`, item.robust_unwrapped_url) : ''}${(item.robust_unwrapped_band_urls || []).map((url, index) => artifactCard(`稳健${ellipse ? '椭圆' : '圆心'}独立分带 ${index + 1}`, url)).join('')}${item.unwrapped_rotated_url ? artifactCard(unwrap180Label, item.unwrapped_rotated_url) : ''}${item.color_isolated_rotations_url ? artifactCard('保留章色旋转对照图', item.color_isolated_rotations_url) : ''}${item.rotated_url ? artifactCard('矩形印章 180° 旋转图', item.rotated_url) : ''}${referenceCard}`;
         const modernReads = modernRound ? modernSealReads(item) : '';
         return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>${modernRound ? '新版输入契约' : `增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}`}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>${ellipse ? '椭圆' : '圆章'}跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${typeBandLabel}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_line_text || item.robust_reader_text ? `<small>稳健圆心分带 OCR：${escapeHtml(item.robust_line_text || '未识别')}</small><small>稳健圆心补充识别：${escapeHtml(item.robust_reader_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.secondary_read_text ? `<small>补充识别：${escapeHtml(item.secondary_read_text)}</small>` : ''}${item.secondary_read_rejection_reason ? `<small class="low-note">${escapeHtml(item.secondary_read_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${primaryCards}</div>${modernChain}${modernReads || sealSourceResults(item)}${!modernRound && debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;

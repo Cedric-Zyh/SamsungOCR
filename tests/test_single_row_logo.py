@@ -7,7 +7,9 @@ import numpy as np
 import pytest
 
 from receipt_ocr.recognition.seal.preprocess import multi_zone, detected_layout, station_layout
-from receipt_ocr.recognition.seal.preprocess.single_row_logo import single_row_logo_evidence
+from receipt_ocr.recognition.seal.preprocess.single_row_logo import (
+    single_row_logo_evidence, verified_single_type_evidence,
+)
 
 
 def sample(scale=1, tips=5):
@@ -109,3 +111,65 @@ def test_verified_real_multi_row_plan_has_priority(tmp_path, monkeypatch, method
     assert multi_zone.prepare_multi_zone(source, tmp_path/'out', 0, reader=object(),
                                          orientation=orientation, layout_evidence=audit) is plan
     assert not audit
+
+
+def recheck_sample(tmp_path, *, extra=(), text='业务章', score=.99):
+    from receipt_ocr.domain.ocr import TextObservation
+    image = np.full((480, 640, 3), 255, np.uint8)
+    box = [200, 320, 460, 380]
+    polygon = [[200, 320], [460, 320], [460, 380], [200, 380]]
+    source = tmp_path / 'complete-type.png'
+    cv2.imwrite(str(source), image)
+    orientation = {'type_band_text': '业务章', 'type_band_confidence': .999,
+                   'oriented_type_row_exact_box': box, 'oriented_type_row_polygons': [polygon]}
+    reader = SimpleNamespace(
+        read_line=lambda *a, **kw: [TextObservation(text, score, 0, 0, 1, 1)],
+        detect_boxes=lambda *a, **kw: [
+            {'text': '业务章', 'confidence': .99, 'points': polygon}, *extra])
+    return source, image, orientation, reader
+
+
+def test_independent_complete_type_recheck_preserves_pixels_and_audits_decision(tmp_path):
+    source, image, orientation, reader = recheck_sample(tmp_path)
+    before = source.read_bytes()
+    audit = verified_single_type_evidence(source, tmp_path, 0, image, orientation,
+                                         reader=reader, provider='paddle_v6')
+    assert audit['method'] == 'independently_verified_single_type'
+    assert audit['type_text'] == '业务章'
+    assert source.read_bytes() == before
+    assert (tmp_path / audit['type_recheck_image']).is_file()
+
+
+@pytest.mark.parametrize('text', ['(1)', '电话：020-31103112', '6287148站', '仓储部', '另一行文字'])
+def test_any_reliable_additional_interior_text_prevents_single_type_route(tmp_path, text):
+    extra = {'text': text, 'confidence': .99,
+             'points': [[230, 200], [420, 200], [420, 240], [230, 240]]}
+    source, image, orientation, reader = recheck_sample(tmp_path, extra=[extra])
+    assert verified_single_type_evidence(source, tmp_path, 0, image, orientation,
+                                        reader=reader, provider='paddle_v6') is None
+
+
+@pytest.mark.parametrize('text,score', [('业务章', .94), ('业务专用章', .99), ('业分', .99)])
+def test_failed_or_conflicting_independent_read_keeps_component_route(tmp_path, text, score):
+    source, image, orientation, reader = recheck_sample(tmp_path, text=text, score=score)
+    reader.detect_boxes = lambda *a, **kw: pytest.fail('type was not verified')
+    assert verified_single_type_evidence(source, tmp_path, 0, image, orientation,
+                                        reader=reader, provider='paddle_v6') is None
+
+
+def test_glyph_fragments_inside_the_verified_type_polygon_are_not_extra_rows(tmp_path):
+    fragment = {'text': '务章', 'confidence': .99,
+                'points': [[320, 325], [455, 325], [455, 375], [320, 375]]}
+    source, image, orientation, reader = recheck_sample(tmp_path, extra=[fragment])
+    assert verified_single_type_evidence(source, tmp_path, 0, image, orientation,
+                                        reader=reader, provider='paddle_v6') is not None
+
+
+@pytest.mark.parametrize('stage', ['read_line', 'detect_boxes'])
+def test_unavailable_recheck_cannot_discard_a_multi_row_plan(tmp_path, stage):
+    source, image, orientation, reader = recheck_sample(tmp_path)
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('model unavailable')
+    setattr(reader, stage, unavailable)
+    assert verified_single_type_evidence(source, tmp_path, 0, image, orientation,
+                                        reader=reader, provider='paddle_v6') is None

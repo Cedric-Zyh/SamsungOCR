@@ -66,6 +66,28 @@ def test_single_border_estimate_is_unchanged():
     assert all(np.array_equal(a, b) for a, b in zip(actual, expected))
 
 
+@pytest.mark.parametrize('count', [1, 2, 6])
+def test_outer_rim_joining_glyphs_does_not_hide_truncated_inner_strokes(count):
+    mask, glyphs, geometry = fixture(count=count)
+    # A thick outer rim joins several letters into one periodic component.
+    # The letter pixels themselves still extend past the inferred inner edge.
+    cv2.circle(mask, (250, 250), 190, 255, 4)
+    for angle in np.linspace(190, 340, count):
+        direction = np.array([np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))])
+        start, end = (np.rint(np.array([250, 250]) + 200 * f * direction).astype(int)
+                      for f in (.89, .96))
+        cv2.line(mask, tuple(start), tuple(end), 255, 6)
+    old = ellipse._ellipse_normal_maps(*geometry)
+    selected = ellipse._ring_text_normal_maps(mask, geometry)
+    if count < 3:
+        assert all(np.array_equal(a, b) for a, b in zip(selected, old))
+    else:
+        old_band = cv2.remap(glyphs, *old, cv2.INTER_NEAREST)
+        new_band = cv2.remap(glyphs, *selected, cv2.INTER_NEAREST)
+        assert np.count_nonzero(old_band[-1]) > 0
+        assert np.count_nonzero(new_band[-1]) == 0
+
+
 def test_preview_and_ocr_keep_the_same_full_glyph_band(monkeypatch, tmp_path):
     mask, glyphs, geometry = fixture()
     source = np.full((*mask.shape, 3), 255, np.uint8)

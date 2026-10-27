@@ -13,6 +13,7 @@ import numpy as np
 
 from receipt_ocr.imaging.ring_border import trace_ellipse_border
 from receipt_ocr.providers.paddle_runtime import variant_of
+from ..ocr.company_noise import read_company_noise
 from .detected_layout import fitted_guide
 from .component_noise import component_noise_candidate
 from .company_border import company_border_points
@@ -200,6 +201,14 @@ def read_continuous_company(artifact, directory, index, prefix, *, reader, provi
                     ring_border_detection=geometry['border'],
                     ring_input_operation='分别识别章型与编号，仅填白内部笔画，沿连续外环完整展开公司名称')
     artifact.pop('lower_arc_text', None)
+    try:
+        read_company_noise(artifact, destination, directory, index, prefix,
+                           reader=reader, provider=provider)
+    except Exception as exc:
+        # A failed optional re-read must not discard the complete baseline.
+        message = f'环字杂纹校验失败（{type(exc).__name__}）'
+        artifact.setdefault('errors', []).append({'step': 'company_noise', 'message': message})
+        artifact.setdefault('company_noise', {}).update(status='failed', reason='preparation_failed')
     if artifact is not original_artifact:
         original_artifact.clear()
         original_artifact.update(artifact)

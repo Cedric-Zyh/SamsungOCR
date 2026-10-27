@@ -10,6 +10,14 @@
           <div class="settings-auto-save-panel"><p id="plan-save-status" class="plan-save-status" role="status" aria-live="polite"></p></div>
         </div>
         <section id="settings-recognition-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="recognition" aria-labelledby="settings-tab-recognition">
+          <section class="local-model-settings" aria-labelledby="local-model-title" data-local-model-settings>
+            <div class="local-model-row">
+              <div class="setting-item-copy"><span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 9h6v6H9zM9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/></svg></span><div><h2 id="local-model-title">本地模型</h2><p data-local-model-description>正在读取模型状态…</p></div></div>
+              <div class="local-model-actions"><button type="button" class="text-button" data-local-model-prepare hidden>继续加载</button><span class="local-model-state" data-local-model-state role="status" aria-live="polite">正在读取…</span><label class="plan-toggle"><input type="checkbox" role="switch" data-local-model-toggle aria-label="加载或释放本地模型" aria-describedby="local-model-note" disabled><span class="plan-toggle-track" aria-hidden="true"></span></label></div>
+            </div>
+            <div class="local-model-footer"><span id="local-model-note" data-local-model-note>关闭可释放模型；再次本地识别时会自动加载。</span><span data-local-model-duration hidden></span><details><summary>模型状态</summary><div class="local-model-list" data-local-model-list>正在读取…</div><p class="local-model-memory-note">关闭会卸载模型，程序与运行库仍会保留基础内存。</p></details></div>
+            <p class="local-model-feedback" data-local-model-feedback role="status" aria-live="polite"></p>
+          </section>
           <section class="settings-card settings-content recognition-plan" aria-labelledby="settings-content-title">
             <div class="settings-section-heading"><div><h2 id="settings-content-title">识别内容</h2><p>选择需要读取的内容，并为每项设置识别方式，修改后自动保存。</p></div></div>
             <div class="settings-overview"><span class="settings-count">已启用 <span id="plan-selected-count"></span></span><span class="settings-overview-note">多选方式会分别识别，用于结果对照</span><span id="plan-name">自定义</span></div>

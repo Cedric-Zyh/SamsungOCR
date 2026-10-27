@@ -23,9 +23,11 @@ class RecognitionService:
     def recognize(self, *args: Any, recognition_config=None,
                   previous_fields=None, **kwargs: Any) -> dict:
         kwargs["reference_matcher"] = self.reference_matcher
-        return self.analyzer.analyze(
-            *args,
-            recognition_config=recognition_config,
-            previous_fields=previous_fields,
-            **kwargs,
-        )
+        from ..providers.model_manager import local_model_manager
+        with local_model_manager.activity():
+            return self.analyzer.analyze(
+                *args,
+                recognition_config=recognition_config,
+                previous_fields=previous_fields,
+                **kwargs,
+            )

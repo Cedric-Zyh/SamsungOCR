@@ -55,6 +55,7 @@ from receipt_ocr.web import recognition as recognition_handlers
 from receipt_ocr.web import results as result_handlers
 from receipt_ocr.web import review as review_handlers
 from receipt_ocr.web import remote_settings
+from receipt_ocr.web.local_models import local_models_handler
 from receipt_ocr.web import seal_standards as standard_handlers
 from receipt_ocr.domain.seal_standards import apply_standard_check
 from receipt_ocr.recognition.seal.postprocess.name_correction import company_name_correction_scope
@@ -250,7 +251,9 @@ def _configured_analyze(*args, recognition_config=None, previous_fields=None, **
     saved_qingtong = database.get_json_setting('qingtong_credentials', None)
     if isinstance(saved_qingtong, dict):
         analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
-    with company_name_correction_scope(database.list_seal_standards()):
+    from receipt_ocr.recognition.seal.layout_settings import seal_layout_settings_scope
+    standards = database.list_seal_standards()
+    with company_name_correction_scope(standards), seal_layout_settings_scope(standards):
         result = recognition_service.recognize(
             *args,
             recognition_config=recognition_config,
@@ -370,6 +373,10 @@ def get_recognition_settings():
         # Repair a malformed setting left by an interrupted/manual edit.
         database.set_json_setting("recognition_defaults", DEFAULT_RECOGNITION_SETTINGS)
         return jsonify(DEFAULT_RECOGNITION_SETTINGS)
+
+
+def local_models():
+    return local_models_handler(database)
 
 
 def update_recognition_settings():
@@ -787,6 +794,10 @@ def list_seal_standards():
     return standard_handlers.list_standards(_standard_dependencies())
 
 
+def update_seal_standard_layout(standard_id):
+    return standard_handlers.update_standard_layout(_standard_dependencies(), standard_id)
+
+
 def seal_standard_sources(standard_id):
     return standard_handlers.standard_sources(_standard_dependencies(), standard_id)
 
@@ -812,6 +823,7 @@ from .routes import register_routes
 
 register_routes(app, {
     'list_seal_standards': list_seal_standards,
+    'update_seal_standard_layout': update_seal_standard_layout,
     'seal_standard_sources': seal_standard_sources,
     'seal_standard_recognition_info': seal_standard_recognition_info,
     'register_seal_standard': register_seal_standard,
@@ -821,6 +833,7 @@ register_routes(app, {
     'update_settings': update_settings,
     'retention_settings': retention_settings,
     'get_recognition_settings': get_recognition_settings,
+    'local_models': local_models,
     'qingtong_settings': qingtong_settings,
     'danzhengtong_settings': danzhengtong_settings,
     'test_danzhengtong_settings': test_danzhengtong_settings,

@@ -17,6 +17,7 @@ from receipt_ocr.recognition.seal.postprocess.rules import _apply_code_stamp_bus
 from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
 from receipt_ocr.recognition.seal.providers.qingtong import qingtong_region_artifacts, qingtong_seal_regions
 from receipt_ocr.recognition.seal.postprocess.channels import LOCAL_REGION_SOURCE, record_local_channel
+from receipt_ocr.recognition.seal.receiving import apply_receiving_review
 
 
 from ..domain.results import SealStageResult
@@ -27,6 +28,8 @@ def _ellipse_channels(seal_texts, seal_artifacts):
     """Collect circular/oval evidence in ring and centre-type channels."""
     ring, type_text, other = [], [], []
     for artifact in seal_artifacts:
+        if artifact.get('receiving_form', {}).get('managed'):
+            continue
         if artifact.get("shape") not in {"圆形", "椭圆"}:
             continue
         ring.extend(
@@ -248,6 +251,7 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
                 seal_check = _apply_code_stamp_business_id(
                     seal_check, requirement, seal_texts, fields
                 )
+            seal_check = apply_receiving_review(seal_check, seal_artifacts)
             # Keep the displayed text aligned with the chosen comparison.
             # All other regional readings remain in the audit artifacts.
             seal_check["display_text"] = seal_check.get("recognized", "")

@@ -9,6 +9,7 @@ def register_routes(app, handlers, *, before_request) -> None:
 
     routes = [
         ("/api/seal-standards", "list_seal_standards", ("GET",)),
+        ("/api/seal-standards/<int:standard_id>/layout", "update_seal_standard_layout", ("PATCH",)),
         ("/api/seal-standards/<int:standard_id>/sources", "seal_standard_sources", ("GET",)),
         ("/api/seal-standards/<int:standard_id>/recognition-info", "seal_standard_recognition_info", ("GET",)),
         ("/api/results/<int:result_id>/seal-standard", "register_seal_standard", ("POST",)),
@@ -20,6 +21,7 @@ def register_routes(app, handlers, *, before_request) -> None:
         ("/api/settings/retention-days", "retention_settings", ("GET", "PATCH")),
         ("/api/settings/data-retention", "retention_settings", ("GET", "PATCH")),
         ("/api/settings/recognition", "get_recognition_settings", ("GET",)),
+        ("/api/settings/local-models", "local_models", ("GET", "POST")),
         ("/api/settings/qingtong", "qingtong_settings", ("GET", "PATCH")),
         ("/api/settings/danzhengtong", "danzhengtong_settings", ("GET", "PATCH")),
         ("/api/settings/danzhengtong/test", "test_danzhengtong_settings", ("POST",)),

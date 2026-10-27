@@ -7,7 +7,10 @@ import json
 from copy import deepcopy
 
 from receipt_ocr.domain.parsing.parsing_dates import parse_date
-from receipt_ocr.domain.sample_seal_decision import SAMPLE_SEAL_DECISIONS, sample_seal_decision
+from receipt_ocr.domain.sample_seal_decision import (
+    SAMPLE_SEAL_DECISIONS, sample_seal_decision, sample_warehouse_code_adjustment,
+)
+from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
 
 
 SEAL_SOURCES = [
@@ -30,8 +33,12 @@ def _object_sql(root, fields):
     return 'json_object(' + ','.join(parts) + ')'
 
 
-_TEXT_CHECK = dict.fromkeys(('status', 'recognized', 'display_text', 'reliable', 'backend', 'source',
-                            'recognition_mode', 'requirement', 'comparison_policy', 'human_confirmed_match'))
+_TEXT_CHECK = {
+    **dict.fromkeys(('status', 'recognized', 'display_text', 'reliable', 'backend', 'source',
+                    'recognition_mode', 'requirement', 'comparison_policy', 'human_confirmed_match',
+                    'simulated')),
+    'receiving_review': {'required': None},
+}
 _SEAL_CHECK = {
     **_TEXT_CHECK, 'local_channel': _TEXT_CHECK,
     'dual_check': {'selected': {
@@ -231,8 +238,8 @@ def sample_result_filters(job, truth, *, result=None):
     # measured shape rejections; neither is an unresolved review status.
     human = primary.get('human_confirmed_match')
     fixed = ((isinstance(human, (bool, int)) and human in (0, 1))
-             or (primary.get('status') == '不匹配'
-                 and primary.get('comparison_policy') == 'manual_standard_text_and_shape'))
+             or (primary.get('comparison_policy') == 'manual_standard_text_and_shape'
+                 and primary.get('status') != '匹配'))
     if not fixed:
         remote_summary = cell(remote, text(remote), enabled=enabled('qingtong'), error=remote_error)
         candidates = [current for current in [*seals.values(), remote_summary]
@@ -251,25 +258,53 @@ def project_sample_seal_result(result):
     requirement = (result.get('fields') or {}).get('签章要求') or ''
     messages = {'匹配': '印章匹配', '部分匹配': '印章文字部分匹配', '不匹配': '印章不匹配'}
 
-    def normalize(check):
+    def code_note(check, value=None):
+        if not sample_warehouse_code_adjustment(check, requirement=requirement, value=value):
+            return
+        text = value if value is not None else check.get('recognized') or check.get('display_text') or ''
+        comparison = compare_seal_text_strict(requirement or check.get('requirement') or '', [text])
+        check.update(field_comparison=comparison['field_comparison'],
+                     comparison_policy=comparison['comparison_policy'], message=comparison['message'])
+
+    def normalize(check, value=None):
         if not check or check.get('status') in {'识别失败', '未运行', '未执行'}:
             return
-        decision = sample_seal_decision(check, requirement=requirement)
+        decision = sample_seal_decision(check, requirement=requirement, value=value)
         check.update(status=decision, message=messages[decision])
+        code_note(check, value)
+
+    def remote_notes(check):
+        selected = (check.get('dual_check') or {}).get('selected') or {}
+        for name, field, comparison_key in [('template', 'label', 'requirement_match'),
+                                             ('ocr', 'text', 'comparison')]:
+            reading = selected.get(name) or {}
+            comparison = reading.get(comparison_key)
+            if not isinstance(comparison, dict) or check.get('status') == '识别失败':
+                continue
+            if not sample_warehouse_code_adjustment(
+                    comparison, requirement=requirement, value=reading.get(field) or ''):
+                continue
+            normalize(comparison, reading.get(field) or '')
+            if comparison.get('status') in SAMPLE_SEAL_DECISIONS:
+                reading.update(status=comparison['status'], matched=comparison['status'] == '匹配')
 
     primary = result.get('seal_check') or {}
     for variant in (result.get('recognition_variants') or {}).get('seal') or []:
         check = (variant.get('details') or {}).get('seal_check') or {}
         normalize(check)
         normalize(check.get('local_channel') or {})
+        remote_notes(check)
     for key in ('local_channel', 'qingtong_channel'):
         normalize(primary.get(key) or {})
+        remote_notes(primary.get(key) or {})
+    remote_notes(primary)
     combined = filters['seals']['combined']
     if combined['state'] in SAMPLE_SEAL_DECISIONS:
         primary.update(status=combined['state'], recognized=combined['value'],
                        display_text=combined['value'], message=messages[combined['state']],
                        reliable=combined['state'] == '匹配', sample_decision_policy='any_matching_channel')
         result['seal_check'] = primary
+        code_note(primary, combined['value'])
         if combined['state'] == '匹配' and isinstance(result.get('review_issues'), list):
             result['review_issues'] = [entry for entry in result['review_issues']
                                        if entry.get('scope') != 'seal' or entry.get('code') == 'provider_failure']

@@ -78,3 +78,7 @@
  .standard-picker-footer {align-items:flex-start;flex-direction:column}
  .standard-picker-buttons {align-self:flex-end}
 }
+.standard-picker-info [data-standard-horizontal-row] {display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--archive-line)}
+.standard-picker-info [data-standard-horizontal-row][hidden] {display:none}
+.standard-picker-info [data-standard-horizontal-row] small {flex-basis:100%;color:var(--archive-muted)}
+.standard-picker-info [data-standard-horizontal-text] {padding:4px 8px;max-width:140px;border:1px solid var(--archive-line);border-radius:3px;background:transparent;color:inherit}

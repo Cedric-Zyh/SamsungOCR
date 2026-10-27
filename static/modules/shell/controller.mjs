@@ -17,6 +17,7 @@ import {createRetentionSettings} from '../imports/retention_settings.mjs';
 import {createRemoteSettings} from '../imports/remote_settings.mjs';
 import {createPolling} from '../core/polling.mjs';
 import {createSealCenter} from '../seals/center.mjs';
+import {createLocalModelSettings} from '../settings/local_models.mjs';
 
 /** Composition root: controllers communicate through explicit callbacks.
  * Constructing an application performs no requests or event registration. */
@@ -41,6 +42,8 @@ export function createApplication(environment, options = {}) {
   });
   const retention_settings = createRetentionSettings({environment, ui, api, services});
   const remote_settings = createRemoteSettings({environment, ui, api});
+  const local_models = createLocalModelSettings({environment, ui, services,
+    flushSettings: () => recognition_plan.flushSettings()});
   const records = createRecords({
     ReceiptWorkbench,
     environment,
@@ -260,6 +263,7 @@ export function createApplication(environment, options = {}) {
     remote_settings.initialize();
     records.initialize();
     recognition_plan.initialize();
+    local_models.initialize();
     imports.initialize();
     review.initialize();
     review_queue.initialize();

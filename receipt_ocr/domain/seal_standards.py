@@ -6,6 +6,7 @@ from .decision import decide_overall
 from .issues import issue, active_issues
 from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict
 from .seal_serial import serial_matching_texts
+from .seal_ring import normalize_ring_candidates
 
 SHAPES = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
 
@@ -45,7 +46,8 @@ def seal_candidates(result):
         if not isinstance(artifact, dict) or artifact.get("role") == "发货单位章":
             continue
         original = str(artifact.get("original_url") or "")
-        clean = str(artifact.get("color_isolated_oriented_url") or artifact.get("color_isolated_url") or "")
+        clean = str(artifact.get('receiving_selected_image_url') or artifact.get("color_isolated_oriented_url")
+                    or artifact.get("color_isolated_url") or "")
         identity = original or clean
         if not identity or identity in seen:
             continue
@@ -54,29 +56,47 @@ def seal_candidates(result):
             (key for key, label in SHAPES.items() if label == artifact.get("shape")), ""
         )
         texts = []
+        managed_form = artifact.get('receiving_form') or {}
+        managed = managed_form.get('managed') is True
         receiving_form = bool(artifact.get('rectangular_form_fields'))
         ring, center = str(artifact.get("unwrapped_text") or ""), str(artifact.get("round_type_band_text") or "")
-        if ring and center:
+        if ring and center and not managed:
             texts.append(ring + center)
-        texts.extend([artifact.get("rectangular_text"), ring, center,
-                      artifact.get("color_isolated_text") if not receiving_form else None,
-                      artifact.get("combined_text")])
-        texts.extend(artifact.get("matching_texts") or [])
-        texts.extend(read.get("text") for read in artifact.get("reads") or []
-                     if isinstance(read, dict) and read.get("matching") is not False
-                     and read.get("channel") != "serial")
-        texts.extend(serial_matching_texts(requirement, artifact))
+        if managed:
+            # Withheld/conflicting form readings must remain withheld when a
+            # registered standard is applied. Neither a legacy aggregate nor
+            # a split candidate may resurrect an exact-looking string.
+            selected = str(managed_form.get('identity_text') or '')
+            if managed_form.get('status') == 'adopted' and selected:
+                texts.extend(text for text in artifact.get('matching_texts') or []
+                             if normalize_seal_text_strict(text) == normalize_seal_text_strict(selected))
+        else:
+            texts.extend([artifact.get("rectangular_text"), ring, center,
+                          artifact.get("color_isolated_text") if not receiving_form else None,
+                          artifact.get("combined_text")])
+            texts.extend(artifact.get("matching_texts") or [])
+            texts.extend(read.get("text") for read in artifact.get("reads") or []
+                         if isinstance(read, dict) and read.get("matching") is not False
+                         and read.get("channel") != "serial")
+            texts.extend(serial_matching_texts(requirement, artifact))
         # Whole-body OCR also contains receiving/date values. Once physical
         # form cells are identified, only active rows and their assembled
         # identity may enter standard registration/comparison. Raw body text
         # remains available in the artifact for inspection.
-        if not receiving_form:
+        if not receiving_form and not managed:
             texts.extend(artifact.get("color_isolated_texts") or [])
         # Remote OCR belongs only to the explicitly identified API stamp.
-        if artifact.get("source") == "清瞳印章区域":
+        # A managed form has one selected identity; its raw remote string
+        # cannot bypass a withheld or conflicting identity on the same stamp.
+        if artifact.get("source") == "清瞳印章区域" and not managed:
             entry = next((c for c in remote if c.get("index") == artifact.get("api_index")), {})
             texts.append((entry.get("ocr") or {}).get("text"))
-        texts = list(dict.fromkeys(str(t).strip() for t in texts if t and str(t).strip()))
+        # Conflicting same-row number evidence withholds this stamp's whole
+        # identity. A legacy exact string cannot bypass the unresolved number.
+        if (artifact.get('receiving_number') or {}).get('status') == 'conflict':
+            texts = []
+        texts = normalize_ring_candidates(artifact, [str(t).strip() for t in texts if t and str(t).strip()])
+        texts = list(dict.fromkeys(texts))
         comparison = compare_seal_text_strict(requirement, texts, mismatch_over_partial=True)
         candidates.append({
             "id": hashlib.sha256(identity.encode()).hexdigest()[:24],

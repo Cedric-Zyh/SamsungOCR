@@ -18,6 +18,35 @@
 .plan-save-status[data-tone="warning"],.plan-save-status[data-state="invalid"] { color:var(--archive-warning); }
 .plan-save-status[data-tone="danger"],.plan-save-status[data-state="error"] { color:var(--archive-danger); }
 .settings-tab-panel { min-width:0; padding:24px; }
+.local-model-settings {margin-bottom:24px;padding:16px;border:1px solid var(--archive-line);border-radius:6px;background:#f7f5ef}
+.local-model-row {display:flex;align-items:center;justify-content:space-between;gap:16px}
+.settings-page .local-model-settings h2 {font-size:13px;font-weight:600}
+.settings-page .local-model-settings p {margin:3px 0 0;color:var(--archive-muted);font-size:12px}
+.local-model-settings .setting-item-copy {align-items:center}
+.local-model-actions {display:flex;align-items:center;flex:none;gap:12px}
+.local-model-state {display:inline-flex;align-items:center;gap:6px;color:var(--archive-muted);font-size:12px;white-space:nowrap}
+.local-model-state::before {content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.local-model-state[data-state="ready"] {color:var(--settings-olive)}
+.local-model-footer {display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px 14px;margin:11px 0 0 46px;color:var(--archive-muted);font-size:11px;line-height:1.7}
+.local-model-footer>details {margin-left:auto;border:0;min-width:0}
+.local-model-footer>details[open] {flex-basis:100%;margin:4px 0 0;padding-top:10px;border-top:1px solid var(--archive-soft-line)}
+.local-model-footer summary {padding:0;color:var(--archive-text);font-size:11px;font-weight:400;line-height:1.7;cursor:pointer}
+.local-model-list {display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:7px 22px;min-width:0;padding-top:12px}
+.local-model-list>div {display:flex;justify-content:space-between;gap:18px}
+.local-model-list b {color:var(--settings-olive);font-weight:400;white-space:nowrap}
+.local-model-list small {color:var(--archive-muted);font-size:10px;margin-left:7px}
+.settings-page .local-model-settings .local-model-memory-note {margin:10px 0 0;font-size:11px;line-height:1.7}
+.settings-page .local-model-feedback {margin:9px 0 0 46px;font-size:11px;color:var(--archive-danger)}
+.local-model-feedback:empty {display:none}
+.local-model-settings .plan-toggle input[data-local-model-toggle] {position:absolute;inset:0;z-index:1;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.local-model-settings .plan-toggle input[data-local-model-toggle]:disabled {cursor:not-allowed}
+.local-model-settings [hidden] {display:none !important}
+@media(max-width:600px) {
+ .local-model-settings {padding:14px 12px}
+ .local-model-row {align-items:flex-start;flex-wrap:wrap;gap:8px}
+ .local-model-actions {margin-left:46px;flex:1;justify-content:flex-end}
+ .local-model-footer,.settings-page .local-model-feedback {margin-left:0}
+}
 .settings-page .settings-tab-panel[hidden] { display:none; }
 .settings-section-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; }
 .settings-section-heading p { margin:5px 0 0; color:var(--archive-muted); font-size:12px; }

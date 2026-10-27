@@ -12,6 +12,7 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   if (!dialog || dialog.open) return;
   const entries = registrationEntries(sources);
   const textDrafts = new Map();
+  const horizontalDrafts = new Map();
   let editingText = false, beforeEdit = '';
   let selected = entries.findIndex(e => e.candidate.can_register), original = false, zoom = 1, saving = false;
   if (selected < 0 && entries.length) selected = 0;
@@ -30,7 +31,8 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
       <div class="standard-picker-rotation"><label>顺时针旋转 <input type="number" min="-180" max="180" step="1" value="0" data-standard-rotation aria-label="标准章旋转角度"> °</label><button type="button" data-standard-turn="-90">左转 90°</button><button type="button" data-standard-turn="90">右转 90°</button><button type="button" data-standard-reset>重置</button></div>
       <div class="standard-picker-info"><div class="standard-picker-text-heading"><p><span data-standard-text-label>识别文字</span>：<strong data-standard-recognized></strong></p><button type="button" data-standard-edit-text>修改文字</button></div>
         <div class="standard-picker-text-editor" data-standard-text-editor hidden><label>标准章文字<textarea rows="3" maxlength="1000" required data-standard-text-input aria-label="标准章文字"></textarea></label><small>按章图核对文字。仅修改标准章档案，原始识别结果保留。</small><div><button type="button" data-standard-text-done>完成修改</button><button type="button" data-standard-text-cancel>取消修改</button></div></div>
-        <p class="standard-picker-ocr" data-standard-original-text hidden>原始识别：<span data-standard-ocr-text></span></p><p data-standard-warning></p></div>
+        <p class="standard-picker-ocr" data-standard-original-text hidden>原始识别：<span data-standard-ocr-text></span></p><p data-standard-warning></p>
+        <label data-standard-horizontal-row hidden>章内横排文字 <select data-standard-horizontal-text aria-label="章内横排文字"><option value="unmarked">未标注</option><option value="present">有</option><option value="absent">无</option></select><small>替换章图时请重新确认；选“无”后跳过横排文字搜索，直接识别环字。</small></label></div>
     </section></div>
     <footer class="standard-picker-footer"><div><p>保存后可用于后续回单核验</p><p data-standard-feedback role="status" aria-live="polite"></p></div><div class="standard-picker-buttons"><button type="button" data-standard-close>取消</button><button type="button" class="primary-button" data-standard-save>${standard ? '确认替换标准章' : '加入印章中心'}</button></div></footer>`;
   const get = s => $(s, dialog), all = s => $$(s, dialog);
@@ -85,6 +87,10 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   }
   function select(index) {
     selected = index; const c = entries[index]?.candidate;
+    const horizontal = get('[data-standard-horizontal-text]');
+    const horizontalRow = get('[data-standard-horizontal-row]');
+    if (horizontalRow) horizontalRow.hidden = !['round','ellipse'].includes(c?.shape);
+    if (horizontal) horizontal.value = horizontalDrafts.get(index) || 'unmarked';
     editingText = false; textInput.value = recognizedText();
     original = !c?.image_url; zoom = 1; rotation.value = '0'; feedback.textContent = '';
     all('[data-picker-index]').forEach(b => b.setAttribute('aria-pressed',String(Number(b.dataset.pickerIndex) === index)));
@@ -114,6 +120,9 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
   textInput.addEventListener('input', () => {
     textDrafts.set(selected, textInput.value); feedback.textContent = ''; syncText();
   });
+  get('[data-standard-horizontal-text]')?.addEventListener('change', event => {
+    horizontalDrafts.set(selected, event.target.value);
+  });
   get('[data-standard-text-done]').addEventListener('click', () => {
     if (!validText()) return;
     textDrafts.set(selected, textInput.value.trim()); textInput.value = recognizedText();
@@ -131,10 +140,11 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
     if (!rotation.checkValidity()) {rotation.reportValidity();return;}
     if (!validText()) return;
     saving = true; feedback.textContent = '正在保存标准章…';
-    const controls = all('button,input,textarea').map(el => [el,el.disabled]);
+    const controls = all('button,input,textarea,select').map(el => [el,el.disabled]);
     controls.forEach(([el]) => el.disabled=true);
     let response;
     try { response=await onSave({...entry,rotation:Number(rotation.value)||0,
+      ...(['round','ellipse'].includes(entry.candidate.shape) ? {horizontalText:horizontalDrafts.get(selected) || 'unmarked'} : {}),
       ...(textChanged() ? {recognizedOverride:recognizedText().trim()} : {})}); }
     catch(error) {feedback.textContent=error.message;}
     finally {saving=false;controls.forEach(([el,disabled])=>el.disabled=disabled);syncSave();}

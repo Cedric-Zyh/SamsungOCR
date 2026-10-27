@@ -42,7 +42,7 @@ export function createReviewRunHistory({environment, ui, services}) {
     clear();
     const id = item?.id || item?.result_id;
     if (!id || !button() || !panel()) return;
-    context = {id, sample, filename:item.filename || ''};
+    context = {id, sample, filename:item.filename || '', timing:item};
     button().hidden = false;
     button().disabled = false;
     if ($('#review-runs-title')) $('#review-runs-title').textContent = '本次识别明细';
@@ -62,7 +62,7 @@ export function createReviewRunHistory({environment, ui, services}) {
     const openKeys = preserve ? expanded('[data-call-group]', 'data-call-group') : undefined;
     const imageKeys = expanded('[data-call-image]', 'data-call-image');
     const explanationOpen = expanded('[data-call-explanation]', 'data-call-explanation').has('count');
-    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, loading, error});
+    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, loading, error, timingContext:context?.timing});
     body().scrollTop = top;
     const count = $('[data-run-count]');
     if (count) { count.textContent = data.available === true ? `${data.summary?.total || 0} 次` : '—'; count.hidden = false; }

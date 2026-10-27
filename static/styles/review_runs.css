@@ -25,6 +25,9 @@
 .review-runs-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:4px 0; color:var(--archive-muted); }
 .review-call-times { display:flex; flex-wrap:wrap; justify-content:space-between; gap:5px 15px; margin:5px 0; color:var(--archive-muted); line-height:1.6; font-variant-numeric:tabular-nums; }
 .review-call-times strong,.review-call-times time { color:var(--archive-text); font-weight:500; }
+.review-model-initialization {display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;margin:6px 0 10px;padding:7px 0;border-top:1px solid var(--archive-soft-line);border-bottom:1px solid var(--archive-soft-line);color:var(--archive-muted);font-size:11px;line-height:1.6;font-variant-numeric:tabular-nums}
+.review-model-initialization strong {color:var(--archive-text);font-weight:500}
+.review-model-initialization small {margin-left:auto;font-size:10px}
 .review-call-note { margin:8px 0; color:var(--archive-muted); font-size:11px; line-height:1.65; }
 .review-call-explanation { margin:5px 0 9px; color:var(--archive-muted); font-size:11px; }
 .review-call-explanation>summary { cursor:pointer; width:fit-content; line-height:1.8; }

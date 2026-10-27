@@ -21,6 +21,33 @@ export const runTime = value => {
 const count = value => Math.max(0, Math.floor(Number(value) || 0));
 const inputName = call => filenameParts(String(call.input_name || '').replaceAll('\\', '/')).name || '输入图片未记录';
 
+export function runTiming(data, context) {
+  const total = validSeconds(data.processing_seconds);
+  let initialization = validSeconds(data.model_initialization_seconds);
+  // Static assets can be refreshed before the backend restarts. A legacy
+  // trace may use the open receipt's timings only when they describe this run.
+  if (initialization == null && context && ['completed','succeeded'].includes(data.status)
+      && Number(data.result_id) > 0 && Number(data.result_id) === Number(context.id || context.result_id)) {
+    const start = Date.parse(data.started_at), end = Date.parse(data.finished_at);
+    const queued = Date.parse(context.queue?.started_at), updated = Date.parse(context.updated_at);
+    const sameRun = Number.isFinite(queued) ? Math.abs(queued - start) <= 1100
+      : Number.isFinite(updated) && updated >= start - 1000 && updated <= end + 1000;
+    const recordedTotal = validSeconds(context.processing_seconds);
+    const steps = context.processing_timings?.steps;
+    if (sameRun && Number.isFinite(start) && Number.isFinite(end) && end >= start
+        && total != null && recordedTotal != null && Math.abs(total - recordedTotal) < .1
+        && steps && typeof steps === 'object' && !Array.isArray(steps)) {
+      const values = Object.entries(steps)
+        .filter(([name]) => name.endsWith('_model_setup') || name === 'paddle_text_box_setup')
+        .map(([,step]) => validSeconds(step?.seconds));
+      if (values.length && values.every(value => value != null)) initialization = values.reduce((sum,value) => sum + value, 0);
+    }
+  }
+  if (total == null || initialization == null || initialization > total + .01) return {initialization:null, recognition:null};
+  initialization = Math.min(total, initialization);
+  return {initialization, recognition:Math.max(0, total - initialization)};
+}
+
 export function callImageUrl(value) {
   if (typeof value !== 'string' || /[\\\x00-\x20]/.test(value)
       || !/^\/files\/(?:samples\/)?(?:artifacts|previews)\//.test(value)) return '';
@@ -44,7 +71,7 @@ function callRow(call, index, imageKeys) {
     <td class="review-call-seconds">${escapeHtml(runDuration(call.seconds))}</td></tr>`;
 }
 
-export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, loading = false, error = ''} = {}) {
+export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, loading = false, error = '', timingContext} = {}) {
   const available = data.available === true;
   const summary = data.summary || {}, calls = Array.isArray(data.calls) ? data.calls : [];
   const groups = new Map();
@@ -64,11 +91,13 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
     <div class="review-runs-toolbar"><div class="review-runs-toolbar-label"><span>仅最近一次处理</span><span class="review-calls-status" data-state="${escapeHtml(data.status || 'unknown')}">${status}</span></div><button type="button" class="text-button" data-runs-refresh${loading ? ' disabled' : ''}>${loading ? '正在读取…' : '刷新'}</button></div>
     ${error ? `<p class="review-call-error" role="alert">${escapeHtml(error)}</p>` : ''}`;
   if (!available) return `${heading}<div class="review-calls-empty" role="status"><strong>本次识别调用明细未记录</strong><p>${escapeHtml(data.note || '此记录尚未采集逐次识别信息，重新识别后可查看。')}</p></div>`;
-  return `${heading}<div class="review-call-times"><span>开始 <time>${escapeHtml(runTime(data.started_at))}</time></span><span>处理用时 <strong>${escapeHtml(runDuration(data.processing_seconds))}</strong></span></div>
+  const timing = runTiming(data, timingContext);
+  return `${heading}<div class="review-call-times"><span>开始 <time>${escapeHtml(runTime(data.started_at))}</time></span><span title="不含模型初始化">处理用时 <strong>${escapeHtml(runDuration(timing.recognition))}</strong></span></div>
+    <div class="review-model-initialization"><span>模型初始化</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : '单独计时，不计入处理用时'}</small></div>
     ${data.note ? `<p class="review-call-note">${escapeHtml(data.note)}</p>` : ''}
     <details class="review-call-explanation" data-call-explanation="count"${explanationOpen ? ' open' : ''}><summary>计数说明</summary>
       ${count(summary.cache_hits) ? `<p class="review-call-note">复用已有识别结果 ${count(summary.cache_hits)} 次，未计入实际调用。</p>` : ''}
-      <p class="review-call-note">每次图片识别计 1 次，复用已有结果不重复计数。并行识别时，各次耗时相加可能超过总处理用时。</p></details>
+      <p class="review-call-note">每次图片识别计 1 次，复用已有结果不重复计数。并行识别时，各次耗时相加可能超过处理用时。</p></details>
     ${sorted.length ? `<div class="review-call-groups">${sorted.map(group => {
       const timings = group.calls.map(({call}) => validSeconds(call.seconds));
       const completeTiming = timings.every(value => value != null);

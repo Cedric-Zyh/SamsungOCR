@@ -32,8 +32,17 @@ def test_review_readiness_keyboard_and_image_interactions():
              "tests/artifact_images.cjs", "tests/requirement_artifacts_ui.cjs", "tests/sample_annotations_ui.cjs")
 
 
+def test_receiving_form_identity_split_conflicts_and_actual_image_evidence():
+    run_node("--test", "tests/receiving_evidence_ui.cjs", "tests/receiving_number_evidence_ui.cjs")
+
+
+def test_company_ring_inputs_and_noise_consensus_show_actual_images_and_fold_raw_reads():
+    run_node("--test", "tests/seal_multi_zone_ui.cjs")
+
+
 def test_standard_seal_selection_registration_replacement_and_review_guards():
-    run_node("--test", "tests/seal_standards_ui.cjs")
+    run_node("--test", "tests/seal_standards_ui.cjs", "tests/seal_horizontal_setting_ui.cjs",
+             "tests/seal_groups.cjs", "tests/seal_preview.cjs", "tests/seal_recognition_info.cjs")
 
 
 def test_process_history_grouping_and_request_lifecycle():
@@ -50,7 +59,7 @@ def test_second_round_ui_recovery_and_feedback_behaviors():
 
 
 def test_settings_plan_presets_validation_and_persistence():
-    run_node("--test", "tests/settings_ui.cjs")
+    run_node("--test", "tests/settings_ui.cjs", "tests/local_models_ui.cjs")
 
 
 def test_workbench_todos_pagination_and_record_navigation():

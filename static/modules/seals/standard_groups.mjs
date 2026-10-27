@@ -10,6 +10,27 @@ const GENERIC_CENTER = /^三星(?:电子)?(?:授权)?(?:维修|服务|维修服�
 const requirementText = standard => String(standard?.requirement || '').trim();
 const compact = value => value.replace(/\s+/gu, '');
 const identity = value => compact(value).normalize('NFKC');
+const IDENTITY_LABELS = {authorization_code:'授权代码', station_code:'站点编号',
+  warehouse_code:'仓库代码', registration_code:'登记编号', phone:'电话'};
+const identityText = field => [field.label || IDENTITY_LABELS[field.kind] || '编号', field.value]
+  .filter(value => value !== undefined && value !== null && value !== '').join(' ');
+const identityKey = field => `${field.kind || ''}:${field.value ?? ''}`;
+
+function termsDescription(terms, requirement) {
+  const fields = terms.identity_fields || [];
+  const commonKeys = new Set(fields.map(identityKey));
+  const identities = fields.map(identityText).join(' · ');
+  const seal = terms.alternatives?.length
+    ? terms.alternatives.map(item => [
+      [item.purpose, item.number].filter(Boolean).join(''),
+      ...(item.identity_fields || []).filter(field => !commonKeys.has(identityKey(field))).map(identityText),
+    ].filter(Boolean).join(' · ')).join(' / ')
+    : [terms.purpose, terms.number].filter(Boolean).join('');
+  return {key:`company:${identity(terms.company)}`, company:terms.company,
+    branch:terms.branch || '', seal, identities,
+    sameName:GENERIC_CENTER.test(identity(terms.company)),
+    label:[terms.branch, identities, seal].filter(Boolean).join(' · ') || requirement};
+}
 
 function ownerDescription(owner) {
   // A full legal name is retained verbatim. Similar prefixes do not imply a group.
@@ -35,18 +56,15 @@ function ownerDescription(owner) {
 export function describeStandard(standard) {
   const requirement = requirementText(standard);
   const terms = standard?.name_terms;
-  // Production responses use the same parser as vocabulary correction and
-  // the detail panel. Old responses retain their conservative fallback.
+  // A browsing directory may collect names with distinct station/warehouse
+  // identities. It does not change the parser's stricter groupable flag.
   if (terms && terms.original === requirement) {
-    if (terms.groupable) {
-      const seal = terms.alternatives?.length
-        ? terms.alternatives.map(item=>[item.purpose,item.number].filter(Boolean).join('')).join(' / ')
-        : [terms.purpose, terms.number].filter(Boolean).join('');
-      return {key:`company:${identity(terms.company)}`, company:terms.company,
-        branch:terms.branch || '', seal,
-        label:[terms.branch, seal].filter(Boolean).join(' · ') || requirement};
+    const complete = terms.parse_status === 'parsed' || (!terms.parse_status && terms.groupable);
+    if (complete && typeof terms.company === 'string' && compact(terms.company) && !terms.unclassified) {
+      return termsDescription(terms, requirement);
     }
-    return {key:`requirement:${identity(requirement)}`, company:'',branch:'',seal:'',label:requirement};
+    return {key:`requirement:${identity(requirement)}`, company:'',branch:'',seal:'',
+      identities:'',sameName:false,label:requirement};
   }
   const text = compact(requirement);
   const match = text.match(SEAL_SUFFIX);
@@ -57,17 +75,18 @@ export function describeStandard(standard) {
     return {
       key: `company:${identity(description.company)}`,
       ...description,
-      seal,
+      seal, identities:'', sameName:false,
       label: [description.branch, seal].filter(Boolean).join(' · ') || requirement,
     };
   }
   return {
     key: requirement ? `requirement:${identity(requirement)}` : `unassigned:${standard?.id ?? ''}`,
-    company: '', branch: '', seal: '', label: requirement || '未填写签章要求',
+    company: '', branch: '', seal: '', identities:'', sameName:false,
+    label: requirement || '未填写签章要求',
   };
 }
 
-/** Keep the server's newest-first order, while collecting exact company groups. */
+/** Keep the server's newest-first order, collecting exact-name directories. */
 export function groupStandards(standards) {
   const groups = new Map();
   standards.forEach((standard, index) => {
@@ -77,6 +96,7 @@ export function groupStandards(standards) {
     if (!groups.has(key)) groups.set(key, {
       key,
       title: description.company || description.label,
+      sameName: description.sameName,
       items: [],
     });
     groups.get(key).items.push({standard, description});

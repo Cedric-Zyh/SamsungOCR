@@ -78,6 +78,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
   const typeFilters = {date: '', seal: ''};
   let revision = 0, loading = false, rendered = '', knownCompanies = [];
   let exporting = false;
+  let activeExport = null;
   let refreshDeferred = false;
   const expandedAnalysis = new Map();
   const dialog = () => $('#sample-statistics-dialog');
@@ -85,10 +86,25 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     onReturn: () => { if (refreshDeferred) { refreshDeferred = false; refresh(); } },
   });
   const syncExport = () => {
-    $('#sample-statistics-export').disabled = !data || loading || exporting;
-    $('#sample-statistics-scope-mode').disabled = loading;
-    $('#sample-statistics-batch').disabled = loading;
+    const button = $('#sample-statistics-export');
+    button.disabled = !data || loading || exporting;
+    button.textContent = exporting ? '正在导出…' : '导出 Excel';
+    button.setAttribute('aria-busy', String(exporting));
+    for (const selector of ['#sample-statistics-company', '#sample-statistics-scope-mode',
+      '#sample-statistics-batch', '#sample-statistics-refresh']) $(selector).disabled = loading || exporting;
+    $$('[data-stat-tab]').forEach(button => { button.disabled = loading || exporting; });
   };
+  const exportFeedback = (message = '', state = '') => {
+    const node = $('#sample-statistics-export-feedback');
+    node.textContent = message;
+    node.dataset.state = state;
+  };
+  function cancelExport() {
+    const pending = activeExport;
+    activeExport = null; exporting = false;
+    pending?.controller?.abort();
+    exportFeedback(); syncExport();
+  }
 
   function render(resetTableScroll = false) {
     $$('[data-stat-analysis]', $('#sample-statistics-body')).forEach(panel =>
@@ -210,31 +226,55 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     const params = {company, task_id: taskId, tab, filter: section === 'details' ? filter : '',
       channel:section === 'details' ? channel : '', requirement:section === 'details' ? requirement : ''};
     const title = tab === 'seal' ? '印章结果' : '日期结果';
+    const count = filterStatistics(data.items, params).length;
+    const scope = `${params.company || '全部公司'} · ${title}，${count} 张样单`;
+    const Controller = environment.window.AbortController || globalThis.AbortController;
+    const pending = activeExport = {controller: Controller ? new Controller() : null};
+    const current = () => activeExport === pending && dialog().open;
     exporting = true; syncExport();
-    $('#sample-statistics-export').textContent = '导出中…';
+    exportFeedback(`正在导出 ${scope}，生成“统计总览”和“样单明细”两个工作表…`, 'pending');
     try {
-      const response = await environment.window.fetch(services.samples.statisticsExportUrl(params));
+      const response = await environment.window.fetch(services.samples.statisticsExportUrl(params),
+        pending.controller ? {signal: pending.controller.signal} : undefined);
+      if (!current()) return;
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.error || '导出失败，请重试');
       }
-      const url = environment.window.URL.createObjectURL(await response.blob());
-      const link = environment.document.createElement('a');
-      link.href = url;
-      link.download = `样单统计-${params.company || '全部公司'}-${title}.xlsx`;
-      environment.document.body.appendChild(link);
-      link.click(); link.remove();
-      environment.window.setTimeout(() => environment.window.URL.revokeObjectURL(url), 60000);
-      toast('Excel 已生成，包含当前筛选下的全部记录', 'success');
-    } catch (error) { toast(error.message, 'danger'); }
+      const blob = await response.blob();
+      if (!current()) return;
+      exportFeedback(`Excel 已生成，正在发起下载（${scope}）…`, 'pending');
+      const url = environment.window.URL.createObjectURL(blob);
+      let link;
+      try {
+        link = environment.document.createElement('a');
+        link.href = url;
+        link.download = `样单统计-${params.company || '全部公司'}-${title}.xlsx`;
+        environment.document.body.appendChild(link);
+        link.click();
+      } finally {
+        link?.remove();
+        environment.window.setTimeout(() => environment.window.URL.revokeObjectURL(url), 60000);
+      }
+      const message = `已生成 Excel，已发起下载（${scope}）。包含“统计总览”和“样单明细”两个工作表。`;
+      exportFeedback(message, 'success');
+      toast(message, 'success');
+    } catch (error) {
+      if (!current()) return;
+      exportFeedback(`导出失败：${error.message || '请稍后重试'}。可再次点击“导出 Excel”重试。`, 'error');
+      toast(error.message || '导出失败，请重试', 'danger');
+    }
     finally {
-      exporting = false;
-      $('#sample-statistics-export').textContent = '导出 Excel';
-      syncExport();
+      if (activeExport === pending) {
+        activeExport = null;
+        exporting = false;
+        syncExport();
+      }
     }
   }
 
   function show(context) {
+    cancelExport();
     preview.clear(); refreshDeferred = false; expandedAnalysis.clear();
     $('#sample-statistics-explanation').open = false;
     company = context.company; knownCompanies = context.companies;
@@ -333,6 +373,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
     });
     dialog().addEventListener('close', () => {
       if (dialog().open) return;
+      cancelExport();
       revision++; loading = false; refreshDeferred = false; preview.clear();
     });
   }

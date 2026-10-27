@@ -111,3 +111,33 @@ test('sample-center grey ring images also request RGB-compatible previews', () =
   createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
   assert.match(target.innerHTML,/\/files\/samples\/artifacts\/task\/seals\/company.png\?preview=rgb/);
 });
+
+test('noise consensus displays the selected real crop and keeps diagnostic images folded', () => {
+  const target = {innerHTML: ''};
+  const item = {schema_version:2,index:0,color:'red',shape:'圆形',
+    multi_zone_layout:{method:'ellipse_continuous_name'},company_noise:{status:'adopted'},
+    inputs:[
+      {id:'old',zone_name:'company',channel:'company_noise_diagnostic',superseded_by:'selected',
+        image_url:'/files/samples/artifacts/task/seals/original.png'},
+      {id:'det',zone_name:'company',channel:'company_noise_diagnostic',superseded_by:'selected',
+        image_url:'/files/samples/artifacts/task/seals/detection.png'},
+      {id:'selected',zone_name:'company',channel:'ring',
+        image_url:'/files/samples/artifacts/task/seals/native.png'},
+      {id:'pad',zone_name:'company',channel:'company_noise_diagnostic',superseded_by:'selected',
+        image_url:'/files/samples/artifacts/task/seals/padding.png'}],
+    reads:[
+      {input_id:'old',text:'海完整公司名称',zone_label:'原连续环字读数（仅供核对）'},
+      {input_id:'det',text:'完整公司名称',zone_label:'原连续环字检测校验（仅供核对）'},
+      {input_id:'selected',text:'完整公司名称',zone_label:'环形公司名称',channel:'ring'},
+      {input_id:'pad',text:'完整公司名称',zone_label:'加白边重读校验（仅供核对）'}]};
+  const reviewState={artifactTab:'seals',current:{processing_artifacts:{seals:[item]}}};
+  createReviewEvidence({environment:{},ui:{$:()=>target},reviewState}).renderArtifacts();
+  assert.match(target.innerHTML,/三路重读一致后采用/);
+  assert.match(target.innerHTML,/原始与校验识别（仅供核对）/);
+  const split = target.innerHTML.indexOf('<details>');
+  assert.ok(target.innerHTML.indexOf('native.png?preview=rgb') < split);
+  assert.ok(target.innerHTML.indexOf('original.png?preview=rgb') > split);
+  assert.ok(target.innerHTML.indexOf('detection.png?preview=rgb') > split);
+  assert.ok(target.innerHTML.indexOf('padding.png?preview=rgb') > split);
+  assert.ok(target.innerHTML.indexOf('海完整公司名称') > split);
+});

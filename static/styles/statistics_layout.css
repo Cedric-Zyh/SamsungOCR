@@ -3,6 +3,11 @@
 .sample-statistics-heading { padding-bottom:12px; }
 .sample-statistics-heading h2 { font-size:20px; }
 .sample-statistics-heading p { margin-top:4px; }
+.sample-stat-export-feedback { margin:12px 0 0; padding:10px 13px; border:1px solid var(--archive-line); border-left:3px solid var(--archive-muted); border-radius:2px; background:#e9e6dd; color:var(--archive-text); font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.sample-stat-export-feedback:empty { display:none; }
+.sample-stat-export-feedback[data-state="pending"] { border-left-color:var(--archive-accent); }
+.sample-stat-export-feedback[data-state="success"] { border-left-color:var(--archive-success); background:#e7ebdf; color:#46563a; }
+.sample-stat-export-feedback[data-state="error"] { border-left-color:var(--archive-danger); background:#f3e8e1; color:var(--archive-danger); }
 .sample-statistics-scope { margin-top:14px; gap:12px; }
 .sample-statistics-scope select { padding:7px 9px; }
 .sample-stat-scope-meta { display:flex; align-items:center; gap:14px; min-height:30px; margin-top:6px; font-size:11px; color:var(--archive-muted); }

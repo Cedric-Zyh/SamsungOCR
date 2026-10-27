@@ -60,6 +60,7 @@ export function createApiClients(api) {
       saveStandard: (id, payload) => api(`/api/samples/results/${encodeURIComponent(id)}/seal-standard`, {method:'POST', json:payload}),
     },
     sealStandards: {
+      updateLayout: (id, payload) => api(`/api/seal-standards/${encodeURIComponent(id)}/layout`, {method:'PATCH', json:payload}),
       list: search => api(query('/api/seal-standards', {search})),
       sources: id => api(`/api/seal-standards/${encodeURIComponent(id)}/sources`),
       recognitionInfo: id => api(`/api/seal-standards/${encodeURIComponent(id)}/recognition-info`),
@@ -99,6 +100,8 @@ export function createApiClients(api) {
       load: options => api('/api/report', options),
     },
     settings: {
+      localModels: () => api('/api/settings/local-models'),
+      setLocalModels: enabled => api('/api/settings/local-models', {method:'POST', json:{enabled}}),
       update: payload => api('/api/settings', {method: 'PATCH', json: payload}),
       recognition: options => api('/api/settings/recognition', options),
       updateRecognition: payload => api('/api/settings/recognition', {method: 'PATCH', json: payload}),

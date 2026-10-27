@@ -49,7 +49,7 @@ test('source opens only once while pending and recovers from errors', async () =
   assert.equal(attrs.has('aria-busy'),false);
 });
 
-function centerHarness() {
+function centerHarness(items = [1,2].map(id=>({id,revision:1,requirement:`测试${id}有限公司公章`,image_url:'/image.png'}))) {
   const {createSealCenter}=require('../static/modules/seals/center.mjs');
   const element=()=>{
     const events={},attrs=new Map(),classes=new Set();
@@ -58,7 +58,7 @@ function centerHarness() {
       setAttribute:(k,v)=>attrs.set(k,v),removeAttribute:k=>attrs.delete(k),
       addEventListener:(k,fn)=>events[k]=fn,fire:k=>events[k]?.({}),
       querySelector:()=>null,querySelectorAll:()=>[],closest:()=>null,scrollIntoView(){},
-      insertAdjacentHTML(){}};
+      insertAdjacentHTML(_position,markup){this.appendedMarkup=(this.appendedMarkup||'')+markup;}};
   };
   const nodes=new Map(), hosts=[];
   const $=selector=>{
@@ -66,12 +66,12 @@ function centerHarness() {
     return nodes.get(selector);
   };
   const detail=$('[data-standard-detail]');
-  Object.defineProperty(detail,'innerHTML',{set(value){this.markup=value;const host=element();hosts.push(host);nodes.set('[data-standard-recognition-info]',host)},get(){return this.markup}});
-  const buttons=[1,2].map(id=>Object.assign(element(),{dataset:{standardId:String(id)}}));
+  Object.defineProperty(detail,'innerHTML',{set(value){this.markup=value;this.appendedMarkup='';const host=element();hosts.push(host);nodes.set('[data-standard-recognition-info]',host)},get(){return this.markup}});
+  const buttons=items.map(({id})=>Object.assign(element(),{dataset:{standardId:String(id)}}));
   const $$=selector=>selector==='[data-standard-id]'?buttons:[];
   const pending=[];
   const center=createSealCenter({ui:{$,$$,toast(){}},services:{sealStandards:{
-    list:async()=>({items:[1,2].map(id=>({id,revision:1,requirement:`测试${id}有限公司公章`,image_url:'/image.png'}))}),
+    list:async()=>({items}),
     recognitionInfo:id=>new Promise((resolve,reject)=>pending.push({id,resolve,reject}))
   }}});
   return {center,pending,buttons,hosts,$};
@@ -98,6 +98,35 @@ test('load errors allow retry and a changed revision cannot silently show mismat
   h.pending[1].resolve({...info(1,'不应展示'),revision:2});await flush();
   assert.match(h.hosts[0].innerHTML,/档案已更新/);
   assert.doesNotMatch(h.hosts[0].innerHTML,/不应展示/);
+});
+
+test('all name directories use collapsed headings and counts, and searches retain the directory',async()=>{
+  const station=(id,code)=>({id,revision:1,image_url:'/image.png',requirement:'三星电子维修中心'+code,
+    name_terms:{original:'三星电子维修中心'+code,company:'三星电子维修中心',parse_status:'parsed',
+      groupable:false,identity_fields:[{kind:'station_code',label:'站点编号',value:code}]}});
+  const singleton={id:3,revision:1,image_url:'/image.png',requirement:'广州中启通信科技有限公司'};
+  const h=centerHarness([station(1,'5972036'),station(2,'2310637'),singleton]);
+  h.center.initialize();await h.center.load();
+  const list=h.$('[data-standard-list]');
+  assert.equal((list.innerHTML.match(/<details /g)||[]).length,2);
+  assert.doesNotMatch(list.innerHTML,/seal-library-singleton|data-standard-group="[^"]+"\s+open/);
+  assert.match(list.innerHTML,/同名归档/);
+  assert.match(list.innerHTML,/<b>站点编号 5972036<\/b>/);
+  assert.match(list.innerHTML,/<b>站点编号 2310637<\/b>/);
+  assert.match(list.innerHTML,/<span class="seal-group-name">广州中启通信科技有限公司<\/span><span class="seal-group-count">1 条<\/span>/);
+  assert.equal(h.$('[data-standard-summary]').textContent,'共 2 组 · 3 条');
+  assert.match(h.$('[data-standard-detail]').appendedMarkup,/同组标准章/);
+  assert.match(h.$('[data-standard-detail]').appendedMarkup,/站点编号 2310637/);
+  assert.doesNotMatch(h.$('[data-standard-detail]').appendedMarkup,/同公司印章/);
+  const search=h.$('#seal-center-search');search.value='2310637';search.fire('input');
+  assert.match(list.innerHTML,/三星电子维修中心/);
+  assert.match(list.innerHTML,/1 \/ 2 条/);
+  assert.match(list.innerHTML,/data-standard-id="2"/);
+  assert.doesNotMatch(list.innerHTML,/data-standard-id="1"|data-standard-id="3"/);
+  search.value='';search.fire('input');
+  assert.match(list.innerHTML,/data-standard-id="1"/);
+  assert.match(list.innerHTML,/data-standard-id="3"/);
+  assert.equal(h.$('[data-standard-summary]').textContent,'共 2 组 · 3 条');
 });
 
 test('terms show store identity, independent codes and partial leftovers in separate fields',()=>{

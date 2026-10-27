@@ -57,16 +57,16 @@ test('Excel export uses current scope, downloads XLSX and recovers from failure'
     return nodes.get(selector);
   };
   const dateTab = $('[date-tab]'); dateTab.dataset.statTab = 'date';
-  let failed = false;
+  let failed = false, respond;
   const environment = {
     document:{activeElement:null, body:{appendChild() {}},createElement:()=>({
       click() { downloads.push(this.download); },remove() {},
     })},
     window:{addEventListener() {},setTimeout(fn) { fn(); },
       URL:{createObjectURL:()=> 'blob:test',revokeObjectURL() {}},
-      fetch:async url=>{ urls.push(url); return failed
+      fetch:url=>{ urls.push(url); return new Promise(resolve=>{respond=()=>resolve(failed
         ? {ok:false,json:async()=>({error:'导出失败示例'})}
-        : {ok:true,blob:async()=>new Blob(['xlsx'])}; },
+        : {ok:true,blob:async()=>new Blob(['xlsx'])});}); },
     },
   };
   const services = createApiClients(async()=>({items:[],columns:[],batches:[]}));
@@ -75,18 +75,70 @@ test('Excel export uses current scope, downloads XLSX and recovers from failure'
   stats.initialize();
   await stats.show({company:'客户 & 甲',companies:[]});
   dateTab.handlers.click();
+  const pending = $('#sample-statistics-export').handlers.click();
+  assert.equal($('#sample-statistics-export').disabled, true);
+  assert.equal($('#sample-statistics-export').textContent, '正在导出…');
+  assert.equal($('#sample-statistics-export-feedback').dataset.state, 'pending');
+  assert.match($('#sample-statistics-export-feedback').textContent,/正在导出.*统计总览.*样单明细/);
+  assert.equal($('#sample-statistics-company').disabled, true);
+  assert.equal(dateTab.disabled, true);
   await $('#sample-statistics-export').handlers.click();
+  assert.equal(urls.length,1);
+  respond();await pending;
   const url = new URL(urls[0], 'http://localhost');
   assert.equal(url.pathname, '/api/samples/statistics/export');
   assert.equal(url.searchParams.get('company'), '客户 & 甲');
   assert.equal(url.searchParams.get('tab'), 'date');
   assert.equal(downloads[0], '样单统计-客户 & 甲-日期结果.xlsx');
   assert.equal($('#sample-statistics-export').disabled, false);
+  assert.equal(dateTab.disabled, false);
+  assert.equal($('#sample-statistics-export-feedback').dataset.state, 'success');
+  assert.match($('#sample-statistics-export-feedback').textContent,/已生成 Excel，已发起下载.*统计总览.*样单明细/);
+  const success = $('#sample-statistics-export-feedback').textContent;
+  await stats.refresh();
+  assert.equal($('#sample-statistics-export-feedback').textContent, success);
   failed = true;
-  await $('#sample-statistics-export').handlers.click();
+  const failure = $('#sample-statistics-export').handlers.click();respond();await failure;
   assert.equal(notices.at(-1), '导出失败示例');
+  assert.equal($('#sample-statistics-export-feedback').dataset.state, 'error');
+  assert.match($('#sample-statistics-export-feedback').textContent,/导出失败示例.*重试/);
   assert.equal($('#sample-statistics-export').textContent, '导出 Excel');
   assert.equal($('#sample-statistics-export').disabled, false);
+});
+
+test('closing and reopening cancels export and late responses or bodies cannot download or unlock a fresh export', async () => {
+  for (const stage of ['response','body']) {
+    const {$,controller,environment} = statisticsHarness([]);
+    const calls = [], downloads = [];
+    let finishOld, finishNew;
+    const delayed = new Promise(resolve=>{finishOld=resolve;});
+    const oldResponse = {ok:true,blob:()=>stage==='body' ? delayed : Promise.resolve(new Blob(['old']))};
+    environment.window.fetch = (url, options) => {
+      calls.push({url,options});
+      if (calls.length===1) return stage==='response' ? delayed : Promise.resolve(oldResponse);
+      return new Promise(resolve=>{finishNew=resolve;});
+    };
+    environment.document.createElement=()=>({click(){downloads.push(this.download);},remove(){}});
+    await controller.show({company:'旧公司',companies:[]});
+    const oldExport = $('#sample-statistics-export').handlers.click();
+    await new Promise(resolve=>setImmediate(resolve));
+    $('#sample-statistics-dialog').open=false;
+    $('#sample-statistics-dialog').handlers.close();
+    assert.equal(calls[0].options.signal.aborted,true);
+    assert.equal($('#sample-statistics-export-feedback').textContent,'');
+    await controller.show({company:'新公司',companies:[]});
+    const newExport = $('#sample-statistics-export').handlers.click();
+    finishOld(stage==='response' ? oldResponse : new Blob(['old']));
+    await oldExport;
+    assert.equal(downloads.length,0);
+    assert.equal($('#sample-statistics-export').disabled,true);
+    assert.equal($('#sample-statistics-export-feedback').dataset.state,'pending');
+    assert.match($('#sample-statistics-export-feedback').textContent,/新公司/);
+    finishNew({ok:true,blob:async()=>new Blob(['new'])});await newExport;
+    assert.deepEqual(downloads,['样单统计-新公司-印章结果.xlsx']);
+    assert.equal($('#sample-statistics-export-feedback').dataset.state,'success');
+    assert.equal($('#sample-statistics-export').disabled,false);
+  }
 });
 
 function statisticsHarness(items, {dataForTask} = {}) {

@@ -310,14 +310,28 @@ def _ring_text_normal_maps(mask, geometry):
     sampled = cv2.remap(mask, *maps, cv2.INTER_NEAREST,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     height, width = sampled.shape
+    def cut_glyph_count(stats):
+        return sum(
+            top + h >= height - 1
+            and h >= height * .35
+            and 8 <= w <= width * .12
+            and area >= max(25, height)
+            for left, top, w, h, area in stats[1:]
+        )
+
     _, _, stats, _ = cv2.connectedComponentsWithStats((sampled > 0).astype(np.uint8))
-    cut_components = sum(
-        top + h >= height - 1
-        and h >= height * .35
-        and 8 <= w <= width * .12
-        and area >= max(25, height)
+    cut_components = cut_glyph_count(stats)
+    if cut_components < 3 and any(
+        top <= 1 and top + h >= height - 1 and w > width * .12
         for left, top, w, h, area in stats[1:]
-    )
+    ):
+        # The rim can join many clipped glyphs into one wide component. For
+        # measurement only, disconnect the outer quarter and count their
+        # inner strokes again. OCR still samples the untouched source pixels.
+        detached = sampled.copy()
+        detached[:round(height * .25)] = 0
+        _, _, detached_stats, _ = cv2.connectedComponentsWithStats((detached > 0).astype(np.uint8))
+        cut_components = cut_glyph_count(detached_stats)
     if cut_components < 3:
         return maps
     wider = _ellipse_normal_maps(outer, inner, True)

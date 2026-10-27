@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {describeStandard, groupStandards} = require('../static/modules/seals/standard_groups.mjs');
 
-test('server terms control archive grouping and preserve independent identity codes',()=>{
+test('server terms control name directories and preserve independent identity codes',()=>{
   const make=(requirement,terms)=>({requirement,name_terms:{original:requirement,...terms}});
   const company='深圳欧瑞特供应链管理有限公司';
   const items=[make(company+'福州仓库收货专用章(1)',{company,branch:'福州仓库',purpose:'收货专用章',number:'(1)',groupable:true}),
@@ -10,12 +10,65 @@ test('server terms control archive grouping and preserve independent identity co
   assert.equal(groupStandards(items).length,1);
   assert.equal(describeStandard(items[0]).label,'福州仓库 · 收货专用章(1)');
   const codes=['6055487','4910964'].map(code=>make('三星电子服务中心授权代码:'+code,
-    {company:'三星电子服务中心',groupable:false,identity_fields:[{kind:'authorization_code',value:code}]}));
-  assert.equal(groupStandards(codes).length,2);
+    {company:'三星电子服务中心',parse_status:'parsed',groupable:false,
+      identity_fields:[{kind:'authorization_code',value:code}]}));
+  const [directory] = groupStandards(codes);
+  assert.equal(groupStandards(codes).length,1);
+  assert.equal(directory.sameName,true);
+  assert.deepEqual(directory.items.map(item=>item.description.identities),['授权代码 6055487','授权代码 4910964']);
+  assert.deepEqual(directory.items.map(item=>item.standard),codes);
+  assert(codes.every(item=>item.name_terms.groupable === false));
   const store=make('华润万象汇三星授权体验店',{company:'华润万象汇三星授权体验店',groupable:true});
   assert.equal(describeStandard(store).company,'华润万象汇三星授权体验店');
   // Stale metadata cannot override a changed requirement.
   assert.notEqual(describeStandard({...store,requirement:'其他有限公司公章'}).company,store.requirement);
+});
+
+test('complete generic-center metadata groups stations and keeps branch and phone distinctions visible',()=>{
+  const make=(id,company,branch,field)=>({id,requirement:`${company}${branch || ''}${field.value}`,
+    name_terms:{original:`${company}${branch || ''}${field.value}`,company,branch,
+      parse_status:'parsed',groupable:false,identity_fields:[field]}});
+  const standards=[
+    make(1,'三星电子维修中心','',{kind:'station_code',value:'5972036'}),
+    make(2,'三星电子维修中心','',{kind:'station_code',value:'2310637'}),
+    make(3,'三星电子服务中心','上海信',{kind:'station_code',label:'站代码',value:'6237106'}),
+    make(4,'三星电子服务中心','',{kind:'authorization_code',value:'6055487'}),
+    make(5,'三星电子授权服务中心','',{kind:'phone',value:'0431-81813021'}),
+    make(6,'三星电子授权服务中心','',{kind:'phone',value:'0431-88693789'}),
+  ];
+  const groups=groupStandards(standards);
+  assert.deepEqual(groups.map(group=>group.items.map(item=>item.standard.id)),[[1,2],[3,4],[5,6]]);
+  assert(groups.every(group=>group.sameName));
+  assert.equal(groups[1].items[0].description.label,'上海信 · 站代码 6237106');
+  assert.equal(groups[2].items[1].description.label,'电话 0431-88693789');
+});
+
+test('same-name warehouse directories retain literal codes and reversed stamp-number choices',()=>{
+  const requirements=[['020DCH','①/②'],['020DCH','②/①'],['O20DCH','①/②'],['020DCM','①/②']];
+  const standards=requirements.map(([code,number],index)=>{
+    const requirement=`广州花东仓${code}收货专用章${number}`;
+    return {id:index+1,requirement,name_terms:{original:requirement,company:'广州花东仓',
+      parse_status:'parsed',groupable:false,purpose:'收货专用章',number,
+      identity_fields:[{kind:'warehouse_code',label:'仓库代码',value:code}]}};
+  });
+  const groups=groupStandards(standards);
+  assert.equal(groups.length,1);
+  assert.equal(groups[0].title,'广州花东仓');
+  assert.equal(groups[0].sameName,false);
+  assert.deepEqual(groups[0].items.map(item=>item.standard),standards);
+  assert.deepEqual(groups[0].items.map(item=>item.description.label),[
+    '仓库代码 020DCH · 收货专用章①/②','仓库代码 020DCH · 收货专用章②/①',
+    '仓库代码 O20DCH · 收货专用章①/②','仓库代码 020DCM · 收货专用章①/②',
+  ]);
+});
+
+test('partial metadata preserves original entries even if an old grouping flag was true',()=>{
+  const requirements=['甲有限公司北售后服务专用章','甲有限公司南售后服务专用章'];
+  const standards=requirements.map(requirement=>({requirement,recognized:'甲有限公司收货章',
+    name_terms:{original:requirement,company:'甲有限公司',parse_status:'partial',
+      groupable:true,unclassified:requirement.includes('北')?'北':'南'}}));
+  assert.deepEqual(groupStandards(standards).map(group=>group.title),requirements);
+  assert(standards.every(standard=>describeStandard(standard).company === ''));
 });
 
 test('alternative descriptions keep both purposes and their own stamp numbers',()=>{
@@ -26,6 +79,19 @@ test('alternative descriptions keep both purposes and their own stamp numbers',(
   const description=describeStandard(standard);
   assert.equal(description.company,company);
   assert.equal(description.seal,'业务专用章 / 维修业务专用章(1)');
+});
+
+test('alternative-only identity fields remain attached to their own wording',()=>{
+  const company='青岛和沃电子技术有限公司';
+  const requirement=company+'业务专用章授权代码:11/'+company+'维修业务专用章（1）授权代码:22';
+  const standard={requirement,name_terms:{original:requirement,company,parse_status:'parsed',groupable:false,
+    identity_fields:[],alternatives:[
+      {purpose:'业务专用章',identity_fields:[{kind:'authorization_code',value:'11'}]},
+      {purpose:'维修业务专用章',number:'(1)',identity_fields:[{kind:'authorization_code',value:'22'}]},
+    ]}};
+  const description=describeStandard(standard);
+  assert.equal(description.seal,'业务专用章 · 授权代码 11 / 维修业务专用章(1) · 授权代码 22');
+  assert.equal(description.identities,'');
 });
 
 test('all branches of the exact legal company group together with distinct purposes and seal numbers', () => {
@@ -75,7 +141,7 @@ test('warehouse and city-only branches retain their location within the exact le
   assert.deepEqual(groups[2].items.map(item => item.description.label), ['济宁分公司', '业务专用章']);
 });
 
-test('generic Samsung service-center wording cannot merge independent authorization codes or stations', () => {
+test('legacy responses without parsed metadata keep generic center identities separate', () => {
   const requirements = [
     '三星电子维修中心5972036', '三星电子维修中心2310637',
     '三星电子服务中心授权代码:6055487', '三星电子服务中心授权代码:4910964',

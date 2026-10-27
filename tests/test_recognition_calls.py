@@ -234,9 +234,10 @@ def test_danzhengtong_upload_and_polling_are_not_extra_recognition_calls(source,
 
 
 def test_inference_duration_excludes_model_loading(source, monkeypatch):
-    from receipt_ocr.runtime import calls
+    from receipt_ocr.runtime import calls, execution
     clock = [0.0]
     monkeypatch.setattr(calls, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(execution, 'perf_counter', lambda: clock[0])
     def predict(**kwargs):
         clock[0] += 2
         return []
@@ -248,7 +249,45 @@ def test_inference_duration_excludes_model_loading(source, monkeypatch):
         paddle_runtime.recognize_text(source)
     snapshot = captured.snapshot()
     assert snapshot['processing_seconds'] == 102
+    assert snapshot['model_initialization_seconds'] == 100
+    assert snapshot['recognition_seconds'] == 2
+    assert snapshot['summary']['total'] == 1
     assert snapshot['calls'][0]['seconds'] == 2
+
+
+def test_overlapping_model_initialization_is_subtracted_once_and_does_not_leak(monkeypatch):
+    from receipt_ocr.runtime import calls
+    clock = [0.0]
+    monkeypatch.setattr(calls, 'perf_counter', lambda: clock[0])
+    with capture_recognition_calls() as captured:
+        for start, end in [(1, 5), (3, 7), (6, 8)]:
+            calls.record_model_initialization(start, end)
+        clock[0] = 10
+    snapshot = captured.snapshot()
+    assert snapshot['processing_seconds'] == 10
+    assert snapshot['model_initialization_seconds'] == 7
+    assert snapshot['recognition_seconds'] == 3
+    assert snapshot['summary']['total'] == 0
+    with capture_recognition_calls() as next_run:
+        clock[0] = 12
+    assert next_run.snapshot()['model_initialization_seconds'] == 0
+    assert next_run.snapshot()['recognition_seconds'] == 2
+
+
+def test_failed_initialization_keeps_its_separate_time_without_an_inference(monkeypatch):
+    from receipt_ocr.runtime import calls, execution
+    clock = [0.0]
+    monkeypatch.setattr(calls, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(execution, 'perf_counter', lambda: clock[0])
+    with pytest.raises(RuntimeError) as raised:
+        with capture_recognition_calls():
+            with execution.measure('paddle_seal_model_setup'):
+                clock[0] = 6
+                raise RuntimeError('setup failed')
+    snapshot = raised.value.recognition_calls
+    assert snapshot['model_initialization_seconds'] == 6
+    assert snapshot['recognition_seconds'] == 0
+    assert snapshot['summary']['total'] == 0
 
 
 def test_actual_predict_exception_is_counted(source, predictions):

@@ -39,6 +39,43 @@ def test_typography_and_explicit_field_order_do_not_change_identity(text):
     assert compare(text=text)["status"] == "匹配"
 
 
+@pytest.mark.parametrize("separator", [",", "，"])
+def test_address_label_comma_keeps_identity_strict_and_raw_ocr_unchanged(separator):
+    text = STAMP.replace("地址：", "地址" + separator)
+    result = compare(text=text)
+    assert result["status"] == "匹配"
+    assert result["recognized"] == text and result["all_recognized"] == [text]
+    assert result["field_comparison"]["matched_fields"] == ["名称", "授权代码"]
+    assert result["field_comparison"]["additional_fields"] == ["地址", "电话"]
+
+
+@pytest.mark.parametrize("before,after", [
+    ("欣金维", "欣金雄"), ("服务中心", "服务中心分部"),
+    ("4910964", "4910965"), ("4910964", "491096"),
+    ("4910964", "49109640"), ("4910964", "491O964"),
+    ("授权代码：4910964", "授权代码："),
+])
+def test_address_comma_does_not_hide_a_wrong_name_or_authorization_code(before, after):
+    text = STAMP.replace("地址：", "地址，").replace(before, after)
+    assert compare(text=text)["status"] != "匹配"
+
+
+def test_address_comma_keeps_contact_values_mandatory_when_explicitly_required():
+    required = REQUIRED + "地址:" + ADDRESS
+    text = STAMP.replace("地址：", "地址，")
+    assert compare(required, text)["status"] == "匹配"
+    assert compare(required, text.replace("173", "174"))["status"] != "匹配"
+
+
+def test_real_chengdu_ocr_address_comma_ignores_only_unrequested_contact_information():
+    text = ("三星授权(成都市欣金维电子)服务中心授权代码：4910964"
+            "地址，成都市太升离路173号附4-5号（几童医院往北200米）电话：028-85438139")
+    result = compare(text=text)
+    assert result["status"] == "匹配" and result["reliable"] is True
+    assert result["recognized"] == text
+    assert result["comparison_policy"] == "strict_information_fields"
+
+
 @pytest.mark.parametrize("text", [
     STAMP.replace("欣金维", "欣金雄"),
     STAMP.replace("服务中心", "服务中心分部"),

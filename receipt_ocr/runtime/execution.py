@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock
 from time import perf_counter
 
-from .calls import record_recognition_cache_hit
+from .calls import record_recognition_cache_hit, record_model_initialization
 
 
 @dataclass
@@ -36,18 +36,22 @@ _current = ContextVar('receipt_execution', default=None)
 @contextmanager
 def measure(name):
     execution = _current.get()
-    if execution is None:
+    initialization = name.endswith('_model_setup') or name == 'paddle_text_box_setup'
+    if execution is None and not initialization:
         yield
         return
     started = perf_counter()
     try:
         yield
     finally:
-        elapsed = perf_counter() - started
-        with execution.timing_lock:
-            value = execution.steps.setdefault(name, {'seconds': 0.0, 'calls': 0})
-            value['seconds'] += elapsed
-            value['calls'] += 1
+        finished = perf_counter()
+        if initialization:
+            record_model_initialization(started, finished)
+        if execution is not None:
+            with execution.timing_lock:
+                value = execution.steps.setdefault(name, {'seconds': 0.0, 'calls': 0})
+                value['seconds'] += finished - started
+                value['calls'] += 1
 
 
 def timed(name):

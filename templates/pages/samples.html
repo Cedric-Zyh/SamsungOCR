@@ -80,6 +80,7 @@
 </dialog>
 <dialog id="sample-statistics-dialog" class="workspace-dialog sample-statistics-dialog" aria-labelledby="sample-statistics-title">
   <header class="sample-statistics-heading"><div><h2 id="sample-statistics-title">样单统计结果</h2><p>按人工标注评估识别结果</p></div><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-statistics-refresh">刷新</button><button type="button" class="secondary-button" id="sample-statistics-export" title="导出当前统计范围的汇总及明细" disabled>导出 Excel</button><button type="button" class="secondary-button" data-dismiss-dialog autofocus>关闭 ×</button></div></header>
+  <p id="sample-statistics-export-feedback" class="sample-stat-export-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
   <div class="sample-statistics-scope">
     <label>客户公司 <select id="sample-statistics-company"><option value="">全部公司</option></select></label>
     <label>统计范围 <select id="sample-statistics-scope-mode" aria-describedby="sample-statistics-scope-note"><option value="latest">每张样单的最新测试</option><option value="batch">指定一次测试批次</option></select></label>

@@ -43,6 +43,8 @@ class RecognitionCalls:
         self.calls = []
         self.cache_hits = 0
         self._started = perf_counter()
+        self._finished = None
+        self._model_initializations = []
         self._lock = Lock()
 
     def input_metadata(self, source):
@@ -90,14 +92,27 @@ class RecognitionCalls:
     def finish(self, status):
         with self._lock:
             self.finished_at = _now()
-            self.processing_seconds = round(max(0, perf_counter() - self._started), 4)
+            self._finished = perf_counter()
+            self.processing_seconds = round(max(0, self._finished - self._started), 4)
             self.status = status
 
     def snapshot(self):
         with self._lock:
-            return deepcopy(dict(version=1, started_at=self.started_at, finished_at=self.finished_at,
-                                 processing_seconds=self.processing_seconds if self.finished_at else
-                                 round(max(0, perf_counter() - self._started), 4), status=self.status,
+            end = self._finished if self._finished is not None else perf_counter()
+            total = round(max(0, end - self._started), 4)
+            # Count wall time once even when initialization intervals overlap.
+            intervals = sorted((max(self._started, start), min(end, stop))
+                               for start, stop in self._model_initializations
+                               if stop > self._started and start < end)
+            initialized, last = 0.0, self._started
+            for start, stop in intervals:
+                initialized += max(0, stop - max(last, start))
+                last = max(last, stop)
+            initialized = round(min(total, initialized), 4)
+            return deepcopy(dict(version=2, started_at=self.started_at, finished_at=self.finished_at,
+                                 processing_seconds=total,
+                                 model_initialization_seconds=initialized,
+                                 recognition_seconds=round(max(0, total - initialized), 4), status=self.status,
                                  summary=dict(total=len(self.calls),
                                               succeeded=sum(row['status'] == 'succeeded' for row in self.calls),
                                               failed=sum(row['status'] == 'failed' for row in self.calls),
@@ -180,6 +195,14 @@ def record_recognition_cache_hit():
     if collector is not None:
         with collector._lock:
             collector.cache_hits += 1
+
+
+def record_model_initialization(started, finished):
+    """Keep model preparation separate without adding an OCR invocation."""
+    collector = _current.get()
+    if collector is not None and finished > started:
+        with collector._lock:
+            collector._model_initializations.append((started, finished))
 
 
 def check_prediction_errors(invocation, predictions):

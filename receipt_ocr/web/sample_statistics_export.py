@@ -1,9 +1,11 @@
 """Excel download for the sample statistics view, including every filtered row."""
+from datetime import date, datetime
 from io import BytesIO
 import re
+from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .sample_statistics import sample_statistics, summarize_problem_annotations
@@ -99,35 +101,110 @@ def counts(rows, key):
     return states
 
 
+PALETTE = {'ink': '233026', 'green': '4F6347', 'line': 'D9DED5',
+           'paper': 'F6F7F3', 'muted': '687264', 'good': 'E8F0E2',
+           'bad': 'F8E9E1', 'amber': 'FBF1D9', 'blue': 'E7EDF2'}
+OVERVIEW_COLUMNS = 12
+
+
 def _append(sheet, values):
     # Keep names, requirements and OCR text literal in every worksheet.
-    sheet.append(values)
+    sheet.append(values if values else [None])
     for item in sheet[sheet.max_row]:
         if isinstance(item.value, str):
             item.value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', item.value)
             item.data_type = 's'
+        item.font = Font(name='微软雅黑', size=11, color=PALETTE['ink'])
         item.alignment = Alignment(vertical='top', wrap_text=True)
+        if isinstance(item.value, (int, float)):
+            item.number_format = '#,##0'
+    sheet.row_dimensions[sheet.max_row].height = 30
+    if sheet.title == '统计总览' and len(values) == 2 and isinstance(values[1], str) and len(values[1]) > 12:
+        sheet.merge_cells(start_row=sheet.max_row, start_column=2, end_row=sheet.max_row, end_column=OVERVIEW_COLUMNS)
+        sheet.row_dimensions[sheet.max_row].height = 30
+    if sheet.title == '统计总览' and len(values) == 3 and isinstance(values[2], str):
+        sheet.merge_cells(start_row=sheet.max_row, start_column=3, end_row=sheet.max_row, end_column=OVERVIEW_COLUMNS)
 
 
 def _style(sheet, headers):
     for index in headers:
         for item in sheet[index]:
-            item.fill = PatternFill('solid', fgColor='343D2E')
-            item.font = Font(color='FFFFFF', bold=True)
-        sheet.row_dimensions[index].height = 32
-    sheet['A1'].font = Font(size=18, bold=True, color='343D2E')
-    for index in range(1, sheet.max_column + 1):
-        sheet.column_dimensions[get_column_letter(index)].width = 24 if index < 3 else 34
+            if item.value is not None:
+                item.fill = PatternFill('solid', fgColor=PALETTE['green'])
+                item.font = Font(name='微软雅黑', size=11, color='FFFFFF', bold=True)
+                item.alignment = Alignment(vertical='center', wrap_text=True)
+                item.border = Border(bottom=Side(style='thin', color=PALETTE['line']))
+        sheet.row_dimensions[index].height = 36
 
 
 def _summary_sheet(workbook, title, context, header):
-    sheet = workbook.create_sheet(title)
-    _append(sheet, [title])
-    for values in context:
-        _append(sheet, values)
+    sheet = workbook['统计总览']
     _append(sheet, [])
+    _append(sheet, [title])
+    section_row = sheet.max_row
+    sheet.merge_cells(start_row=section_row, start_column=1, end_row=section_row, end_column=OVERVIEW_COLUMNS)
+    sheet.cell(section_row, 1).font = Font(name='微软雅黑', size=13, bold=True, color=PALETTE['green'])
+    sheet.row_dimensions[section_row].height = 32
     _append(sheet, header)
     return sheet, sheet.max_row
+
+
+def _title(sheet, text, end_column):
+    _append(sheet, [text])
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_column)
+    sheet['A1'].font = Font(name='微软雅黑', size=16, bold=True, color=PALETTE['ink'])
+    sheet.row_dimensions[1].height = 42
+
+
+def _scope(sheet, company, scope, selected, requirement, channel, exported_at, end_column):
+    for label, value in [('客户公司', company or '全部公司'), ('统计范围', scope),
+                         ('筛选范围', FILTERS[selected] + ' · ' + (requirement or '全部签章要求') + ' · ' + channel)]:
+        _append(sheet, [label, value])
+        if len(sheet.merged_cells.ranges) == 0 or not any(sheet.max_row == area.min_row for area in sheet.merged_cells.ranges):
+            sheet.merge_cells(start_row=sheet.max_row, start_column=2, end_row=sheet.max_row, end_column=end_column)
+        sheet.cell(sheet.max_row, 1).font = Font(name='微软雅黑', size=10, color=PALETTE['muted'])
+    _append(sheet, ['导出时间', exported_at])
+    sheet.cell(sheet.max_row, 2).number_format = 'yyyy-mm-dd hh:mm'
+
+
+def _finalize(sheet, *, detail=False, headers=()):
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 90 if detail else 85
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = 'landscape'
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.page_margins.left = sheet.page_margins.right = 0.25
+    sheet.page_margins.top = sheet.page_margins.bottom = 0.35
+    sheet.print_options.horizontalCentered = False
+    sheet.print_area = f'A1:{get_column_letter(sheet.max_column)}{sheet.max_row}'
+    sheet.sheet_properties.outlinePr.summaryRight = False
+    sheet.sheet_properties.tabColor = PALETTE['green'] if not detail else '899C7C'
+    sheet.oddFooter.center.text = '第 &P 页 / 共 &N 页'
+    if not detail:
+        for index in range(1, OVERVIEW_COLUMNS + 1):
+            sheet.column_dimensions[get_column_letter(index)].width = 12
+        sheet.column_dimensions['A'].width = 38
+        sheet.column_dimensions['B'].width = 30
+        for row in sheet:
+            for item in row:
+                if item.row not in headers and item.value is not None:
+                    item.border = Border(bottom=Side(style='hair', color='E6E9E2'))
+        sheet.freeze_panes = 'C12'
+        sheet.print_title_rows = '1:6'
+
+
+def _excel_date(value, *, timestamp=False):
+    if not isinstance(value, str) or not value:
+        return value
+    try:
+        if timestamp:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            return parsed.astimezone(ZoneInfo('Asia/Shanghai')).replace(tzinfo=None) if parsed.tzinfo else parsed
+        return date.fromisoformat(value)
+    except ValueError:
+        return value
 
 
 def _seal_comparisons(workbook, rows, columns, context):
@@ -240,64 +317,52 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
                ['签章要求', requirement or '全部签章要求', '筛选条件', FILTERS[selected]],
                ['识别通道', columns[0]['label'] if channel else '全部通道', '导出样单数', len(rows)]]
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = '印章结果' if tab == 'seal' else '日期结果'
-
-    def append(values):
-        _append(sheet, values)
-
-    append(['样单统计结果 · ' + sheet.title])
-    append(['客户公司', company or '全部公司', '统计范围', scope])
-    append(['筛选条件', FILTERS[selected], '导出样单数', len(rows), '签章要求', requirement or '全部签章要求'])
-    append([NOTE])
-    sheet.merge_cells(start_row=4, start_column=1, end_row=4, end_column=8)
-    sheet.row_dimensions[4].height = 42
-    append([])
-    append(['识别通道', '正确率', '正确', '可评测', '错误', '未识别', '失败', '待标注', '未运行', '未测试', '测试中',
-            *[label for _, label in error_metrics]])
-    for column in columns:
-        summary = counts(rows, column['key'])
-        append([column['label'], summary['正确率'], summary['正确'], summary['可评测'],
-                *[summary[state] for state in ('错误', '未识别', '失败', '待标注', '未运行', '未测试', '测试中')],
-                *[summary[key] for key, _ in error_metrics]])
-        sheet.cell(sheet.max_row, 2).number_format = '0.0%'
-    append([])
-    header = ['样单编号', '文件名', '客户公司', '测试状态',
-              *(['签章要求', '标注结论'] if tab == 'seal' else ['标注日期'])]
-    for column in columns:
-        header.extend(f"{column['label']} · {label}" for label in ('评估结果', '识别内容', '判定', '说明'))
-    header.extend(['测试时间', '测试批次', '测试批次 ID', '本次问题标注状态', '人工问题类型',
-                   '图片与版式特征', '补充备注', '未关联旧标记'])
-    append(header)
-    header_row = sheet.max_row
-    states = {'succeeded': '已完成', 'failed': '运行失败', 'queued': '测试中',
-              'running': '测试中', 'awaiting_upload': '测试中'}
-    from .sample_library import sample_number
-    for row in rows:
-        values = [sample_number(row['filename']), row['filename'], row['company'],
-                  states.get(row['job_status'], '未测试')]
-        values.extend([row['requirement'], f"应{row['expected_seal']}" if row['expected_seal'] else '待标注']
-                      if tab == 'seal' else ['待标注' if row['expected_date'] is None else row['expected_date'] or '空白'])
-        for column in columns:
-            c = cell(row, column['key'])
-            values.extend(c.get(key, '') for key in ('state', 'value', 'decision', 'note'))
-        values.extend(row.get(key, '') for key in ('tested_at', 'task_name', 'task_id'))
-        review = row.get('problem_review') or {}
-        values.extend([PROBLEM_STATUSES.get(review.get('status'), '尚未标注'),
-                       '；'.join(dict.fromkeys(review.get('types') or [])) if review.get('status') == 'issues' else '',
-                       '；'.join(dict.fromkeys(row.get('sample_features') or [])), row.get('human_note', ''),
-                       '；'.join(dict.fromkeys(row.get('legacy_problem_types') or []))])
-        append(values)
-    _style(sheet, (6, header_row))
-    sheet.freeze_panes = f'D{header_row + 1}'
-    sheet.auto_filter.ref = f'A{header_row}:{get_column_letter(len(header))}{sheet.max_row}'
-    coverage, coverage_header = _summary_sheet(workbook, '覆盖与标注', context, ['指标', '样单数', '说明'])
+    overview = workbook.active
+    overview.title = '统计总览'
+    sheet = workbook.create_sheet('样单明细')
+    exported_at = datetime.now(ZoneInfo('Asia/Shanghai')).replace(tzinfo=None)
+    type_label = '印章结果' if tab == 'seal' else '日期结果'
+    channel_label = columns[0]['label'] if channel else '全部通道'
     labeled_key = 'expected_date' if tab == 'date' else 'expected_seal'
     labeled = sum(row[labeled_key] is not None for row in rows)
     tested = sum(row['job_status'] in {'succeeded', 'failed'} for row in rows)
     untested = sum(not row['job_status'] for row in rows)
     evaluated = sum(any(cell(row, column['key'])['state'] in SCORED for column in columns) for row in rows)
     abnormal = sum(any(cell(row, column['key'])['state'] in BAD for column in columns) for row in rows)
+    _title(overview, '样单统计总览 · ' + type_label, OVERVIEW_COLUMNS)
+    _scope(overview, company, scope, selected, requirement, channel_label, exported_at, OVERVIEW_COLUMNS)
+    _append(overview, [])
+    labels_row = overview.max_row + 1
+    _append(overview, [])
+    _append(overview, [])
+    cards = [(1, 1, '样单总数', len(rows)), (2, 4, '已标注', labeled),
+             (5, 8, '可评测样单', evaluated), (9, 12, '异常样单', abnormal)]
+    for left, right, label, value in cards:
+        for current in (labels_row, labels_row + 1):
+            overview.merge_cells(start_row=current, start_column=left, end_row=current, end_column=right)
+            overview.cell(current, left).fill = PatternFill('solid', fgColor=PALETTE['paper'])
+            overview.cell(current, left).alignment = Alignment(horizontal='left', vertical='center')
+        overview.cell(labels_row, left, label).font = Font(name='微软雅黑', size=10, color=PALETTE['muted'])
+        overview.cell(labels_row + 1, left, value).font = Font(name='微软雅黑', size=18, bold=True,
+                                                            color='A3483C' if label == '异常样单' and value else PALETTE['green'])
+    overview.row_dimensions[labels_row].height = 24
+    overview.row_dimensions[labels_row + 1].height = 36
+    performance, performance_header = _summary_sheet(workbook, '各识别方案表现', context,
+        ['识别方案', '正确率', '正确', '可评测', '判定错误', '未识别', '失败', '未纳入评测'])
+    for column in columns:
+        summary = counts(rows, column['key'])
+        excluded = ' · '.join(f"{state} {summary[state]}" for state in ('待标注', '未运行', '未测试', '测试中'))
+        _append(performance, [column['label'], summary['正确率'], summary['正确'], summary['可评测'],
+                              summary['错误'], summary['未识别'], summary['失败'], excluded])
+        performance.cell(performance.max_row, 2).number_format = '0.0%'
+        performance.merge_cells(start_row=performance.max_row, start_column=8,
+                                end_row=performance.max_row, end_column=OVERVIEW_COLUMNS)
+        performance.row_dimensions[performance.max_row].height = 38
+    performance.merge_cells(start_row=performance_header, start_column=8,
+                            end_row=performance_header, end_column=OVERVIEW_COLUMNS)
+    _style(performance, (performance_header,))
+
+    coverage, coverage_header = _summary_sheet(workbook, '覆盖与标注', context, ['指标', '样单数', '说明'])
     coverage_rows = [
         ['样单总数', len(rows), '按当前公司、签章要求、批次和筛选条件统计'],
         ['已测试', tested, '测试已成功完成或失败，排队和执行中另列'],
@@ -319,6 +384,7 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
     for values in coverage_rows:
         _append(coverage, values)
     _append(coverage, ['评估口径', NOTE])
+    coverage.row_dimensions[coverage.max_row].height = 42
     if batch:
         _append(coverage, ['批次 ID', batch['id']])
         _append(coverage, ['批次状态', batch.get('status', ''),
@@ -326,7 +392,6 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
         for stage, label in (('date', '日期方法'), ('seal', '印章方法')):
             _append(coverage, [label, '、'.join(batch.get('scheme_labels', {}).get(stage, [])) or '未运行'])
     _style(coverage, (coverage_header,))
-    coverage.freeze_panes = f'B{coverage_header + 1}'
 
     error_tail = [('未识别', '未识别'), ('失败', '失败')] if tab == 'seal' else [('失败', '失败')]
     error_header = ['识别通道', '可评测', '错误合计', *[label for _, label in error_metrics + error_tail]]
@@ -345,36 +410,145 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
         _append(errors, values)
     _style(errors, (errors_header,))
     _problem_annotations(workbook, rows, context)
+    if tab == 'seal':
+        _seal_comparisons(workbook, rows, columns, context)
+    else:
+        _date_cohorts(workbook, rows, context)
 
+    group_links = {}
     for field, title, label in (('company', '按公司统计', '客户公司'), ('requirement', '按签章要求统计', '签章要求')):
-        group_columns = [
-            label, '样单总数', '已测试', '未测试', '已标注', '待标注', '识别通道', '正确率', '可评测',
-            '正确', '错误', *[name for _, name in error_metrics], '未识别', '失败', '未运行', '测试中', '异常样单']
-        grouped, group_header = _summary_sheet(workbook, title, context, group_columns)
         groups = {}
         for row in rows:
             groups.setdefault(str(row.get(field) or '').strip(), []).append(row)
         anomalies = {group: sum(any(cell(row, column['key'])['state'] in BAD for column in columns) for row in members)
                      for group, members in groups.items()}
-        for group, members in sorted(groups.items(), key=lambda pair: (-anomalies[pair[0]], -len(pair[1]), pair[0])):
+        ordered_groups = sorted(groups.items(), key=lambda pair: (-anomalies[pair[0]], -len(pair[1]), pair[0]))
+        grouped, group_header = _summary_sheet(workbook, title + ' · 覆盖与效果', context,
+            [label, '识别通道', '样单总数', '已测试', '未测试', '已标注', '待标注', '正确率', '可评测', '正确', '判定错误', '异常样单'])
+        group_links[title] = group_header - 1
+        for group, members in ordered_groups:
             group_tested = sum(row['job_status'] in {'succeeded', 'failed'} for row in members)
             group_untested = sum(not row['job_status'] for row in members)
             group_labeled = sum(row[labeled_key] is not None for row in members)
             for column in columns:
                 summary = counts(members, column['key'])
-                _append(grouped, [group or '未填写', len(members), group_tested, group_untested,
-                                   group_labeled, len(members) - group_labeled, column['label'],
-                                   summary['正确率'], summary['可评测'], summary['正确'], summary['错误'],
-                                   *[summary[key] for key, _ in error_metrics],
-                                   *[summary[state] for state in ('未识别', '失败', '未运行', '测试中')], anomalies[group]])
+                _append(grouped, [group or '未填写', column['label'], len(members), group_tested, group_untested,
+                                  group_labeled, len(members) - group_labeled, summary['正确率'], summary['可评测'],
+                                  summary['正确'], summary['错误'], anomalies[group]])
                 grouped.cell(grouped.max_row, 8).number_format = '0.0%'
+                grouped.row_dimensions[grouped.max_row].height = 44
         _style(grouped, (group_header,))
-        grouped.freeze_panes = f'B{group_header + 1}'
-        grouped.auto_filter.ref = f'A{group_header}:{get_column_letter(len(group_columns))}{grouped.max_row}'
-    if tab == 'seal':
-        _seal_comparisons(workbook, rows, columns, context)
-    else:
-        _date_cohorts(workbook, rows, context)
+        if grouped.max_row > group_header:
+            grouped.row_dimensions.group(group_header + 1, grouped.max_row, outline_level=1, hidden=False)
+        granular, granular_header = _summary_sheet(workbook, title + ' · 错误细分', context,
+            [label, '识别通道', *[name for _, name in error_metrics], '未识别', '失败', '未运行', '测试中'])
+        for group, members in ordered_groups:
+            for column in columns:
+                summary = counts(members, column['key'])
+                _append(granular, [group or '未填写', column['label'], *[summary[key] for key, _ in error_metrics],
+                                   *[summary[state] for state in ('未识别', '失败', '未运行', '测试中')]])
+                granular.row_dimensions[granular.max_row].height = 44
+        _style(granular, (granular_header,))
+        if granular.max_row > granular_header:
+            granular.row_dimensions.group(granular_header + 1, granular.max_row, outline_level=1, hidden=False)
+    for address, end_column, label in [('C6', 6, '按公司统计'), ('G6', 12, '按签章要求统计')]:
+        item = overview[address]
+        item.value = label + ' ↓'
+        item.hyperlink = f"#'统计总览'!A{group_links[label]}"
+        item.font = Font(name='微软雅黑', size=10, color=PALETTE['green'], underline='single')
+        overview.merge_cells(start_row=6, start_column=item.column, end_row=6, end_column=end_column)
+
+    # The detailed register keeps one row per sample. Repeated channel blocks
+    # share a band heading, while filter headers stay unique and searchable.
+    header = ['样单编号', '文件名', '客户公司', '测试状态',
+              *(['签章要求', '标注结论'] if tab == 'seal' else ['标注日期'])]
+    for column in columns:
+        header.extend(f"{column['label']} · {label}" for label in ('评估结果', '识别内容', '判定', '说明'))
+    header.extend(['测试时间', '测试批次', '测试批次 ID', '本次问题标注状态', '人工问题类型',
+                   '图片与版式特征', '补充备注', '未关联旧标记'])
+    _title(sheet, '样单明细 · ' + type_label, len(header))
+    _scope(sheet, company, scope, selected, requirement, channel_label, exported_at, len(header))
+    _append(sheet, ['导出样单数', len(rows)])
+    _append(sheet, [])
+    band_row = sheet.max_row
+    identity_end = 6 if tab == 'seal' else 5
+    bands = [(1, identity_end, '样单与人工标注')]
+    offset = identity_end + 1
+    for column in columns:
+        bands.append((offset, offset + 3, column['label']))
+        offset += 4
+    bands.extend([(offset, offset + 2, '测试来源'), (offset + 3, len(header), '人工问题与备注')])
+    for index, (left, right, label) in enumerate(bands):
+        sheet.merge_cells(start_row=band_row, start_column=left, end_row=band_row, end_column=right)
+        item = sheet.cell(band_row, left, label)
+        item.font = Font(name='微软雅黑', size=11, bold=True, color='FFFFFF')
+        item.fill = PatternFill('solid', fgColor=PALETTE['green'] if index % 2 == 0 else '697C61')
+        item.alignment = Alignment(vertical='center')
+    _append(sheet, header)
+    header_row = sheet.max_row
+    states = {'succeeded': '已完成', 'failed': '运行失败', 'queued': '测试中',
+              'running': '测试中', 'awaiting_upload': '测试中'}
+    from .sample_library import sample_number
+    date_columns = [5] if tab == 'date' else []
+    if tab == 'date':
+        date_columns.extend(identity_end + index * 4 + 2 for index in range(len(columns)))
+    time_column = identity_end + len(columns) * 4 + 1
+    for index, row in enumerate(rows):
+        values = [sample_number(row['filename']), row['filename'], row['company'], states.get(row['job_status'], '未测试')]
+        values.extend([row['requirement'], f"应{row['expected_seal']}" if row['expected_seal'] else '待标注']
+                      if tab == 'seal' else ['待标注' if row['expected_date'] is None else row['expected_date'] or '空白'])
+        for column in columns:
+            current = cell(row, column['key'])
+            values.extend(current.get(key, '') for key in ('state', 'value', 'decision', 'note'))
+        values.extend(row.get(key, '') for key in ('tested_at', 'task_name', 'task_id'))
+        review = row.get('problem_review') or {}
+        values.extend([PROBLEM_STATUSES.get(review.get('status'), '尚未标注'),
+                       '；'.join(dict.fromkeys(review.get('types') or [])) if review.get('status') == 'issues' else '',
+                       '；'.join(dict.fromkeys(row.get('sample_features') or [])), row.get('human_note', ''),
+                       '；'.join(dict.fromkeys(row.get('legacy_problem_types') or []))])
+        for column_index in date_columns:
+            values[column_index - 1] = _excel_date(values[column_index - 1])
+        values[time_column - 1] = _excel_date(values[time_column - 1], timestamp=True)
+        _append(sheet, values)
+        current_row = sheet.max_row
+        sheet.row_dimensions[current_row].height = 56
+        for item in sheet[current_row]:
+            if index % 2 == 1:
+                item.fill = PatternFill('solid', fgColor=PALETTE['paper'])
+            if item.value in {'正确', '错误', '未识别', '失败', '已完成', '运行失败', '测试中', '待标注', '未测试', '未运行'}:
+                fill = PALETTE['good'] if item.value in {'正确', '已完成'} else PALETTE['bad'] if item.value in BAD | {'运行失败'} else PALETTE['amber']
+                item.fill = PatternFill('solid', fgColor=fill)
+                item.font = Font(name='微软雅黑', size=11, color=PALETTE['green'] if fill == PALETTE['good'] else 'A3483C' if fill == PALETTE['bad'] else '876B43')
+            if isinstance(item.value, datetime):
+                item.number_format = 'yyyy-mm-dd hh:mm:ss'
+            elif isinstance(item.value, date):
+                item.number_format = 'yyyy-mm-dd'
+        sheet.cell(current_row, 1).number_format = '@'
+    _style(sheet, (header_row,))
+    sheet.freeze_panes = f'D{header_row + 1}'
+    sheet.auto_filter.ref = f'A{header_row}:{get_column_letter(len(header))}{sheet.max_row}'
+    for index, label in enumerate(header, 1):
+        width = 20
+        if label in {'文件名', '客户公司'}:
+            width = 34
+        elif label in {'签章要求', '补充备注', '未关联旧标记'} or label.endswith('识别内容') or label.endswith('说明'):
+            width = 48
+        elif label.endswith('评估结果') or label.endswith('判定') or label in {'测试状态', '标注结论', '本次问题标注状态'}:
+            width = 16
+        elif label == '测试时间':
+            width = 24
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    sheet.row_dimensions[header_row].height = 60
+    sheet.print_title_rows = f'1:{header_row}'
+    for current, target, label in [(overview, '样单明细', '查看样单明细 →'), (sheet, '统计总览', '返回统计总览 →')]:
+        current.merge_cells('I5:L5')
+        item = current['I5']
+        item.value = label
+        item.hyperlink = f"#'{target}'!A1"
+        item.font = Font(name='微软雅黑', size=10, color=PALETTE['green'], underline='single')
+    _finalize(sheet, detail=True)
+    _finalize(overview, headers=(performance_header, coverage_header, errors_header))
+    workbook.active = 0
     output = BytesIO()
     workbook.save(output)
     output.seek(0)

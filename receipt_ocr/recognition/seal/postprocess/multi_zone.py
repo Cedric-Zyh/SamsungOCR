@@ -19,6 +19,9 @@ def _station_phone(text):
 def finalize_multi_zone(artifact):
     if not artifact.get('multi_zone_layout'):
         return []
+    if artifact['multi_zone_layout'].get('method') == 'ellipse_code_phone_rows':
+        from .code_phone import finalize_code_phone
+        return finalize_code_phone(artifact)
     rows = artifact.get('reads', [])
     centers, stations, numbers, names, departments = [], [], [], [], []
     phones, observed_roles = [], []

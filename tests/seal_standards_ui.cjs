@@ -62,6 +62,15 @@ test('manual standard text is explicitly forwarded for receipt and sample regist
   }
 });
 
+test('explicit horizontal layout choice is forwarded for receipt and sample registration', async () => {
+  for(const sampleView of [false,true]) {
+    const h=harness({sampleView}),picker=h.picker();
+    const pending=picker.onSave({candidate:picker.sources[0].candidates[0],rotation:0,horizontalText:'absent'});
+    assert.equal(h.calls[0][1].horizontal_text,'absent');
+    h.resolve({result:{id:7}});await pending;
+  }
+});
+
 test('manually corrected archive text is marked and raw OCR remains inspectable and escaped', () => {
   const {standardDetail}=require('../static/modules/seals/standard_view.mjs');
   const markup=standardDetail({id:1,requirement:'客户要求',recognized:'正确公司名称',

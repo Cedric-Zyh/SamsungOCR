@@ -1,4 +1,5 @@
 import {escapeHtml} from '../core/ui.mjs';
+import {horizontalSettingMarkup} from './horizontal_setting.mjs';
 import {describeStandard} from './standard_groups.mjs';
 
 export const shapeLabel = value => ({round:'圆形', ellipse:'椭圆', rectangle:'矩形'}[value] || '未知形状');
@@ -8,9 +9,11 @@ export const standardDate = value => String(value || '').replace('T', ' ').slice
 /** The archive gets a larger preview; the receipt review keeps its compact card. */
 export function standardDetail(standard) {
   const requirement = String(standard.requirement || '未填写签章要求');
-  const {company, branch, seal} = describeStandard(standard);
+  const {company, branch, seal, identities, sameName} = describeStandard(standard);
   const title = [company, branch].filter(Boolean).join(' · ') || requirement;
-  const subtitle = seal ? `<p class="seal-detail-subtitle">${escapeHtml(seal)}</p>` : '';
+  const detailLabel = [identities, seal].filter(Boolean).join(' · ');
+  const subtitle = detailLabel ? `<p class="seal-detail-subtitle">${escapeHtml(detailLabel)}</p>` : '';
+  const groupNote = sameName ? '<p class="seal-detail-group-note">同名归档 · 各站点、代码与电话分别核对</p>' : '';
   const revision = escapeHtml(standard.revision ?? 1);
   const sourceKind = standard.source_kind === 'sample' ? 'sample' : 'receipt';
   const sourceLabel = sourceKind === 'sample' ? '来源样单' : '来源回单';
@@ -21,15 +24,16 @@ export function standardDetail(standard) {
     ? `<button type="button" data-standard-source="${escapeHtml(standard.source_result_id)}" data-source-kind="${sourceKind}" title="${escapeHtml(sourceName)}" aria-label="查看${sourceLabel}：${escapeHtml(sourceName)}">${escapeHtml(sourceName === '—' ? `查看${sourceLabel}` : sourceName)}</button>`
     : escapeHtml(sourceName);
   return `<div class="seal-detail-eyebrow"><span>当前标准章</span></div>
-    <header class="seal-detail-heading"><div><h2>${escapeHtml(title)}</h2>${subtitle}<div class="seal-detail-state"><span class="seal-standard-active"><i aria-hidden="true"></i>当前生效</span><span>第 ${revision} 版</span><time class="seal-detail-updated">${standard.updated_at ? `更新于 ${escapeHtml(standardDate(standard.updated_at))}` : '更新时间未知'}</time></div></div><div class="seal-replace-action"><button class="primary-button" type="button" data-load-standard-sources aria-haspopup="dialog" aria-controls="seal-standard-dialog">替换标准章</button><small>从同要求回单中选择</small></div></header>
+    <header class="seal-detail-heading"><div><h2>${escapeHtml(title)}</h2>${subtitle}${groupNote}<div class="seal-detail-state"><span class="seal-standard-active"><i aria-hidden="true"></i>当前生效</span><span>第 ${revision} 版</span><time class="seal-detail-updated">${standard.updated_at ? `更新于 ${escapeHtml(standardDate(standard.updated_at))}` : '更新时间未知'}</time></div></div><div class="seal-replace-action"><button class="primary-button" type="button" data-load-standard-sources aria-haspopup="dialog" aria-controls="seal-standard-dialog">替换标准章</button><small>从同要求回单中选择</small></div></header>
     <figure class="seal-detail-preview">
       <div class="seal-preview-tools" role="group" aria-label="标准章图片缩放"><button type="button" data-seal-zoom="fit" title="恢复适应窗口">适应窗口</button><button type="button" data-seal-zoom="out" aria-label="缩小标准章图片" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button><span data-seal-zoom-label title="相对于适应窗口的缩放比例">100%</span><button type="button" data-seal-zoom="in" aria-label="放大标准章图片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button><a href="${escapeHtml(standard.image_url)}" target="_blank" rel="noopener" aria-label="查看完整标准章原图（新窗口）">查看原图</a></div>
       <div class="seal-preview-viewport" tabindex="0" role="region" aria-label="标准章图片，放大后可滚动查看"><div class="seal-preview-image"><img src="${escapeHtml(standard.image_url)}" alt="${escapeHtml(requirement)}的当前标准章"></div></div>
     </figure>
     <dl class="seal-detail-text"><div><dt>签章要求</dt><dd>${escapeHtml(requirement)}</dd></div><div><dt>${standard.recognized_source === 'manual' ? '标准章文字' : '识别文字'}</dt><dd>${escapeHtml(standard.recognized || '未识别到文字')}<small class="seal-detail-text-note">${standard.recognized_source === 'manual' ? '人工校正' : '来自识别结果 · 供人工核对'}</small>${standard.recognized_source === 'manual' ? `<details><summary>查看原始识别文字</summary><p>${escapeHtml(standard.ocr_recognized || '未识别到文字')}</p></details>` : ''}</dd></div></dl>
     <dl class="seal-detail-metadata"><div><dt>印章形状</dt><dd>${shapeLabel(standard.shape)}</dd></div><div><dt>${sourceLabel}</dt><dd title="${escapeHtml(sourceName)}">${source}</dd></div><div><dt>印章颜色</dt><dd>${colorLabel(standard.color)}</dd></div><div><dt>当前版本</dt><dd>第 ${revision} 版</dd></div></dl>
+    ${horizontalSettingMarkup(standard, escapeHtml)}
     <div data-standard-recognition-info aria-live="polite"><p class="seal-name-load-state">正在加载名称词条与纠错记录…</p></div>
-    <div class="seal-detail-footer"><p>每条签章要求保留一枚标准章，分组仅便于查找，各分公司、章号独立核验。</p></div>
+    <div class="seal-detail-footer"><p>每条签章要求保留一份标准章档案，分组便于查找，分支、代码与章号分别核验。</p></div>
     `;
 }
 

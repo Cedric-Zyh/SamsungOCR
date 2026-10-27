@@ -10,13 +10,15 @@ PURPOSES = tuple(sorted({
     '发票专用章', '发票章', '结算专用章', '结算章', '货物收讫章', '出入库专用章',
     '出库专用章', '入库专用章', '收发货专用章', '仓库专用章', '维修专用章',
     '检测专用章', '售后业务专用章', '手机售后专用章', '三星售后服务专用章',
-    '三星售后专用章', '售后服务专用章', '售后专用章', '维修中心专用章',
+    '三星售后专用章', '北售后服务专用章', '售后服务专用章', '售后专用章', '维修中心专用章',
     '取机专用章', '维修业务专用章', '服务专用章', '公章', '印章',
 }, key=len, reverse=True))
 _PURPOSE = re.compile('(?:' + '|'.join(PURPOSES) + ')$')
 _LEGAL = re.compile(r'^(.+?(?:有限责任公司|股份有限公司|有限公司|股份公司|集团公司|总公司|公司))(.*)$')
 _NUMBER = re.compile(r'(\([0-9]{1,3}\)|[①-⑳㉑-㊿](?:[/／、,，][①-⑳㉑-㊿])*)$')
 _GENERIC = re.compile(r'^三星(?:电子)?(?:授权)?(?:维修|服务|维修服务)中心$')
+_CENTER_BRANCH = re.compile(
+    r'^(三星(?:电子)?(?:授权)?(?:维修|服务|维修服务)中心)([\u3400-\u9fff]{2,18})$')
 _AMBIGUOUS = re.compile(r'[、,，;；/／]|(?:公司|中心)(?:或者|或|以及|及|与|和)')
 
 
@@ -45,6 +47,14 @@ def _single_name_terms(requirement):
 
     def identity(kind, label, value):
         identities.append(dict(kind=kind, label=label, value=value))
+
+    # An explicit code label may precede the company. Preserve its whole value;
+    # a long digit run does not establish a boundary between a code and phone.
+    leading_code = re.match(r'(授权代码|站代码)[:：]?([A-Za-z0-9-]+)(?=[\u3400-\u9fff])', rest)
+    if leading_code:
+        identity('authorization_code' if leading_code[1] == '授权代码' else 'station_code',
+                 leading_code[1], leading_code[2])
+        rest = rest[leading_code.end():]
 
     # Only isolated terminal stamp numbers; country names and warehouse codes
     # do not become stamp numbers. Circled alternatives keep their order.
@@ -84,6 +94,7 @@ def _single_name_terms(requirement):
 
     company = branch = unclassified = ''
     kind = ''
+    center_branch = None
     if rest and not _AMBIGUOUS.search(rest):
         legal = _LEGAL.fullmatch(rest)
         if legal:
@@ -101,9 +112,17 @@ def _single_name_terms(requirement):
                 else:
                     unclassified = tail
         else:
-            kind = _kind(rest, warehouse=bool(warehouse))
-            if kind: company = rest
-            else: unclassified = rest
+            # A labelled station code supplies the boundary for a short branch
+            # after generic center wording; without it keep that wording whole.
+            if any(field['kind'] == 'station_code' for field in identities):
+                center_branch = _CENTER_BRANCH.fullmatch(rest)
+            if center_branch:
+                company, branch = center_branch.groups()
+                kind = _kind(company)
+            else:
+                kind = _kind(rest, warehouse=bool(warehouse))
+                if kind: company = rest
+                else: unclassified = rest
     else:
         unclassified = rest
     status = 'parsed' if company and not unclassified else 'partial' if company or purpose or identities or number else 'unparsed'
@@ -111,7 +130,7 @@ def _single_name_terms(requirement):
     return dict(company=company, branch=branch, name=company+branch, entity_type=kind,
                 purpose=purpose, number=number, identity_fields=identities,
                 unclassified=unclassified, parse_status=status, supported=supported,
-                correction_supported=supported and not unclassified and len(company+branch) >= 6,
+                correction_supported=supported and not unclassified and not center_branch and len(company+branch) >= 6,
                 groupable=supported and not unclassified and not identities and not _GENERIC.fullmatch(company),
                 original=original, normalized=normalized_name(original))
 

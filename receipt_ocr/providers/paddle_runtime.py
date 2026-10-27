@@ -136,12 +136,14 @@ def _engine_kwargs() -> dict:
 def _prediction_slot():
     # Keep the native predictor serialized, but expose waiting separately from
     # model loading and actual inference. Always release on a failed predict.
-    with measure('paddle_queue_wait'):
-        _PREDICT_LOCK.acquire()
-    try:
-        yield
-    finally:
-        _PREDICT_LOCK.release()
+    from .model_manager import local_model_manager
+    with local_model_manager.activity():
+        with measure('paddle_queue_wait'):
+            _PREDICT_LOCK.acquire()
+        try:
+            yield
+        finally:
+            _PREDICT_LOCK.release()
 
 
 def paddle_model_home() -> Path:

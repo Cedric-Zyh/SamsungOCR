@@ -12,7 +12,7 @@ const call = (id, extra = {}) => ({id,stage:'seal',method:'paddle_v6',method_lab
 const response = (calls = [call(1),call(2),call(3,{seconds:3,status:'failed',error:'识别超时'})], extra = {}) => ({
   filename:'customer/receipt.jpg',available:true,status:'succeeded',
   summary:{total:3,succeeded:2,failed:1,cache_hits:4},calls,
-  started_at:time(0),finished_at:time(5),processing_seconds:5,result_id:9,...extra});
+  started_at:time(0),finished_at:time(5),processing_seconds:5,model_initialization_seconds:0,result_id:9,...extra});
 
 test('UTC start times display in the browser local timezone and invalid times stay unknown', () => {
   const moduleUrl = pathToFileURL(require.resolve('../static/modules/review/run_history_view.mjs')).href;
@@ -30,10 +30,35 @@ test('latest input calls stay distinct, including repeated inputs, and parallel 
   assert.match(html,/复用已有识别结果 4 次，未计入实际调用/);
   assert.match(html,/处理用时 <strong>5 秒/);
   assert.match(html,/title="调用耗时合计">7 秒/);
-  assert.match(html,/并行识别时，各次耗时相加可能超过总处理用时/);
+  assert.match(html,/并行识别时，各次耗时相加可能超过处理用时/);
   assert.doesNotMatch(html,/data-runs-result|data-runs-more|第 \d+ 次运行|历史测试/);
   assert.match(html,/data-call-explanation="count">/);
   assert.doesNotMatch(html,/data-call-explanation="count" open|receipt.jpg/);
+});
+
+test('initialization is displayed separately and excluded from processing time without changing call counts', () => {
+  const html = renderRunHistory(response(undefined,{processing_seconds:11.6288,model_initialization_seconds:5.9647}));
+  assert.match(html,/处理用时 <strong>5.66 秒/);
+  assert.match(html,/模型初始化<\/span><strong>5.96 秒/);
+  assert.match(html,/不计入处理用时/);
+  assert.match(html,/实际调用<\/span><strong>3<\/strong>/);
+  assert.doesNotMatch(html,/11.63 秒/);
+  const unknown = renderRunHistory(response(undefined,{model_initialization_seconds:null}));
+  assert.match(unknown,/处理用时 <strong>未记录/);
+  assert.match(unknown,/此记录未单独采集/);
+});
+
+test('historic timing can use the matching open receipt but never a different run or failed retry', () => {
+  const data = response(undefined,{model_initialization_seconds:null});
+  const item = {id:9,processing_seconds:5,queue:{started_at:time(0)},
+    processing_timings:{steps:{paddle_model_setup:{seconds:2}}}};
+  const html = renderRunHistory(data,{timingContext:item});
+  assert.match(html,/处理用时 <strong>3 秒/);
+  assert.match(html,/模型初始化<\/span><strong>2 秒/);
+  for (const context of [{...item,id:10},{...item,queue:{started_at:time(50)}},{...item,processing_seconds:6}]) {
+    assert.match(renderRunHistory(data,{timingContext:context}),/处理用时 <strong>未记录/);
+  }
+  assert.match(renderRunHistory({...data,status:'failed'},{timingContext:item}),/处理用时 <strong>未记录/);
 });
 
 test('seal inputs expand by default, errors and names escape markup, and images remain in the panel', () => {

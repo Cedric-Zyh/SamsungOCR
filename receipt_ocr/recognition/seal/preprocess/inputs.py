@@ -20,6 +20,7 @@ from .combined_orientation import prepare_round_stamp_combined
 from .rectangle_orientation import prepare_rectangular_stamp
 from .rectangle_rows import prepare_fixed_rectangle_rows
 from .rectangle_layout import prepare_frame_layout
+from .pale_grid import prepare_pale_grid
 from .ellipse import prepare_ellipse_stamp
 from .number import prepare_number_input
 from .number_mask import white_verified_number
@@ -27,12 +28,14 @@ from .number_recovery import recover_number_punctuation
 from .red_enhancement import enhance_oriented_seal
 from .oval_ring import prepare_oval_ring
 from .strong_border import prepare_strong_border_ring
+from .round_rim import prepare_round_rim
 from .han_ring import prepare_han_ring
 from .multi_zone import prepare_multi_zone
 from .local_type_row import prepare_local_type_row
 from .type_row_mask import separate_type_row_bridges
 from .residual_type_row import recover_residual_type_row
 from .horizontal_consensus import prepare_horizontal_consensus, protect_consensus_border
+from .horizontal_brand_rows import prepare_horizontal_brand_rows
 from ..ocr.interface import OcrReader
 
 SHAPE_LABELS = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
@@ -167,6 +170,20 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
     shape = classify_shape(source, region)
     artifact["shape"] = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}[shape]
     artifact["shape_code"] = shape
+    if region.color == "red" and orientation_mode != "none" and variant_of(provider) == "v6":
+        try:
+            pale_audit = {}
+            pale = prepare_pale_grid(original, directory, index, url_prefix, orientation_mode,
+                                     color=region.color, audit=pale_audit)
+            artifact["pale_grid_preparation"] = pale_audit
+            if pale is not None:
+                metadata, grid_inputs, jobs = pale
+                artifact["shape_before_pale_grid"] = artifact["shape"]
+                artifact.update(metadata)
+                inputs.extend(grid_inputs)
+                return artifact, jobs
+        except Exception as exc:
+            artifact["pale_grid_fallback"] = str(exc)
     if (shape == "rectangle" and region.color == "red" and orientation_mode != "none"
             and variant_of(provider) == "v6"):
         try:
@@ -180,10 +197,19 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             artifact.update(metadata)
             inputs.extend(frame_inputs)
             return artifact, jobs
+    from ..layout_settings import explicit_horizontal_text_policy
+    horizontal_policy = explicit_horizontal_text_policy(shape)
+    skip_horizontal = bool(horizontal_policy and horizontal_policy['setting'] == 'absent')
+    if horizontal_policy:
+        artifact['horizontal_text_policy'] = dict(horizontal_policy, applied=True,
+            skipped_horizontal_search=skip_horizontal)
     working = color
     consensus = None
     orientation = {"mode": orientation_mode, "status": "保留原方向", "confidence": 0.0, "rotation_steps": []}
-    if orientation_mode != "none":
+    if skip_horizontal:
+        orientation.update(status='按标准章设置：无横排文字，直接处理环字',
+                           method='manual_standard_ring_only')
+    if orientation_mode != "none" and not skip_horizontal:
         try:
             target = path("oriented")
             if shape == "rectangle":
@@ -237,7 +263,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 artifact["color_isolated_oriented_url"] = add("oriented", working, "方向校正图")
         except Exception as exc:
             artifact["errors"].append({"step": "orientation", "message": str(exc)})
-    if (shape != "rectangle" and orientation_mode == "combined" and variant_of(provider) == "v6"
+    if (not skip_horizontal and shape != "rectangle" and orientation_mode == "combined" and variant_of(provider) == "v6"
             and not orientation.get("type_band_text")):
         try:
             from .code_phone import prepare_code_phone_layout
@@ -353,7 +379,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             if rotated:
                 inputs[-1].update(read_mode="line", rectangle_row_index=row_index)
                 jobs.append((inputs[-1], row_path))
-    if shape in {"round", "ellipse"}:
+    if shape in {"round", "ellipse"} and not skip_horizontal:
         try:
             layout_evidence = {}
             plan = prepare_multi_zone(working, directory, index, reader=OcrReader(),
@@ -517,6 +543,38 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                         artifact["ring_input_box_source"] = "横排文字检测范围（填白以实测字形掩码为准）"
                 if mask_polygons:
                     artifact["ring_input_polygons"] = mask_polygons
+                try:
+                    horizontal = prepare_horizontal_brand_rows(
+                        working, directory, index, orientation, reader=OcrReader(),
+                        provider=provider, color=region.color,
+                    )
+                    if horizontal is not None:
+                        center_input = next(item for item, _ in jobs if item["channel"] == "center")
+                        shutil.copyfile(horizontal["masked"], ring_input)
+                        shutil.copyfile(horizontal["mask"], mask_path)
+                        residual_guide = horizontal["guide"]
+                        artifact.pop("ring_input_bridge_separation", None)
+                        artifact["horizontal_rows"] = []
+                        for row in horizontal["rows"]:
+                            if row["kind"] == "type":
+                                shutil.copyfile(row["path"], center)
+                                center_input["detected_rows"] = row["reads"]
+                                url = center_url
+                            else:
+                                url = add(row["path"].stem, row["path"], "章内横排文字", "horizontal")
+                                inputs[-1]["detected_rows"] = row["reads"]
+                                jobs.append((inputs[-1], row["path"]))
+                            artifact["horizontal_rows"].append({
+                                "kind": row["kind"], "text": row["text"],
+                                "image_url": url, "polygon": row["points"],
+                            })
+                        artifact["ring_input_mask_method"] = "verified_horizontal_rows"
+                        artifact["ring_input_polygons"] = [row["points"] for row in horizontal["rows"]]
+                        artifact["ring_input_box_source"] = "分别验证的横排文字范围（实际填白以各行笔画掩码为准）"
+                        artifact["ring_input_operation"] = "分别识别章内横排文字和章型行，仅填白各行笔画，保护外圈，再展开读取环字"
+                        ring_input_label = "旋正章色图 · 多行横排文字笔画填白（环形展开来源）"
+                except Exception as exc:
+                    artifact["errors"].append({"step": "horizontal_rows", "message": str(exc)})
                 # A separate number read remains an independent field, but
                 # must not be read again as part of the circular company name.
                 number_mask_path = path("number-mask")
@@ -544,8 +602,9 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     if shape == "ellipse"
                     else "旋正章色图 · 无横向文字，直接作为环形 OCR 实际输入"
                 )
-                artifact["ring_input_operation"] = "未检测到横向文字，直接使用校正后的整章图进行环形 OCR"
-                artifact["ring_input_box_source"] = "无横向文字框，未做覆盖"
+                artifact["ring_input_operation"] = ('按标准章设置无横排文字，直接使用章色图进行环形 OCR'
+                                                    if skip_horizontal else '未检测到横向文字，直接使用校正后的整章图进行环形 OCR')
+                artifact["ring_input_box_source"] = '标准章人工标注：无横排文字' if skip_horizontal else '无横向文字框，未做覆盖'
 
             ring_input_url = add(
                 "ring_input",
@@ -590,6 +649,25 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
             save_unwrapped_seal(ring_input, ring, None, color=region.color,
                                 elliptical=True, normalized=True, single_line=True,
                                 direct_ellipse=shape == "ellipse", ring_guide=ring_guide)
+            round_rim = None
+            if shape == "round":
+                try:
+                    round_rim, calibration = prepare_round_rim(
+                        working, ring_input, path("ring-calibrated"), color=region.color,
+                    )
+                    artifact["round_rim_calibration"] = calibration
+                    if round_rim is not None:
+                        artifact["unwrapped_uncalibrated_url"] = add(
+                            "ring-uncalibrated", ring, "校准前展开图（仅供核对）")
+                        ring, ring_guide = round_rim["ring"], round_rim["guide"]
+                        artifact["ring_geometry"] = "round_observed_rim_letter_band"
+                        artifact["ring_border_detection"] = calibration
+                        artifact["ring_border_url"] = add(
+                            "ring-border", round_rim["border"], "圆章外圈校准与保守取样内界")
+                        artifact["ring_text_band_url"] = add(
+                            "ring-calibrated-band", round_rim["band"], "校准后的环形文字带（展开前）")
+                except Exception as exc:
+                    artifact["errors"].append({"step": "round_rim_calibration", "message": str(exc)})
             if shape == "ellipse" and consensus is None and ring_guide is None:
                 try:
                     strong = prepare_strong_border_ring(
@@ -644,7 +722,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                 try:
                     han = prepare_han_ring(ring_input, directory, index,
                                            reader=OcrReader(), provider=provider,
-                                           color=region.color)
+                                           color=region.color,
+                                           ring_guide=ring_guide if round_rim is not None else None)
                 except Exception as exc:
                     # Optional selection must leave the usable original path.
                     artifact["errors"].append({"step": "han_ring_candidate", "message": str(exc)})
@@ -654,7 +733,8 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                         "ring-full", han["full"], "完整展开图（其他文字与数字仅供核对）")
                     artifact["ring_text_band_url"] = add(
                         "han-band", han["band"], "自动定位的汉字弧段（展开前）")
-                    artifact["ring_geometry"] = "han_outer_frame_proportional"
+                    artifact["ring_geometry"] = ("han_calibrated_rim_letter_band" if round_rim is not None
+                                                 else "han_outer_frame_proportional")
                     ring = han["ring"]
             if shape == "round" and han is None:
                 company_ring = path("ring-company")

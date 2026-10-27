@@ -3,6 +3,7 @@
 from contextlib import nullcontext
 from datetime import datetime
 import json
+from math import isfinite
 
 
 def trace_timestamp():
@@ -48,6 +49,41 @@ def _time(value):
         return datetime.fromisoformat(value).timestamp()
     except (TypeError, ValueError):
         return 0
+
+
+def _seconds(value):
+    if value is None or isinstance(value, bool) or value == '':
+        return None
+    try:
+        number = float(value)
+        return number if isfinite(number) and number >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _legacy_initialization(con, row, snapshot):
+    """Recover measured setup only from the result belonging to this trace."""
+    if row['status'] not in {'completed', 'succeeded'} or not row['result_id']:
+        return None
+    recorded = con.execute("""SELECT updated_at,
+        json_extract(result_json,'$.queue.job_id') AS job_id,
+        json_extract(result_json,'$.processing_timings.steps') AS steps_json
+        FROM results WHERE id=? AND deleted_at=''""", (row['result_id'],)).fetchone()
+    if recorded is None or not recorded['steps_json']:
+        return None
+    if row['job_id']:
+        same_run = recorded['job_id'] == row['job_id']
+    else:
+        start, end, updated = map(_time, (snapshot.get('started_at'), snapshot.get('finished_at'), recorded['updated_at']))
+        same_run = start > 0 and end >= start and start - 1 <= updated <= end + 1
+    if not same_run:
+        return None
+    steps = json.loads(recorded['steps_json'])
+    if not isinstance(steps, dict):
+        return None
+    values = [_seconds(value.get('seconds')) for name, value in steps.items()
+              if (name.endswith('_model_setup') or name == 'paddle_text_box_setup') and isinstance(value, dict)]
+    return sum(values) if values and all(value is not None for value in values) else None
 
 
 class RecognitionCallOperationsMixin:
@@ -104,7 +140,8 @@ class RecognitionCallOperationsMixin:
                               (result["filename"],)).fetchone()
             output = dict(filename=result["filename"], available=False, status="unavailable",
                           summary=None, calls=[], started_at="", finished_at="",
-                          processing_seconds=None, result_id=None,
+                          processing_seconds=None, model_initialization_seconds=None,
+                          recognition_seconds=None, result_id=None,
                           note="这张回单尚未采集识别调用明细，请重新识别后查看。")
             if row is None:
                 return output
@@ -121,6 +158,14 @@ class RecognitionCallOperationsMixin:
             if available:
                 output.update({key: snapshot.get(key) for key in
                                ("summary", "calls", "finished_at", "processing_seconds")})
+                total = _seconds(snapshot.get('processing_seconds'))
+                initialization = _seconds(snapshot.get('model_initialization_seconds'))
+                if initialization is None:
+                    initialization = _legacy_initialization(con, row, snapshot)
+                if total is not None and initialization is not None and initialization <= total + .01:
+                    initialization = round(min(total, initialization), 4)
+                    output.update(model_initialization_seconds=initialization,
+                                  recognition_seconds=round(max(0, total - initialization), 4))
                 output.pop("note")
             elif status == "running":
                 output["note"] = "本次正在识别，完成后可查看实际调用次数和耗时。"

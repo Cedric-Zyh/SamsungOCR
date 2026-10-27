@@ -70,6 +70,53 @@ def test_current_run_hides_old_trace_and_late_completion_cannot_replace_it(store
     assert db.latest_recognition_calls(identity)['calls'][0]['input_name'] == 'latest.png'
 
 
+def test_new_trace_keeps_initialization_separate_from_processing_time(store):
+    snapshot = {**trace(), 'model_initialization_seconds': .4, 'recognition_seconds': .6}
+    identity = save(store.database, snapshot=snapshot)
+    data = store.database.latest_recognition_calls(identity)
+    assert data['processing_seconds'] == 1
+    assert data['model_initialization_seconds'] == .4
+    assert data['recognition_seconds'] == .6
+    assert data['summary']['total'] == 1
+
+
+def test_legacy_timing_uses_the_result_for_the_latest_successful_job(store):
+    db = store.database
+    old = save(db, processing_timings={'steps': {'paddle_model_setup': {'seconds': .1}}})
+    snapshot = {**trace(), 'processing_seconds': 11.6288}
+    latest = save(db, snapshot=snapshot,
+                  queue={'job_id': 'latest-job'},
+                  processing_timings={'steps': {'paddle_model_setup': {'seconds': 5.9647},
+                                               'page_ocr': {'seconds': 8.872}}})
+    db.begin_recognition_calls('one.png', 'latest-run', job_id='latest-job')
+    db.save_recognition_calls('one.png', snapshot, result_id=latest, run_key='latest-run')
+    data = db.latest_recognition_calls(old)
+    assert data['model_initialization_seconds'] == 5.9647
+    assert data['recognition_seconds'] == 5.6641
+    assert data['processing_seconds'] == 11.6288
+    # Reading the split does not rewrite historic measurements.
+    assert db.get_result(latest)['processing_timings']['steps']['page_ocr']['seconds'] == 8.872
+
+
+@pytest.mark.parametrize('status,job_id', [('completed', 'different-job'), ('failed', 'old-job')])
+def test_legacy_trace_never_borrows_initialization_from_another_attempt(store, status, job_id):
+    db = store.database
+    identity = save(db, queue={'job_id': 'old-job'},
+                    processing_timings={'steps': {'paddle_model_setup': {'seconds': .4}}})
+    db.begin_recognition_calls('one.png', 'new-run', job_id=job_id)
+    db.save_recognition_calls('one.png', trace(status=status), result_id=identity, run_key='new-run')
+    data = db.latest_recognition_calls(identity)
+    assert data['recognition_seconds'] is None
+    assert data['model_initialization_seconds'] is None
+
+
+def test_unmeasured_initialization_stays_unknown_instead_of_becoming_zero(store):
+    identity = save(store.database, snapshot=trace())
+    data = store.database.latest_recognition_calls(identity)
+    assert data['recognition_seconds'] is None
+    assert data['model_initialization_seconds'] is None
+
+
 def test_unkeyed_late_result_uses_actual_start_time_and_full_filename(store):
     db = store.database
     older_id = save(db, 'folder/one.png', trace(start='2026-10-26T11:00:00+08:00'))

@@ -84,11 +84,14 @@ def han_arc_bounds(strip):
             'outside_wide_components': len(outside)}
 
 
-def prepare_han_ring(source, directory, index, *, reader, provider, color='red'):
+def prepare_han_ring(source, directory, index, *, reader, provider, color='red', ring_guide=None):
     if color != 'red':
         return None
     image = _read_image(source)
-    geometry = _fit_ellipse_annulus(_ocr_color_mask(image, color))
+    if ring_guide is not None and tuple(image.shape[:2]) != ring_guide.source_shape:
+        return None
+    geometry = (ring_guide.annulus if ring_guide is not None
+                else _fit_ellipse_annulus(_ocr_color_mask(image, color)))
     if geometry is None:
         return None
     outer, inner, _ = geometry
@@ -96,7 +99,8 @@ def prepare_han_ring(source, directory, index, *, reader, provider, color='red')
     if outer[1] > .06 or min(axis_a, axis_b) / max(axis_a, axis_b) < .80:
         return None
     # Trust the outer frame, not an inner ellipse fitted to letters or a logo.
-    map_x, map_y = _ellipse_proportional_maps(outer, inner, True)
+    map_x, map_y = ((ring_guide.map_x, ring_guide.map_y) if ring_guide is not None
+                    else _ellipse_proportional_maps(outer, inner, True))
     blue, green, red = [v.astype('float32') for v in cv2.split(image)]
     chroma = red - np.maximum(blue, green)
 
@@ -153,4 +157,5 @@ def prepare_han_ring(source, directory, index, *, reader, provider, color='red')
                          'source_size': [image.shape[1], image.shape[0]],
                          'full_size': [full.shape[1], full.shape[0]],
                          'reads': verified, 'gains': [1.3, 1.0],
-                         'geometry': 'outer_frame_proportional_full_depth'}}
+                         'geometry': ('calibrated_rim_letter_band' if ring_guide is not None
+                                      else 'outer_frame_proportional_full_depth')}}

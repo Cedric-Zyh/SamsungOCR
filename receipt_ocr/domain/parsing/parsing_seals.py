@@ -9,6 +9,9 @@ from .parsing_text import normalize_text
 from .seal_information_fields import compare_information_fields
 from .seal_numbers import normalize_stamp_number_letters
 from .seal_script import simplify_seal_text
+from ..seal_name_terms import seal_name_terms
+from ..warehouse_code_policy import warehouse_code_adjustment
+from ..warehouse_punctuation_policy import warehouse_title_punctuation_adjustment
 
 
 def normalize_seal_text_strict(text: str) -> str:
@@ -106,7 +109,22 @@ def compare_seal_text_strict(
     *,
     mismatch_over_partial: bool = False,
 ) -> dict:
-    """Separate exact text, omission-only partial text and incorrect text."""
+    """Compare literal text with explicit field and warehouse-code policies."""
+    alternatives = seal_name_terms(requirement).get('alternatives', [])
+    if alternatives:
+        comparisons = [compare_seal_text_strict(item['original'], recognized_texts,
+            mismatch_over_partial=mismatch_over_partial) for item in alternatives]
+        index, selected = max(enumerate(comparisons), key=lambda item:
+            seal_text_comparison_rank(item[1], mismatch_over_partial=mismatch_over_partial))
+        result = dict(selected, requirement=requirement)
+        if result['status'] == '匹配':
+            fields = dict(result.get('field_comparison') or {})
+            message = result['message'] + f'；符合第 {index+1} 种登记写法'
+            fields.update(matched_requirement=alternatives[index]['original'],
+                          allowed_requirements=[item['original'] for item in alternatives],
+                          message=message)
+            result.update(field_comparison=fields, comparison_policy='strict_information_fields',message=message)
+        return result
     expected = normalize_seal_text_strict(requirement)
     options = _number_option_requirements(expected)
     if options:
@@ -140,7 +158,27 @@ def compare_seal_text_strict(
         actual = normalize_seal_text_strict(text)
         if not actual:
             continue
-        field_match = compare_information_fields(expected, actual) if actual != expected else None
+        code_adjustment = warehouse_code_adjustment(requirement, text) if actual != expected else None
+        punctuation_adjustment = warehouse_title_punctuation_adjustment(requirement, text) if actual != expected else None
+        if code_adjustment:
+            field_match = {
+                "matched_fields": ["仓库名称", "仓库代码", "用途及编号"],
+                "additional_fields": [],
+                "required_fields": {"仓库代码": code_adjustment["required_code"]},
+                "recognized_fields": {"仓库代码": code_adjustment["raw_code"]},
+                "warehouse_code_adjustment": code_adjustment,
+                "message": (f'仓库代码 {code_adjustment["raw_code"]} 的 0/O 按签章要求'
+                            f'统一为 {code_adjustment["required_code"]}；其余文字一致'),
+            }
+        elif punctuation_adjustment:
+            field_match = {
+                "matched_fields": ["仓库名称", "仓库代码", "用途及编号"],
+                "additional_fields": [],
+                "warehouse_title_punctuation": punctuation_adjustment,
+                "message": '仓库代码前的多余分隔点已按签章要求剔除；其余文字一致',
+            }
+        else:
+            field_match = compare_information_fields(expected, actual) if actual != expected else None
         if actual != expected and not field_match:
             # A printed, parenthesized short number after the purpose is an
             # extra field when the requirement omits it. Preserve the full

@@ -34,3 +34,14 @@ test('local provider displays its chosen reading in simplified script', () => {
   assert.match(markup, /深圳欧瑞特收货专用章\(1\)/);
   assert.equal(check.recognized, '深圳歐瑞特收貨專用章(1)');
 });
+
+test('warehouse code note explains the policy without replacing original OCR words', () => {
+  const raw = '上海朱泾DC021DCO收货专用章①';
+  const message = '仓库代码 DC021DCO 的 0/O 按签章要求统一为 DC021DC0；其余文字一致';
+  const check = {backend: '本地 PaddleOCR PP-OCRv6 Small', recognized: raw,
+    status: '匹配', reliable: true, field_comparison: {message}};
+  const markup = sealEvidenceMarkup({seal_check: check});
+  assert.ok(markup.includes(`<p>${raw}</p>`));
+  assert.ok(markup.includes(message));
+  assert.equal(check.recognized, raw);
+});

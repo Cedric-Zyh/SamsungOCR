@@ -139,3 +139,25 @@ def test_pipeline_ocr_and_preview_use_selected_han_image(monkeypatch, tmp_path):
     full_input = next(i for i in artifact['inputs'] if i['name'] == 'ring-full')
     assert not full_input['ocr_input']
     assert texts == ['某某测试电子有限公司']
+
+
+@pytest.mark.parametrize('wrong_frame', [False, True])
+def test_calibrated_guide_is_reused_without_refitting_the_outer_rim(tmp_path, monkeypatch, wrong_frame):
+    source = prepare_source(tmp_path, monkeypatch)
+    image = cv2.imread(str(source))
+    yy, xx = np.indices(image.shape[:2], dtype=np.float32)
+    geometry = ((1000., .01, ((500., 500.), (1000., 1000.), 0.)), None, True)
+    guide = SimpleNamespace(annulus=geometry, source_shape=image.shape[:2], map_x=xx, map_y=yy)
+    if wrong_frame:
+        guide.source_shape = (1, 1)
+    def unexpected(*args):
+        raise AssertionError('a supplied guide must not be replaced by another geometry fit')
+    monkeypatch.setattr(han_ring, '_fit_ellipse_annulus', unexpected)
+    monkeypatch.setattr(han_ring, '_ellipse_proportional_maps', unexpected)
+    reader = SimpleNamespace(read_line=lambda *a, **k: [
+        TextObservation('某某测试电子有限公司', .99, 0, 0, 1, 1)])
+    result = han_ring.prepare_han_ring(source, tmp_path/'out', 0, reader=reader,
+                                      provider='paddle_v6', ring_guide=guide)
+    assert (result is None) == wrong_frame
+    if result:
+        assert result['evidence']['geometry'] == 'calibrated_rim_letter_band'

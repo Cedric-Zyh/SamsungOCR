@@ -1,6 +1,10 @@
 /* Match the warm paper and grey-green review theme. */
 .review-page .artifact-grid figure[data-artifact-image] { border:1px solid #d8d5cc; border-radius:6px; padding:8px; background:#f6f4ee; }
 .artifact-grid [data-artifact-open] { display:block; position:relative; overflow:hidden; border-radius:3px; cursor:zoom-in; background:#fff; }
+.artifact-grid figure[data-image-shape="strip"] { grid-column:1 / -1; }
+.artifact-grid figure[data-image-shape="strip"] [data-artifact-open] { overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; }
+.artifact-grid figure[data-image-shape="strip"] img { width:auto; height:120px; max-width:none; max-height:none; }
+.artifact-grid figure[data-image-shape="strip"] figcaption::after { content:"左右滚动查看完整文字 · 点击图片放大"; display:block; margin-top:4px; color:#536147; font-size:11px; }
 .artifact-image-affordance { position:absolute; right:6px; bottom:6px; padding:3px 7px; border:1px solid #d8d5cc; border-radius:4px; background:#f6f4eeed; color:#536147; font-size:11px; opacity:0; transition:opacity .15s; }
 [data-artifact-open]:hover .artifact-image-affordance, [data-artifact-open]:focus-visible .artifact-image-affordance { opacity:1; }
 .artifact-grid [data-image-message] { display:block; padding:8px 0; color:#74796b; font-size:12px; }
@@ -21,6 +25,8 @@
 .artifact-image-stage img { display:block; width:auto; height:auto; max-width:100%; max-height:calc(65vh - 44px); margin:auto; background:white; box-shadow:0 1px 5px #373c3020; cursor:zoom-in; }
 .artifact-image-stage.original-size { display:block; }
 .artifact-image-stage.original-size img { max-width:none; max-height:none; margin:auto; cursor:zoom-out; }
+.artifact-image-stage[data-image-shape="strip"]:not(.original-size) { display:block; overscroll-behavior-x:contain; }
+.artifact-image-stage[data-image-shape="strip"]:not(.original-size) img { width:auto; height:180px; max-width:none; max-height:none; margin:0; }
 .artifact-image-stage[data-image-state="error"] img { display:none; }
 .artifact-image-stage [data-image-retry] { justify-self:center; }
 .artifact-image-dialog footer { display:flex; justify-content:space-between; padding:10px 18px; border-top:1px solid #dcd9d0; color:#7a8073; font-size:11px; }

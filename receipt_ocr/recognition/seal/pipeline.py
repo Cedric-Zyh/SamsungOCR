@@ -12,6 +12,7 @@ from PIL import Image, ImageOps
 from receipt_ocr.runtime.execution import timed
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.domain.seal_serial import serial_matching_texts
+from receipt_ocr.domain.seal_ring import normalize_ring_candidates
 from .preprocess.inputs import prepare_inputs
 from .preprocess.number import merge_number_read
 from .ocr.interface import OcrReader
@@ -25,6 +26,9 @@ from .postprocess.rectangle_form import mark_receiving_form_fields
 from .postprocess.type_row import prefer_complete_type_read
 from .postprocess.ring_alternative import select_ring_alternative
 from .postprocess.name_correction import correct_local_seal_names
+from .receiving import recognize_receiving_form
+from .layout_settings import seal_requirement_layout
+from .ocr.receiving_number import read_receiving_number
 
 
 _RECTANGULAR_COMBINE_MIN_CONFIDENCE = 0.75
@@ -196,8 +200,9 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
         for index, region in enumerate(regions):
             region_text_start = len(texts)
             try:
-                artifact, jobs = prepare_inputs(Path(source), region, index, directory, prefix,
-                                               ocr_backend, orientation_mode)
+                with seal_requirement_layout(requirement):
+                    artifact, jobs = prepare_inputs(Path(source), region, index, directory, prefix,
+                                                   ocr_backend, orientation_mode)
             except Exception as exc:
                 artifacts.append({"schema_version": 2, "index": index, "region_id": f"seal-{index}",
                                   "color": region.color, "inputs": [], "reads": [],
@@ -328,6 +333,8 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 artifact["unwrapped_text"] = reorder["text"]
                 if reorder["changed"]:
                     texts.append(reorder["text"])
+                texts[region_text_start:] = normalize_ring_candidates(
+                    artifact, texts[region_text_start:])
             if artifact.get("shape_code") == "round" and not artifact.get("multi_zone_layout"):
                 # Independent evidence; included in matching only if requested.
                 serial_source = Path(directory) / f"seal-{index}-ring-input.png"
@@ -351,5 +358,28 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                     artifact["ring_normal_alternative"] = {
                         "status": "failed", "matching": False, "error": str(exc)}
             texts[region_text_start:] = correct_local_seal_names(artifact, texts[region_text_start:])
+            try:
+                receiving_texts = recognize_receiving_form(
+                    artifact, directory, prefix, ocr_backend, reader,
+                    orientation_mode=orientation_mode, requirement=requirement)
+                if receiving_texts is not None:
+                    texts[region_text_start:] = receiving_texts
+            except Exception as exc:
+                # Optional form recovery never discards the established route
+                # when its geometry or image input cannot be read.
+                artifact['errors'].append({'step': 'receiving_form', 'message': str(exc)})
+            try:
+                numbered = read_receiving_number(artifact, directory, prefix, ocr_backend, reader)
+                if (artifact.get('receiving_number') or {}).get('status') == 'conflict':
+                    # A former exact string cannot bypass a new, reliable
+                    # same-stamp number disagreement. Raw evidence is retained.
+                    texts[region_text_start:] = []
+                elif numbered:
+                    if (artifact.get('receiving_form') or {}).get('managed') is True:
+                        texts[region_text_start:] = artifact['matching_texts']
+                    else:
+                        texts.append(numbered)
+            except Exception as exc:
+                artifact['errors'].append({'step': 'receiving_number', 'message': str(exc)})
             artifacts.append(artifact)
     return texts, artifacts
