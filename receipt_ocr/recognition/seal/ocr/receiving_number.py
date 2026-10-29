@@ -6,6 +6,7 @@ import re
 
 from ..preprocess.receiving_number import prepare_receiving_number
 from ..postprocess.receiving_identity import map_receiving_detections, observation_confidence
+from ..postprocess.receiving_purpose import POLICY as PURPOSE_POLICY, resolved_purpose_covers
 from .receiving import read_input
 
 
@@ -57,6 +58,11 @@ def _number_conflict(artifact, index, token):
             continue
         text = _literal(value.get('text'))
         if text == token or text == PURPOSE or text == PURPOSE+token:
+            continue
+        form = artifact.get('receiving_form') or {}
+        if (form.get('managed') is True and form.get('status') == 'adopted'
+                and resolved_purpose_covers(value, form.get('primary'), form.get('identity_text'),
+                                            row_index=index)):
             continue
         if (text.startswith(PURPOSE) or re.fullmatch(r'收.{1,4}专用章[①-⑳]?', text)
                 or _CIRCLE.fullmatch(text)
@@ -129,6 +135,15 @@ def read_receiving_number(artifact, directory, prefix, provider, reader):
     if (provider != 'paddle_v6' or artifact.get('shape_code') != 'rectangle'
             or artifact.get('color') != 'red' or artifact.get('rectangular_layout') != 'frame_rows'
             or artifact.get('receiving_number')):
+        return None
+    form = artifact.get('receiving_form') or {}
+    resolution = (form.get('primary') or {}).get('purpose_resolution') or {}
+    if (form.get('managed') is True and form.get('status') == 'adopted'
+            and resolution.get('policy') == PURPOSE_POLICY and resolution.get('accepted') is True
+            and resolution.get('number_text') and form.get('identity_text', '').endswith(resolution.get('text', ''))
+            and artifact.get('matching_texts') == [form.get('identity_text')]):
+        # This row already supplied one consistent actual number. Do not
+        # reread it merely because another body OCR omitted that side token.
         return None
     prepared = artifact.get('rectangular_fixed_rows') or []
     urls = artifact.get('rectangular_row_urls') or []

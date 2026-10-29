@@ -1,11 +1,14 @@
 """Seal ring unwrapping and previews."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
+from .working_images import remember_png
 from .colors import _ocr_color_mask
 from .shapes import seal_region_is_rectangular
 from .ellipse import _save_ellipse_annulus_unwrapped, _fit_ellipse_annulus, _ring_text_normal_maps, _ellipse_proportional_maps
@@ -55,6 +58,7 @@ def _robust_round_seal_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | N
     )
 
 
+@timed_image('crop', '区域裁剪')
 def save_ring_text_band_preview(
     source: str | Path,
     destination: str | Path,
@@ -92,9 +96,11 @@ def save_ring_text_band_preview(
     if not ok:
         raise ValueError("环形文字带预览图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, preview)
     return destination
 
 
+@timed_image('unwrap', '环形文字展开')
 def save_unwrapped_seal(
     source: str | Path,
     destination: str | Path,
@@ -163,6 +169,7 @@ def save_unwrapped_seal(
         if not ok:
             raise ValueError("矩形印章校正图片编码失败")
         encoded.tofile(str(destination))
+        remember_png(destination, normalized)
         return False
     if elliptical and (normalized or direct_ellipse):
         # Keep anti-aliased red strokes for the v6 recognizer; hard threshold
@@ -267,4 +274,5 @@ def save_unwrapped_seal(
     if not ok:
         raise ValueError("圆形印章展开图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, strip)
     return used_robust_bounds

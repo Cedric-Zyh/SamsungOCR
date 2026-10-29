@@ -1,11 +1,14 @@
 """Read and account for receiving-form inputs without a requested value."""
 from pathlib import Path
+from copy import deepcopy
 import math
 
 import numpy as np
 from PIL import Image, ImageOps
 
-from ..postprocess.receiving_identity import map_receiving_detections, verify_blank_row
+from ..postprocess.receiving_identity import verify_blank_row
+from ..postprocess.receiving_policy import receiving_detection_evidence
+from ..postprocess.receiving_merge import original_physical_row_observations
 
 
 def local_image(directory, url):
@@ -69,7 +72,9 @@ def read_primary(artifact, original, directory, prefix, provider, reader):
             row['blank_check'] = verify_blank_row(path, known_padding=8, reference_row_height=reference)
             row['is_blank'] = row['blank_check']['blank']
         rows.append(row)
-    mapped = map_receiving_detections(original)
+    evidence = receiving_detection_evidence(original)
+    mapped = evidence['mapped']
+    artifact['receiving_detection_exclusions'] = deepcopy(evidence['excluded'])
     canonical = next((i.get('image_url') for i in original.get('inputs') or []
                       if i.get('name') == 'rectangle-layout'), None)
     by_row = {}
@@ -100,6 +105,9 @@ def read_primary(artifact, original, directory, prefix, provider, reader):
             row['variants'].append({'text': ''.join(v['text'] for v in values),
                                     'confidence': min(v['confidence'] for v in values),
                                     'source': 'same_physical_detection_crop'})
+    prior = original_physical_row_observations(original, provider=provider)
+    for row in rows:
+        row['variants'].extend(prior.get(row['row_index'], []))
     return rows, mapped
 
 

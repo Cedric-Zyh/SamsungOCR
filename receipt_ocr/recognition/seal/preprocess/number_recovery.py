@@ -1,4 +1,6 @@
 """Recover a missing number parenthesis only from nearby observed source ink."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 import math
 from pathlib import Path
 import re
@@ -22,8 +24,8 @@ def _missing_side(text):
     return None
 
 
-def _aligned_reference(source, region, rotations):
-    reference = seal_source_reference(source, region)
+def _aligned_reference(source, region, rotations, *, isolate_color=False):
+    reference = seal_source_reference(source, region, isolate_color=isolate_color)
     # Replay each actual rotation, including expanded canvases. Adding the
     # angles would misalign pixels after a coarse and a fine rotation.
     for angle in rotations:
@@ -31,8 +33,9 @@ def _aligned_reference(source, region, rotations):
             raise ValueError("编号原图方向数据无效")
         h, w = reference.shape[:2]
         matrix, width, height = _rotation_geometry(w, h, angle)
-        reference = cv2.warpAffine(reference, matrix, (width, height),
-                                   flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
+        with image_operation('rotation', '旋转校正'):
+            reference = cv2.warpAffine(reference, matrix, (width, height),
+                                       flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
     return reference
 
 

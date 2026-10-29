@@ -1,6 +1,8 @@
 """Receipt date region preparation."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
@@ -9,6 +11,7 @@ from .contracts import DateCropOutOfRange
 from .io import _read_image, _write_stage_image
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def _remove_date_red_stamp(crop: np.ndarray) -> np.ndarray:
     """Suppress red ink while preserving the observed dark stroke cores.
 
@@ -28,6 +31,7 @@ def _remove_date_red_stamp(crop: np.ndarray) -> np.ndarray:
 
 
 @timed('date_crop_generation')
+@timed_image('crop', '区域裁剪')
 def save_receipt_date_crop(
     source: str | Path,
     destination: str | Path,

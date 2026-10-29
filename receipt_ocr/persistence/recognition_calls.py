@@ -141,7 +141,7 @@ class RecognitionCallOperationsMixin:
             output = dict(filename=result["filename"], available=False, status="unavailable",
                           summary=None, calls=[], started_at="", finished_at="",
                           processing_seconds=None, model_initialization_seconds=None,
-                          recognition_seconds=None, result_id=None,
+                          recognition_seconds=None, image_processing=None, result_id=None,
                           note="这张回单尚未采集识别调用明细，请重新识别后查看。")
             if row is None:
                 return output
@@ -157,7 +157,7 @@ class RecognitionCallOperationsMixin:
                           result_id=row["result_id"])
             if available:
                 output.update({key: snapshot.get(key) for key in
-                               ("summary", "calls", "finished_at", "processing_seconds")})
+                               ("summary", "calls", "finished_at", "processing_seconds", "image_processing")})
                 total = _seconds(snapshot.get('processing_seconds'))
                 initialization = _seconds(snapshot.get('model_initialization_seconds'))
                 if initialization is None:

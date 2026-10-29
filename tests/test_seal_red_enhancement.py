@@ -2,11 +2,53 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 
 from receipt_ocr.imaging.contracts import SealRegion
 from receipt_ocr.imaging.crops import save_color_isolated_seal
 from receipt_ocr.recognition.seal.preprocess.orientation_geometry import rotate_stamp_image
 from receipt_ocr.recognition.seal.preprocess.red_enhancement import enhance_oriented_red_seal
+from receipt_ocr.recognition.seal.preprocess.red_enhancement import enhance_oriented_seal
+
+
+@pytest.mark.parametrize("color", ["red", "blue"])
+@pytest.mark.parametrize("width,rotations", [(1000, []), (250, [90, -12.361])])
+def test_verified_grey_ink_survives_enhancement_after_native_isolation(
+    tmp_path, color, width, rotations,
+):
+    # The first two patches use the real grey-red Tianjin regression pixels.
+    # Enhancement must keep those strokes even after enlargement/rotation.
+    raw = np.full((120, width, 3), 255, np.uint8)
+    raw[20:45, 20:35] = (184, 188, 193)
+    raw[20:45, 50:65] = (179, 178, 187)
+    raw[70:90, 20:65] = (180, 180, 180)
+    raw[70:90, 100:145] = (70, 70, 75)
+    if color == "blue":
+        raw = raw[:, :, ::-1].copy()
+    source, working = tmp_path / "source.png", tmp_path / "color.png"
+    cv2.imwrite(str(source), raw)
+    region = SealRegion(0, 0, 1, 1, color, "", 0)
+    save_color_isolated_seal(source, working, region)
+    for index, angle in enumerate(rotations):
+        rotated = tmp_path / f"rotated-{index}.png"
+        rotate_stamp_image(working, rotated, angle)
+        working = rotated
+    trusted = cv2.imread(str(working))
+    # A previous working image can contain arbitrary amplified remnants.
+    # Such remnants must not become a source for the preserved-ink floor.
+    contaminated = trusted.copy()
+    contaminated[trusted[:, :, 1] == 255] = (20, 20, 255) if color == "red" else (255, 20, 20)
+    cv2.imwrite(str(working), contaminated)
+    destination = tmp_path / "enhanced.png"
+    enhance_oriented_seal(source, region, working, destination,
+                         {"rotation_steps": rotations})
+    actual = cv2.imread(str(destination))
+    grey_strokes = (trusted[:, :, 1] < 200)
+    assert grey_strokes.any()
+    assert np.all(actual[:, :, 1][grey_strokes] <= trusted[:, :, 1][grey_strokes])
+    # Both isolated neutral patches stay white, despite the red/blue noise
+    # deliberately inserted into the intermediate image.
+    assert np.all(actual[trusted[:, :, 1] == 255, 1] > 230)
 
 
 def test_original_chroma_controls_ink_even_when_old_image_contains_red_noise(tmp_path):

@@ -1,4 +1,4 @@
-"""A cleaned title preview does not authorize a conflicting receiving stamp."""
+"""Title-dot cleanup composes with a narrowly resolved observed purpose."""
 from copy import deepcopy
 
 import pytest
@@ -34,29 +34,29 @@ def _conflicting_fixture(monkeypatch, punctuation='·'):
 
 
 @pytest.mark.parametrize('punctuation', ['.', '·'])
-def test_title_preview_is_cleaned_even_when_purpose_and_number_remain_conflicted(
+def test_title_cleanup_retains_same_row_resolved_purpose_without_rewriting_raw_evidence(
         monkeypatch, tmp_path, punctuation):
     artifact, rows, boxes = _conflicting_fixture(monkeypatch, punctuation)
     originals = deepcopy((artifact['reads'], rows, boxes))
-    assert _run(artifact, tmp_path) == []
+    assert _run(artifact, tmp_path) == [REQUIREMENT]
     form = artifact['receiving_form']
-    assert form['candidate_text'] == TITLE
-    assert form['identity_text'] == '' and form['status'] == 'conflict'
+    assert form['candidate_text'] == REQUIREMENT
+    assert form['identity_text'] == REQUIREMENT and form['status'] == 'adopted'
     assert form['primary']['identity_rows'][0]['text'] == rows[0]['text']
-    assert form['primary']['conflicts'][0]['row_index'] == 1
+    assert form['primary']['conflicts'] == []
+    assert form['primary']['purpose_resolution']['number_text'] == '②'
     audit = form['requirement_title_punctuation']
-    assert audit['applied'] is True and audit['accepted'] is False
+    assert audit['applied'] is True and audit['accepted'] is True
     assert audit['policy'] == 'warehouse_title_punctuation_from_requirement'
     assert audit['adjustments'][0]['raw_text'] == rows[0]['text']
     assert audit['comparison_primary']['identity_rows'][0]['text'] == TITLE
-    assert audit['comparison_primary']['conflicts'][0]['row_index'] == 1
+    assert audit['comparison_primary']['conflicts'] == []
     assert audit['original_primary'] == form['primary']
     raw_reads = [{k: v for k, v in row.items() if k != 'matching'} for row in artifact['reads']]
     assert (raw_reads, rows, boxes) == originals
-    check = receiving.apply_receiving_review({'status': '未识别', 'recognized': '', 'reliable': False}, [artifact])
-    assert check['status'] == '未识别' and check['reliable'] is False
-    assert check['recognized'] == TITLE
-    assert check['message'].startswith('首行代码前的多余分隔点已按签章要求剔除；')
+    check = {'status': '匹配', 'recognized': REQUIREMENT, 'reliable': True}
+    assert receiving.apply_receiving_review(check, [artifact]) == check
+    assert 'receiving_review' not in check
 
 
 def test_only_the_new_comparison_copy_can_adopt_a_consistent_complete_identity(monkeypatch, tmp_path):
@@ -107,8 +107,8 @@ def test_another_verified_whole_row_conflict_cannot_hide_behind_primary_preceden
                                        REQUIREMENT.replace('010', '011')])
 def test_missing_or_incompatible_requirement_does_not_clean_the_title(monkeypatch, tmp_path, requirement):
     artifact, rows, _ = _conflicting_fixture(monkeypatch)
-    assert _run(artifact, tmp_path, requirement) == []
-    assert artifact['receiving_form']['candidate_text'] == rows[0]['text']
+    assert _run(artifact, tmp_path, requirement) == [rows[0]['text'] + PURPOSE]
+    assert artifact['receiving_form']['candidate_text'] == rows[0]['text'] + PURPOSE
     assert 'requirement_title_punctuation' not in artifact['receiving_form']
 
 

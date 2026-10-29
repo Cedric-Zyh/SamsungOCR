@@ -1,4 +1,6 @@
 """Move an unwrapped company line's seam only into a wide observed gap."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 
 import cv2
@@ -7,6 +9,7 @@ import numpy as np
 from .io import _read_image, _write_stage_image
 
 
+@timed_image('unwrap', '环形文字展开')
 def save_ring_with_blank_seam(source, destination):
     """Save a cyclic column shift, without deleting or synthesizing pixels.
 

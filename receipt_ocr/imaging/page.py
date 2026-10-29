@@ -1,6 +1,8 @@
 """Whole-page QR, region text and annotations."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 from ..runtime.execution import timed
@@ -33,6 +35,7 @@ def extract_region_text(
 
 
 @timed('preview_generation')
+@timed_image('preview', '预览图生成')
 def annotate_image(
     source: str | Path,
     destination: str | Path,

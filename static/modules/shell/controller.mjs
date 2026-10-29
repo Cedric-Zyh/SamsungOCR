@@ -123,7 +123,9 @@ export function createApplication(environment, options = {}) {
     reviewState,
     api,
     services,
-    fieldSchema
+    fieldSchema,
+    previewSeal: (...args) => review.previewSeal(...args),
+    previewRegion: (...args) => review.previewRegion(...args)
   });
   const review_queue = createReviewQueue({
     environment,

@@ -71,6 +71,8 @@ body[data-active-page="review"] .review-preview { background:#dfdcd5; border-col
 .review-page .review-comparison-pair>.review-check-result { padding:10px; color:var(--archive-muted); background:#eae6de; font-size:12px; }
 .review-page .review-comparison-pair b { color:var(--archive-ink); font-size:13px; line-height:1.7; }
 .review-page .review-comparison-pair .confirmed-date-actions :is(small,button) { font-size:12px; }
+.review-page .seal-observed-components { display:grid; gap:3px; margin-top:5px; color:var(--archive-muted); font-size:12px; line-height:1.6; }
+.review-page .seal-observed-components strong { color:var(--archive-ink); font-weight:600; }
 .review-page .confirmed-date-actions button { color:var(--archive-text); }
 .review-page .confirmed-date-actions small { color:var(--archive-muted); }
 .review-page :is(.review-value-label,.date-confirmation legend,.review-check-result) { color:var(--archive-text); }

@@ -1,4 +1,6 @@
 """Measure clipped type rows from glyph baselines, without another detector."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 import math
 
@@ -6,8 +8,10 @@ import cv2
 import numpy as np
 
 from receipt_ocr.imaging.ring_border import trace_ellipse_border
+from receipt_ocr.imaging.working_images import read_cv, write_cv
 
 
+@timed_image('detection', '图形定位')
 def measure_row_extent(source, seed_box, *, color="red"):
     """Propose one bounded text envelope from several similarly sized glyphs.
 
@@ -15,7 +19,7 @@ def measure_row_extent(source, seed_box, *, color="red"):
     excluded only from this measurement; recognition still uses original
     pixels. An uncertain baseline or unmeasurable border produces no proposal.
     """
-    image = cv2.imread(str(source))
+    image = read_cv(source)
     box = np.asarray(seed_box, dtype=float)
     if image is None or box.shape != (4,) or not np.isfinite(box).all():
         return None
@@ -103,9 +107,10 @@ def measure_row_extent(source, seed_box, *, color="red"):
     }
 
 
+@timed_image('normalize', '形状校正')
 def save_row_polygon(source, destination, polygon, *, padding=20):
     """Save the same polygon used for masking as a single rectified OCR line."""
-    image = cv2.imread(str(source))
+    image = read_cv(source)
     points = np.asarray(polygon, np.float32)
     width = round(float(np.linalg.norm(points[1] - points[0])))
     height = round(float((np.linalg.norm(points[3] - points[0])
@@ -119,7 +124,7 @@ def save_row_polygon(source, destination, polygon, *, padding=20):
                              cv2.BORDER_CONSTANT, value=(255, 255, 255))
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(destination), row):
+    if not write_cv(destination, row):
         raise ValueError("完整横排文字裁图保存失败")
 
 

@@ -1,6 +1,8 @@
 """Seal region detection and fragment grouping."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
@@ -36,6 +38,7 @@ def _remove_page_spanning_vertical_scan_lines(mask: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(mask, cv2.bitwise_not(long_vertical))
 
 
+@timed_image('detection', '图形定位')
 def detect_seal_regions(path: str | Path) -> list[SealRegion]:
     """Detect colored stamp regions without calling an external service."""
     image = _read_image(path)

@@ -10,7 +10,7 @@ const {createSampleStatistics} = require('../static/modules/samples/statistics.m
 // Production controllers share their real state; only browser surfaces and I/O
 // are replaced so these tests exercise close/navigation races without storage.
 function element(document, tagName = 'DIV') {
-  const classes = new Set(), listeners = new Map();
+  const classes = new Set(), listeners = new Map(), descendants = new Map();
   return {
     tagName, dataset: {}, attributes: {}, children: [], parentNode: null, parentElement: null,
     value: '', textContent: '', innerHTML: '', disabled: false, hidden: false, inert: false, open: false, isConnected: true,
@@ -31,6 +31,10 @@ function element(document, tagName = 'DIV') {
       }
     },
     appendChild(node) { this.append(node); return node; },
+    before(node) { this.parentElement?.append(node); },
+    remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); },
+    querySelector(selector) { if (!descendants.has(selector)) descendants.set(selector, element(document)); return descendants.get(selector); },
+    querySelectorAll() { return []; },
     replaceChildren(...nodes) { this.children = []; this.append(...nodes); },
     contains(node) { return node === this || this.children.some(child => child.contains(node)); },
     scrollTo(x, y) { this.scrollLeft = x; this.scrollTop = y; },
@@ -67,6 +71,7 @@ function element(document, tagName = 'DIV') {
 function harness({hash = '#records', loaded = true} = {}) {
   const document = {activeElement: null, title: ''};
   Object.assign(document, element(document));
+  document.createElement = tagName => element(document, tagName);
   document.body = element(document, 'BODY'); document.body.dataset.activePage = 'records';
   const nodes = new Map(), notices = [], historyCalls = [], loads = [], opened = [];
   const $ = selector => {

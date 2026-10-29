@@ -4,6 +4,8 @@ Geometry and independent OCR determine the split; required wording is never
 an input. Incomplete borders, non-URL lower words and uncertain reads retain
 the existing ring path unchanged.
 """
+
+from receipt_ocr.runtime.image_processing import image_operation
 from pathlib import Path
 import math
 import re
@@ -91,8 +93,9 @@ def double_border_pixels(image, *, color='red'):
     if not 1200 <= end-start <= 3000:
         return None
     company = strip[:, start:end]
-    website = cv2.rotate(np.concatenate([strip[:, right[1]-20:], strip[:, :left[0]+20]], axis=1),
-                         cv2.ROTATE_180)
+    with image_operation('rotation', '旋转校正'):
+        website = cv2.rotate(np.concatenate([strip[:, right[1]-20:], strip[:, :left[0]+20]], axis=1),
+                             cv2.ROTATE_180)
     overlay = image.copy()
     cv2.ellipse(overlay, outer, (80, 130, 80), 2)
     cv2.ellipse(overlay, inner, (130, 150, 160), 2)

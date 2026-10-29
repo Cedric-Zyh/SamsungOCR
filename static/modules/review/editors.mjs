@@ -1,3 +1,5 @@
+import {receivingObservedComponents} from './receiving_components.mjs';
+
 /**
  * Field confirmation editors for the review form.
  *
@@ -63,6 +65,7 @@ export function createReviewEditors({ReceiptWorkbench, $, $$, statusPill, escape
     input.value = item.seal_check?.recognized || '';
     const humanConfirmed = item.seal_check?.human_confirmed_match;
     const standard = item.seal_standard_check;
+    const observed = receivingObservedComponents(ReceiptWorkbench.selectedLocalSealArtifact(item));
     let autoConfirmed = item.seal_check?.status === '匹配' && item.seal_check?.reliable === true
       && (!standard?.requirement || standard.status === 'matched' || humanConfirmed === true);
     let confirmed = autoConfirmed ? undefined : humanConfirmed;
@@ -71,6 +74,15 @@ export function createReviewEditors({ReceiptWorkbench, $, $$, statusPill, escape
       const hasDecision = typeof confirmed === 'boolean' || autoConfirmed;
       decision.value = typeof confirmed === 'boolean' ? String(confirmed) : '';
       $('[data-seal-value]', content).textContent = input.value.trim() || '未识别';
+      const components = $('[data-seal-observed-components]', content);
+      const showComponents = observed && !hasDecision && input.value === (item.seal_check?.recognized || '')
+        && (observed.purposeConflict || observed.numberStatus === 'conflict'
+          || observed.numbers.some(number => !input.value.includes(number)));
+      components.classList.toggle('hidden', !showComponents);
+      components.innerHTML = showComponents
+        ? `<span>${observed.numberStatus === 'conflict' ? '编号待核对' : '已识别编号'}：<strong>${escapeHtml(observed.numbers.join(' / '))}</strong></span>${observed.purposeConflict
+          ? `<span>用途文字待核对：${escapeHtml(observed.purposeTexts.join(' / '))}</span>` : ''}`
+        : '';
       $('[data-seal-value-label]', content).textContent = hasDecision ? '客户印章' : '识别印章';
       $('[data-seal-confirmation-status]', content).innerHTML = hasDecision ? statusPill(autoConfirmed || confirmed ? '匹配' : '不匹配') : '';
       $('[data-seal-save-note]', content).textContent = hasDecision ? (edited ? '待保存' : '已保存') : '';

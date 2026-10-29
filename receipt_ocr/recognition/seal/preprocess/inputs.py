@@ -1,8 +1,10 @@
 """Prepare one auditable input per physical stamp and text channel."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
-import shutil
 import cv2
 import numpy as np
+from receipt_ocr.imaging.working_images import read_cv, write_cv, copy_image
 
 from receipt_ocr.imaging.crops import save_region_crop, save_color_isolated_seal
 
@@ -41,6 +43,7 @@ from ..ocr.interface import OcrReader
 SHAPE_LABELS = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def _white_detected_type_region(
     source: Path,
     destination: Path,
@@ -63,7 +66,7 @@ def _white_detected_type_region(
     observed row may also separate thin bridges on a localization-only copy;
     its measured glyph count and rim must agree before recovering joined ink.
     """
-    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+    image = read_cv(source)
     if image is None:
         raise ValueError(f"无法读取旋正章色整图：{source}")
     mask = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -94,10 +97,10 @@ def _white_detected_type_region(
         image[selected] = 255
         if mask_destination is not None:
             mask_destination.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(mask_destination), selected.astype(np.uint8) * 255):
+            if not write_cv(mask_destination, selected.astype(np.uint8) * 255):
                 raise ValueError("横排文字实际填白范围保存失败")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(destination), image):
+        if not write_cv(destination, image):
             raise ValueError("旋正章色整图的横向文字区域白底覆盖图保存失败")
         return destination
     _, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
@@ -130,10 +133,10 @@ def _white_detected_type_region(
     image[selected] = 255
     if mask_destination is not None:
         mask_destination.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(mask_destination), selected.astype(np.uint8) * 255):
+        if not write_cv(mask_destination, selected.astype(np.uint8) * 255):
             raise ValueError("横排文字实际填白范围保存失败")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(destination), image):
+    if not write_cv(destination, image):
         raise ValueError("旋正章色整图的横向文字区域白底覆盖图保存失败")
     return destination
 
@@ -141,7 +144,7 @@ def _white_detected_type_region(
 def _copy_ring_input(source: Path, destination: Path) -> Path:
     """Persist an unmodified stamp image when no horizontal type row exists."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
+    copy_image(source, destination)
     return destination
 
 
@@ -320,9 +323,10 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     "enhanced", working, f"{color_label} · 原色结合增强" if unrotated_round else f"旋正{color_label} · 原色结合增强",
                 )
                 artifact[f"{region.color}_enhancement"] = {
-                    "method": "source_chroma_supported_blend",
+                    "method": "source_chroma_native_ink_preserving_blend",
                     "chroma_gain": 2.0,
                     "previous_strength_weight": 0.15,
+                    "preserves_native_ink": True,
                     "coordinate_frame": "unrotated" if unrotated_round else "oriented",
                 }
         except Exception as exc:
@@ -460,7 +464,7 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                         key: value for key, value in refined.items() if key != "protected_interior"
                     }
                 if consensus is not None:
-                    shutil.copyfile(consensus["center"], center)
+                    copy_image(consensus["center"], center)
                 elif local_row is None:
                     save_round_seal_type_band(working, center, orientation_aligned=aligned,
                                               focus_box=orientation.get("oriented_type_row_read_box") or focus,
@@ -550,14 +554,14 @@ def prepare_inputs(source, region, index, directory, url_prefix, provider, orien
                     )
                     if horizontal is not None:
                         center_input = next(item for item, _ in jobs if item["channel"] == "center")
-                        shutil.copyfile(horizontal["masked"], ring_input)
-                        shutil.copyfile(horizontal["mask"], mask_path)
+                        copy_image(horizontal["masked"], ring_input)
+                        copy_image(horizontal["mask"], mask_path)
                         residual_guide = horizontal["guide"]
                         artifact.pop("ring_input_bridge_separation", None)
                         artifact["horizontal_rows"] = []
                         for row in horizontal["rows"]:
                             if row["kind"] == "type":
-                                shutil.copyfile(row["path"], center)
+                                copy_image(row["path"], center)
                                 center_input["detected_rows"] = row["reads"]
                                 url = center_url
                             else:

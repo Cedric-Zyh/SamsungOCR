@@ -1,6 +1,8 @@
 """Trace visible stamp-border ink before masking the centre text."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +33,7 @@ class RingGuide:
         }
 
 
+@timed_image('detection', '图形定位')
 def trace_ellipse_border(source: str | Path, *, color: str = "red") -> RingGuide | None:
     """Use an ellipse only to locate a search strip, then follow actual ink.
 

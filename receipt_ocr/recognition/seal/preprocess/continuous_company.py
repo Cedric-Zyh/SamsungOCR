@@ -4,6 +4,8 @@ The inner purpose and number have already been located and masked. A reliable
 lower text line keeps its own direction. Otherwise the horizontal centre must
 not divide the first/last company glyphs into a backwards lower arc.
 """
+
+from receipt_ocr.runtime.image_processing import timed_image
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +63,7 @@ def _forward_strip(image, guide, start, end, inner, outer, color):
                      borderMode=cv2.BORDER_CONSTANT, borderValue=255)
 
 
+@timed_image('unwrap', '环形文字展开')
 def continuous_company_pixels(image, guide, *, color='red'):
     # Track the outside of the text rather than the dense security pattern
     # inside it. One half-degree bin, with two-degree closing of stroke holes.
@@ -91,6 +94,7 @@ def continuous_company_pixels(image, guide, *, color='red'):
                     'gaps': gaps, 'border': border}
 
 
+@timed_image('normalize', '形状校正')
 def calibrate_estimated_border(image, guide, *, color='red'):
     """Correct an oversized fallback ellipse using visible circumferential ink.
 

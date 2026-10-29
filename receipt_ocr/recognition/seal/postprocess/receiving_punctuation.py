@@ -7,6 +7,7 @@ from .receiving_identity import (
     choose_receiving_identity, decide_receiving_identity, normalize_receiving_text,
     observation_confidence, verified_grid_alternatives,
 )
+from .receiving_purpose import resolved_purpose_covers
 
 POLICY = 'warehouse_title_punctuation_from_requirement'
 
@@ -46,7 +47,7 @@ def _identity_values(rows, purpose):
         for row in rows:
             if row['row_index'] <= purpose:
                 yield row
-                yield from row.get('variants') or []
+                yield from (dict(value, row_index=row['row_index']) for value in row.get('variants') or [])
 
 
 def resolve_receiving_punctuation(requirement, primary, rows, detections, grid, *,
@@ -102,16 +103,19 @@ def resolve_receiving_punctuation(requirement, primary, rows, detections, grid, 
     if accepted and normalize_seal_text_strict(revised['text']) != normalize_seal_text_strict(requirement):
         accepted = False
         revised = dict(revised, can_compare=False, reason='complete_identity_not_requirement_compatible')
-    values = list(_identity_values(copied_rows, revised_primary.get('purpose_row_index')))
-    values.extend(box for box in boxes if box.get('row_index') == title and title is not None)
+    values = [(value, revised_primary) for value in
+              _identity_values(copied_rows, revised_primary.get('purpose_row_index'))]
+    values.extend((box, revised_primary) for box in boxes if box.get('row_index') == title and title is not None)
     for direction in copied_grid['directions']:
-        values.extend(_identity_values(direction['rows'], direction['decision'].get('purpose_row_index')))
-    values.extend(older)
+        values.extend((value, direction['decision']) for value in
+                      _identity_values(direction['rows'], direction['decision'].get('purpose_row_index')))
+    values.extend((value, revised_primary) for value in older)
     if accepted:
         text = normalize_receiving_text(revised['text'])
-        conflicts = [value for value in values if observation_confidence(value.get('confidence')) >= .75
+        conflicts = [value for value, decision in values if observation_confidence(value.get('confidence')) >= .75
                      and normalize_receiving_text(value.get('text'))
-                     and normalize_receiving_text(value.get('text')) not in text]
+                     and normalize_receiving_text(value.get('text')) not in text
+                     and not resolved_purpose_covers(value, decision, revised['text'])]
         if conflicts:
             accepted = False
             revised = dict(revised, can_compare=False, reason='remaining_reliable_identity_conflict',

@@ -71,7 +71,15 @@ function callRow(call, index, imageKeys) {
     <td class="review-call-seconds">${escapeHtml(runDuration(call.seconds))}</td></tr>`;
 }
 
-export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, loading = false, error = '', timingContext} = {}) {
+function imageProcessingDetails(processing, open) {
+  const seconds = validSeconds(processing?.seconds);
+  if (seconds == null || !Array.isArray(processing?.steps)) return '<p class="review-image-processing-missing">图像处理耗时未单独采集，重新测试后可查看。</p>';
+  const steps = processing.steps.filter(step => step && typeof step === 'object');
+  return `<details class="review-call-group review-image-processing" data-image-processing="steps"${open ? ' open' : ''}><summary>${chevron}<strong>图像处理</strong><span class="review-call-group-time" title="图像处理累计耗时"><small>累计</small> ${escapeHtml(runDuration(seconds))}</span></summary>
+    ${steps.length ? `<div class="review-call-table-wrap"><table class="review-image-processing-table"><thead><tr><th>处理项目</th><th>所属环节</th><th>次数</th><th>耗时</th></tr></thead><tbody>${steps.map(step => `<tr><td>${escapeHtml(step.label || step.operation || '图像处理')}${count(step.failed) ? `<small class="review-image-processing-failed">失败 ${count(step.failed)} 次</small>` : ''}</td><td>${escapeHtml(STAGES[step.stage] || step.stage_label || '其他处理')}</td><td>${count(step.calls)}</td><td>${escapeHtml(runDuration(step.seconds))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="review-call-note review-image-processing-empty">本次没有发生已计时的图像处理。</p>'}</details>`;
+}
+
+export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, processingOpen = false, loading = false, error = '', timingContext} = {}) {
   const available = data.available === true;
   const summary = data.summary || {}, calls = Array.isArray(data.calls) ? data.calls : [];
   const groups = new Map();
@@ -92,17 +100,18 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
     ${error ? `<p class="review-call-error" role="alert">${escapeHtml(error)}</p>` : ''}`;
   if (!available) return `${heading}<div class="review-calls-empty" role="status"><strong>本次识别调用明细未记录</strong><p>${escapeHtml(data.note || '此记录尚未采集逐次识别信息，重新识别后可查看。')}</p></div>`;
   const timing = runTiming(data, timingContext);
-  return `${heading}<div class="review-call-times"><span>开始 <time>${escapeHtml(runTime(data.started_at))}</time></span><span title="不含模型初始化">处理用时 <strong>${escapeHtml(runDuration(timing.recognition))}</strong></span></div>
+  return `${heading}<div class="review-call-times"><span>开始 <time>${escapeHtml(runTime(data.started_at))}</time></span><span title="包含图像处理，不含模型初始化">处理用时 <strong>${escapeHtml(runDuration(timing.recognition))}</strong></span></div>
     <div class="review-model-initialization"><span>模型初始化</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : '单独计时，不计入处理用时'}</small></div>
     ${data.note ? `<p class="review-call-note">${escapeHtml(data.note)}</p>` : ''}
-    <details class="review-call-explanation" data-call-explanation="count"${explanationOpen ? ' open' : ''}><summary>计数说明</summary>
-      ${count(summary.cache_hits) ? `<p class="review-call-note">复用已有识别结果 ${count(summary.cache_hits)} 次，未计入实际调用。</p>` : ''}
-      <p class="review-call-note">每次图片识别计 1 次，复用已有结果不重复计数。并行识别时，各次耗时相加可能超过处理用时。</p></details>
-    ${sorted.length ? `<div class="review-call-groups">${sorted.map(group => {
+    <div class="review-call-groups">${sorted.length ? sorted.map(group => {
       const timings = group.calls.map(({call}) => validSeconds(call.seconds));
       const completeTiming = timings.every(value => value != null);
       const total = completeTiming ? timings.reduce((sum,value) => sum + value, 0) : null;
       const failures = group.calls.filter(({call}) => call.status === 'failed').length;
-      return `<details class="review-call-group" data-call-group="${escapeHtml(group.key)}"${selected.has(group.key) ? ' open' : ''}><summary>${chevron}<strong>${escapeHtml(group.label)}</strong><span class="review-call-group-count">${group.calls.length} 次${failures ? ` · ${failures} 次失败` : ''}</span><span class="review-call-group-time" title="调用耗时合计">${escapeHtml(runDuration(total))}</span></summary><div class="review-call-table-wrap"><table class="review-call-table"><thead><tr><th>输入图片 / 识别内容</th><th>识别方式</th><th>耗时</th></tr></thead><tbody>${group.calls.map(({call,index}) => callRow(call,index,imageKeys)).join('')}</tbody></table></div></details>`;
-    }).join('')}</div>` : '<div class="review-calls-empty">最近一次处理没有发生实际识别调用。</div>'}`;
+      return `<details class="review-call-group" data-call-group="${escapeHtml(group.key)}"${selected.has(group.key) ? ' open' : ''}><summary>${chevron}<strong>${escapeHtml(group.label)}</strong><span class="review-call-group-count">${group.calls.length} 次${failures ? ` · ${failures} 次失败` : ''}</span><span class="review-call-group-time" title="调用耗时合计"><small>识别累计</small> ${escapeHtml(runDuration(total))}</span></summary><div class="review-call-table-wrap"><table class="review-call-table"><thead><tr><th>输入图片 / 识别内容</th><th>识别方式</th><th>耗时</th></tr></thead><tbody>${group.calls.map(({call,index}) => callRow(call,index,imageKeys)).join('')}</tbody></table></div></details>`;
+    }).join('') : '<div class="review-calls-empty">最近一次处理没有发生实际识别调用。</div>'}
+    ${imageProcessingDetails(data.image_processing, processingOpen)}</div>
+    <details class="review-call-explanation" data-call-explanation="count"${explanationOpen ? ' open' : ''}><summary>计数说明</summary>
+      ${count(summary.cache_hits) ? `<p class="review-call-note">复用已有识别结果 ${count(summary.cache_hits)} 次，未计入实际调用。</p>` : ''}
+      <p class="review-call-note">处理用时已包含图像处理。实际调用只计图片识别，旋转、裁剪等处理与缓存复用不增加识别次数。并行识别时，各次耗时相加可能超过处理用时。</p></details>`;
 }

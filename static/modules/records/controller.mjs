@@ -63,6 +63,10 @@ export function createRecords({
       toast('请先勾选需要复核的回单', 'warning');
       return;
     }
+    if (kind === 'selected' && [...recordsState.selected].some(id => typeof id === 'string')) {
+      toast('所选回单尚未全部完成识别，请识别完成后再复核', 'warning');
+      return;
+    }
     try { await startReviewScope(getReviewScope(kind), {recordId}); }
     catch (error) { toast(error.message, 'danger'); }
   }
@@ -228,6 +232,7 @@ export function createRecords({
     if (bulkActionPending || recordsState.recordLoading) return;
     if (!recordsState.selected.size) return toast('请先勾选回单', 'warning');
     const ids = [...recordsState.selected];
+    if (ids.some(id => typeof id === 'string')) return toast('所选回单尚未全部完成识别，请识别完成后再复核', 'warning');
     if (reviewStatus === '确认通过') {
       const unsafe = recordsState.records.filter(item => recordsState.selected.has(Number(item.id))).filter(item => !canBulkConfirm(item));
       if (unsafe.length) return toast(`有 ${unsafe.length} 张日期或印章证据不完整，不能批量确认通过`, 'danger');
@@ -244,13 +249,21 @@ export function createRecords({
   async function deleteRecords(ids) {
     if (bulkActionPending || recordsState.recordLoading) return;
     if (!ids.length) return toast('请先选择回单', 'warning');
+    let changed = false;
     bulkActionPending = true; updateSelectionToolbar();
     try {
-      await (services.records.remove(ids));
-      toast('回单记录已删除', 'success');
-      await refreshVisibleResults();
+      const jobs = ids.filter(id => typeof id === 'string' && id.startsWith('job:')).map(id => id.slice(4));
+      const removed = jobs.length ? await services.queue.remove(jobs) : {result_ids: [], kept_ids: []};
+      changed = jobs.length > 0;
+      const results = [...new Set([...ids.filter(id => typeof id === 'number'), ...(removed.result_ids || [])])];
+      if (results.length) { await services.records.remove(results); changed = true; }
+      recordsState.selected.clear();
+      toast(removed.kept_ids?.length ? '已删除可删除的记录；正在识别的任务暂时保留' : '回单记录已删除', 'success');
     } catch (error) { toast(error.message, 'danger'); }
-    finally { bulkActionPending = false; updateSelectionToolbar(); }
+    finally {
+      if (changed) { try { await refreshVisibleResults(); } catch (error) { toast(error.message, 'danger'); } }
+      bulkActionPending = false; updateSelectionToolbar();
+    }
   }
 
   function initialize() {

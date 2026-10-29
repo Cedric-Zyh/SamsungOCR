@@ -4,7 +4,7 @@ import hashlib
 
 from .decision import decide_overall
 from .issues import issue, active_issues
-from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict
+from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict, seal_text_comparison_rank
 from .seal_serial import serial_matching_texts
 from .seal_ring import normalize_ring_candidates
 
@@ -121,7 +121,8 @@ def standard_comparison(result, standard):
                                      else "匹配" if candidate["shape"] == standard["shape"] else "不匹配")
         candidate["color_status"] = ("尚无参照" if standard is None else "一致" if candidate["color"] == standard["color"] else "不同")
         candidate["matched"] = candidate["text_status"] == "匹配" and candidate["shape_status"] == "匹配"
-    selected = max(candidates, key=lambda c: (c["matched"], c["text_status"] == "匹配", c["score"]), default=None)
+    selected = max(candidates, key=lambda c: (c["matched"], *seal_text_comparison_rank(
+        {"status": c["text_status"], "score": c["score"]})), default=None)
     return {
         "standard": standard, "candidates": candidates,
         "selected_id": selected["id"] if selected else None,
@@ -152,8 +153,13 @@ def apply_standard_check(result, standard, *, preserve_confirmed=True):
         return result
     if matched:
         status, message = "匹配", "已找到一枚文字符合签章要求、形状符合标准章的客户印章"
-    elif selected and selected["text_status"] == "匹配" and selected["shape_status"] == "不匹配":
-        status, message = "不匹配", "印章文字一致，但形状与标准章不一致"
+    elif selected and selected["shape_status"] == "不匹配" and not any(
+            c["shape_status"] != "不匹配" and c["text_status"] != "不匹配"
+            for c in comparison["candidates"]):
+        # Missing text cannot undo a measured shape conflict. Another stamp
+        # with compatible/unknown shape and unresolved text still needs review.
+        status = "不匹配"
+        message = f"印章形状不符：实际为{selected['shape_label']}，标准章为{SHAPES[standard['shape']]}"
     else:
         status, message = "需人工复核", "未找到文字与形状同时符合要求的客户印章，请逐枚核对"
     result["seal_check"] = {**old, "status": status, "reliable": matched,

@@ -1,10 +1,13 @@
 """Prepare date lines and digit slots while preserving crop geometry."""
 
 from __future__ import annotations
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 from PIL import Image, ImageChops, ImageOps
 
 
+@timed_image('crop', '区域裁剪')
 def _save_date_line_crop(
     source: str | Path,
     destination: str | Path,
@@ -43,6 +46,7 @@ def _save_date_line_crop(
     return left, top, right - left, bottom - top
 
 
+@timed_image('crop', '区域裁剪')
 def _save_right_padded_date_line(
     source: str | Path,
     destination: str | Path,
@@ -71,6 +75,7 @@ from receipt_ocr.recognition.date.preprocess.slots import _save_date_slot_views
 from receipt_ocr.recognition.date.preprocess.slots import _date_slot_white_canvas
 
 
+@timed_image('crop', '区域裁剪')
 def _save_date_upper_line_crop(
     source: str | Path,
     destination: str | Path,

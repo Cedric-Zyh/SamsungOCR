@@ -13,6 +13,7 @@ from ..providers.selection import validate_stage_provider
 from ..providers.text import text_recognizer_scope
 from ..domain.stages import STAGES, STAGE_LABELS as LABELS
 from ..domain.issues import issue
+from ..domain.printed_field_selection import canonical_printed_field, select_printed_fields
 
 SEAL_PROVIDERS = frozenset(item.id for item in PROVIDERS.of_kind("local_seal"))
 from ..runtime.scope import provider_scope
@@ -183,9 +184,12 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                 if directory:
                     directory = Path(directory) / f"{stage}-{method}"
                     prefix = prefix.rstrip("/") + f"/{stage}-{method}"
+                request_fields = deepcopy(previous_fields)
+                if stage == "date" and request_fields.get("要求到货"):
+                    request_fields["要求到货"] = canonical_printed_field("要求到货", request_fields["要求到货"])
                 request = StageRequest(
                     route,
-                    deepcopy(previous_fields),
+                    request_fields,
                     directory,
                     prefix,
                     "qingtong_only" if method == "qingtong" else "local",
@@ -216,7 +220,7 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                             measure(f"stage.{stage}.{method}"), provider_scope(stage_scope):
                         if method == "danzhengtong":
                             from ..danzhengtong import stage_result
-                            result = stage_result(context, stage, danzhengtong_cache, previous_fields)
+                            result = stage_result(context, stage, danzhengtong_cache, request_fields)
                         else:
                             result = analyzer.run_stage(context, stage, request)
                     results[stage].append({"method": method, "result": result})
@@ -230,6 +234,10 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                 except Exception as exc:
                     errors.append(issue("provider_failure", stage, f"{LABELS[stage]} / {method}：{exc}", provider=method))
                     results[stage].append({"method": method, "error": str(exc)})
+            if stage == "fields" and any("result" in variant for variant in results[stage]):
+                # All downstream readers must compare against the same chosen
+                # fields that the review panel will display.
+                previous_fields.update(select_printed_fields(results[stage])["fields"])
     return results, errors, output, previous_fields
 
 

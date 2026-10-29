@@ -14,6 +14,8 @@ from .preprocess.receiving_split import prepare_receiving_split
 from .postprocess.receiving_split import decide_receiving_split
 from .postprocess.receiving_code_policy import resolve_receiving_code
 from .postprocess.receiving_punctuation import resolve_receiving_punctuation
+from .postprocess.receiving_merge import complete_receiving_candidate_number
+from .postprocess.receiving_title_read import resolve_receiving_title_read
 from .postprocess.receiving_identity import (
     choose_receiving_identity, decide_receiving_identity, older_identity_observations,
     observation_confidence, verified_grid_alternatives,
@@ -206,10 +208,20 @@ def recognize_receiving_form(artifact, directory, prefix, provider, reader, *, o
         older_observations=older_identity_observations(original), selection=selection)
     if title_punctuation:
         selection = title_punctuation['selection']
+    title_read_resolution = resolve_receiving_title_read(
+        artifact, primary, rows, detections, grid, directory=directory, old_form=old_form,
+        older_observations=older_identity_observations(original), selection=selection)
+    if title_read_resolution:
+        selection = title_read_resolution['selection']
     identity = selection['text'] if selection['can_compare'] else ''
     candidate = (split or {}).get('identity_text') or primary.get('identity_text') or ''
     if title_punctuation:
         candidate = title_punctuation['candidate_text']
+    if identity:
+        candidate = identity
+    candidate_number = complete_receiving_candidate_number(candidate, primary) if not identity else None
+    if candidate_number:
+        candidate = candidate_number['text']
     status = 'adopted' if identity else 'conflict' if primary.get('conflicts') else 'insufficient'
     artifact['receiving_form'] = _public({
         'schema_version': 1, 'managed': True, 'status': status,
@@ -221,8 +233,12 @@ def recognize_receiving_form(artifact, directory, prefix, provider, reader, *, o
     })
     if code_resolution:
         artifact['receiving_form']['requirement_code_resolution'] = _public(code_resolution['audit'])
+    if candidate_number:
+        artifact['receiving_form']['candidate_number_merge'] = _public(candidate_number)
     if title_punctuation:
         artifact['receiving_form']['requirement_title_punctuation'] = _public(title_punctuation['audit'])
+    if title_read_resolution:
+        artifact['receiving_form']['title_read_resolution'] = _public(title_read_resolution['audit'])
     # All original strings remain visible, including a blocked exact-looking
     # candidate. Only this physical stamp's selected identity enters matching.
     for read in artifact['reads']:

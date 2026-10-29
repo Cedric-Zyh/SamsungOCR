@@ -1,6 +1,8 @@
 """Seal shape classification."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
@@ -189,6 +191,7 @@ def seal_region_is_elliptical(
         return label in {"ellipse", "oval", "椭圆"}
 
 
+@timed_image('detection', '图形定位')
 def seal_region_shape(source: str | Path, region: SealRegion) -> str:
     """Return the locally validated shape: ``rectangle``, ``ellipse`` or ``circle``."""
     if seal_region_is_rectangular(source, region):

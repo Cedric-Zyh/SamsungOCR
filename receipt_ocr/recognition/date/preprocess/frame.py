@@ -1,7 +1,10 @@
 """Conservative frame removal; preserve interior digits and crossings."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 from PIL import Image
 
+@timed_image('denoise', '去噪与干扰清理')
 def _save_positioned_outer_frame_clean(
     source: str | Path,
     destination: str | Path,

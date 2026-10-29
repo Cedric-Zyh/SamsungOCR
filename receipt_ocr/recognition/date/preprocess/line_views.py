@@ -1,10 +1,13 @@
 """Non-generative date preprocessing: preserve dark ink and frame crossings."""
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 import cv2
 import numpy as np
 from PIL import Image
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def suppress_red_stamp(image: Image.Image) -> Image.Image:
     """Suppress bright red ink while protecting dark handwriting.
 
@@ -29,6 +32,7 @@ def suppress_red_stamp(image: Image.Image) -> Image.Image:
     return Image.fromarray(gray).convert("RGB")
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def remove_date_frame(image: Image.Image) -> Image.Image:
     """Erase long outside rules, protecting pen strokes crossing each rule."""
     rgb = np.asarray(image.convert("RGB")).copy()

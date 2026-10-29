@@ -489,6 +489,10 @@ class JobStore:
             con.execute('UPDATE queue_control SET paused=?,updated_at=? WHERE id=1', (int(paused), now_iso()))
         return self.control()
 
+    def _prepare_result(self, con, job, result):
+        """Allow specialized queues to finalize identity within the result transaction."""
+        return job, result
+
     def finish(self, claimed, result=None, preview_name='', error='', *, recognition_calls=None):
         """Commit the result and final job state together, preventing duplicate rows on restart."""
         reconcile = ''
@@ -502,6 +506,8 @@ class JobStore:
                 return False
             result_id = job['result_id']
             target = job['target_result_id']
+            if not error and result is not None and not target:
+                job, result = self._prepare_result(con, job, result)
             status = 'failed' if error else 'succeeded'
             if target:
                 current = con.execute("SELECT * FROM results WHERE id=? AND deleted_at=''", (target,)).fetchone()

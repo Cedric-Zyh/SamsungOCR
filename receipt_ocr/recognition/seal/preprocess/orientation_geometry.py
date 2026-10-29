@@ -4,6 +4,7 @@ from pathlib import Path
 import math
 import cv2
 import numpy as np
+from receipt_ocr.imaging.working_images import read_cv, write_cv, cached_transform
 
 
 def _rotation_geometry(width, height, angle):
@@ -140,31 +141,35 @@ def _oriented_type_anchor_box(decision, matrix, width, height):
         min(float(height), bottom + padding_y),
     ]
 
-def rotate_stamp_image(source, destination, angle):
-    """Rotate a color-isolated stamp with a white expanded canvas."""
-    source, destination = Path(source), Path(destination)
-    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
-    if image is None or image.size == 0:
-        raise ValueError(f"无法读取印章方向校正图：{source}")
+def rotate_stamp_pixels(image, angle):
     height, width = image.shape[:2]
     matrix, new_width, new_height = _rotation_geometry(width, height, angle)
-    rotated = cv2.warpAffine(
+    return cached_transform(image, 'rotation', ('expanded_cubic_white', float(angle).hex()), lambda: cv2.warpAffine(
         image,
         matrix,
         (new_width, new_height),
         flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=(255, 255, 255),
-    )
+    ))
+
+
+def rotate_stamp_image(source, destination, angle):
+    """Rotate a color-isolated stamp with a white expanded canvas."""
+    source, destination = Path(source), Path(destination)
+    image = read_cv(source)
+    if image is None or image.size == 0:
+        raise ValueError(f"无法读取印章方向校正图：{source}")
+    rotated = rotate_stamp_pixels(image, angle)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    ok = cv2.imwrite(str(destination), rotated)
+    ok = write_cv(destination, rotated)
     if not ok:
         raise ValueError(f"印章方向校正图写入失败：{destination}")
     return destination
 
 def _ellipse_axis_angle(source):
     """Estimate the remaining oval tilt without another OCR inference."""
-    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+    image = read_cv(source)
     if image is None or image.size == 0:
         return None
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)

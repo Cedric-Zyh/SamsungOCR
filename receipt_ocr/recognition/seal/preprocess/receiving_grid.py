@@ -4,6 +4,10 @@ Long horizontal rules and independently observed side extents must agree.
 Broken ink is aggregated only for geometry; recognition images retain the
 original colour pixels and a continuous red-chroma representation.
 """
+
+from receipt_ocr.runtime.image_processing import image_operation
+
+from receipt_ocr.runtime.image_processing import timed_image
 from itertools import combinations
 from pathlib import Path
 
@@ -220,6 +224,7 @@ def _fragmented_internal_rules(mask, sides):
     return levels
 
 
+@timed_image('normalize', '形状校正')
 def measure_receiving_grid(image):
     """Return a complete measured grid, or a conservative rejection.
 
@@ -241,9 +246,11 @@ def measure_receiving_grid(image):
     if angle is None or not np.isfinite(angle):
         return _reject("insufficient_horizontal_segments")
     matrix, width, height = _rotation_geometry(_MEASUREMENT_WIDTH, target_height, angle)
-    rotated = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
-                             borderValue=(255, 255, 255))
-    chroma = cv2.warpAffine(chroma, matrix, (width, height), flags=cv2.INTER_LINEAR, borderValue=0)
+    with image_operation('rotation', '旋转校正'):
+        rotated = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                                 borderValue=(255, 255, 255))
+    with image_operation('rotation', '旋转校正'):
+        chroma = cv2.warpAffine(chroma, matrix, (width, height), flags=cv2.INTER_LINEAR, borderValue=0)
     mask = (chroma > _CHROMA_CUTOFF).astype(np.uint8)
     sides, all_sides = _paired_sides(mask)
     if sides is None:

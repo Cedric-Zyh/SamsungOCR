@@ -29,13 +29,13 @@ export function createRecordTable({environment, ui, recordsState, currentFilters
       const previousScroll = {top: table.scrollTop, left: table.scrollLeft};
       const active = document.activeElement;
       const keepFocus = background && body.contains?.(active);
-      const focusTarget = !keepFocus ? '' : active.matches?.('.record-select') ? `.record-select[value="${Number(active.value)}"]`
+      const focusTarget = !keepFocus ? '' : active.matches?.('.record-select') ? `.record-select[value=${JSON.stringify(String(active.value))}]`
         : active.dataset.openReview ? `[data-open-review="${Number(active.dataset.openReview)}"].${active.classList.contains('record-file-link') ? 'record-file-link' : 'row-review'}`
         : active.dataset.moreRecord ? `[data-more-record="${Number(active.dataset.moreRecord)}"]` : '';
       body.innerHTML = recordsState.records.map(recordRow).join('');
       if (focusTarget) $(focusTarget, body)?.focus({preventScroll: true});
       if (!scrollToTable) { table.scrollTop = previousScroll.top; table.scrollLeft = previousScroll.left; }
-      $$('.record-select', body).forEach(input => input.addEventListener('change', () => toggleSelected(Number(input.value), input.checked)));
+      $$('.record-select', body).forEach(input => input.addEventListener('change', () => toggleSelected(input.value.startsWith('job:') ? input.value : Number(input.value), input.checked)));
       $$('[data-open-review]', body).forEach(button => button.addEventListener('click', () => {
         const id = Number(button.dataset.openReview);
         if (button.dataset.reviewMode === 'view') {
@@ -49,6 +49,7 @@ export function createRecordTable({environment, ui, recordsState, currentFilters
         filename: button.dataset.filename || ''
       })));
       $$('[data-delete-row]', body).forEach(button => button.addEventListener('click', () => deleteRecords([Number(button.dataset.deleteRow)])));
+      $$('[data-delete-job]', body).forEach(button => button.addEventListener('click', () => deleteRecords([`job:${button.dataset.deleteJob}`])));
       $$('[data-retry-row]', body).forEach(button => button.addEventListener('click', () => retryOne(Number(button.dataset.retryRow), button)));
     }
     if (scrollToTable) {

@@ -1,10 +1,12 @@
+use std::ffi::OsStr;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager, State, WindowEvent};
 
@@ -48,13 +50,64 @@ fn packaged_server(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     };
     let candidates = [
         resource_dir.join("SamsungReceipt").join(executable),
-        resource_dir.join("resources").join("SamsungReceipt").join(executable),
+        resource_dir
+            .join("resources")
+            .join("SamsungReceipt")
+            .join(executable),
         // Older installers preserved the parent component as Tauri's `_up_` directory.
-        resource_dir.join("_up_").join("resources").join("SamsungReceipt").join(executable),
+        resource_dir
+            .join("_up_")
+            .join("resources")
+            .join("SamsungReceipt")
+            .join(executable),
         resource_dir.join(executable),
         resource_dir.join("server").join(executable),
     ];
     Ok(candidates.into_iter().find(|path| path.is_file()))
+}
+
+fn configure_packaged_paths(
+    command: &mut Command,
+    desktop_executable: &Path,
+    local_app_data: Option<&OsStr>,
+) -> Result<(), String> {
+    let install_dir = desktop_executable
+        .parent()
+        .ok_or_else(|| "无法确定软件安装目录。".to_string())?;
+    let models = install_dir.join("models");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let probe = models.join(format!(".write-check-{}-{nonce}", std::process::id()));
+    let writable = (|| -> std::io::Result<()> {
+        fs::create_dir_all(&models)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)?;
+        file.write_all(b"model-cache")
+    })();
+    let _ = fs::remove_file(&probe);
+    writable.map_err(|error| {
+        format!(
+            "模型目录无法写入：{}。请选择可写的安装位置或调整该文件夹权限。（{error}）",
+            models.display()
+        )
+    })?;
+    // PaddleX reads its cache root at import time. Override both names before
+    // the service starts so all native/ONNX/orientation models share one root.
+    command
+        .env("SAMSUNG_RECEIPT_INSTALL_DIR", install_dir)
+        .env("PADDLE_MODEL_HOME", &models)
+        .env("PADDLE_PDX_CACHE_HOME", &models);
+    if let Some(local_app_data) = local_app_data {
+        command.env(
+            "SAMSUNG_RECEIPT_DATA_DIR",
+            PathBuf::from(local_app_data).join("SamsungReceipt"),
+        );
+    }
+    Ok(())
 }
 
 fn server_command(app: &AppHandle, port: u16) -> Result<(Command, PathBuf), String> {
@@ -94,13 +147,14 @@ fn server_command(app: &AppHandle, port: u16) -> Result<(Command, PathBuf), Stri
         .env("FLASK_DEBUG", "0")
         .stdin(Stdio::null());
 
-    if !cfg!(debug_assertions) {
-        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            let data_dir = PathBuf::from(local_app_data).join("SamsungReceipt");
-            command
-                .env("SAMSUNG_RECEIPT_DATA_DIR", &data_dir)
-                .env("PADDLE_MODEL_HOME", data_dir.join("models"));
-        }
+    if !cfg!(debug_assertions) && cfg!(target_os = "windows") {
+        let desktop_executable =
+            std::env::current_exe().map_err(|error| format!("读取软件安装位置失败：{error}"))?;
+        configure_packaged_paths(
+            &mut command,
+            &desktop_executable,
+            std::env::var_os("LOCALAPPDATA").as_deref(),
+        )?;
     }
 
     if cfg!(debug_assertions) {
@@ -173,10 +227,16 @@ fn start_server(app: AppHandle, state: State<'_, ServerState>) -> Result<String,
         }
         if let Ok(mut slot) = state.child.lock() {
             if let Some(process) = slot.as_mut() {
-                if process.try_wait().map_err(|error| error.to_string())?.is_some() {
+                if process
+                    .try_wait()
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
                     drop(slot);
                     stop_child(&state);
-                    return Err("本地识别服务提前退出，请查看日志或检查 Python/OCR 依赖。".to_string());
+                    return Err(
+                        "本地识别服务提前退出，请查看日志或检查 Python/OCR 依赖。".to_string()
+                    );
                 }
             }
         }
@@ -204,4 +264,81 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("运行三星回单核验台桌面端失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temporary_root() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "samsung-model-path-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn all_models_follow_the_desktop_install_directory() {
+        let root = temporary_root();
+        let install = root.join("自选安装位置 with spaces");
+        let local = root.join("local-data");
+        let mut command = Command::new("unused");
+        command.env("PADDLE_PDX_CACHE_HOME", "old-cache");
+        configure_packaged_paths(
+            &mut command,
+            &install.join("三星回单核验台.exe"),
+            Some(local.as_os_str()),
+        )
+        .unwrap();
+        let env: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            env[OsStr::new("SAMSUNG_RECEIPT_INSTALL_DIR")],
+            Some(install.as_os_str())
+        );
+        for key in ["PADDLE_MODEL_HOME", "PADDLE_PDX_CACHE_HOME"] {
+            assert_eq!(
+                env[OsStr::new(key)],
+                Some(install.join("models").as_os_str())
+            );
+        }
+        assert_eq!(
+            env[OsStr::new("SAMSUNG_RECEIPT_DATA_DIR")],
+            Some(local.join("SamsungReceipt").as_os_str())
+        );
+        assert_eq!(fs::read_dir(install.join("models")).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_local_app_data_does_not_change_the_model_location() {
+        let root = temporary_root();
+        let mut command = Command::new("unused");
+        configure_packaged_paths(&mut command, &root.join("app.exe"), None).unwrap();
+        assert!(root.join("models").is_dir());
+        assert!(!command
+            .get_envs()
+            .any(|(key, _)| key == "SAMSUNG_RECEIPT_DATA_DIR"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unusable_model_directory_reports_the_selected_path() {
+        let root = temporary_root();
+        fs::create_dir_all(&root).unwrap();
+        let models = root.join("models");
+        fs::write(&models, b"occupied").unwrap();
+        let mut command = Command::new("unused");
+        let error =
+            configure_packaged_paths(&mut command, &root.join("app.exe"), None).unwrap_err();
+        assert!(error.contains(&models.display().to_string()));
+        assert_eq!(fs::read(&models).unwrap(), b"occupied");
+        assert!(!command
+            .get_envs()
+            .any(|(key, _)| key == "PADDLE_MODEL_HOME"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -1,5 +1,6 @@
 import {statusClass, checkStatusLabel, escapeHtml} from '../core/ui.mjs';
 import {providerErrors} from '../core/provider_errors.mjs';
+import {recordSelectionKey} from './selection.mjs';
 
 export function createRecordRow({ReceiptWorkbench, recordsState}) {
   function recordRow(item) {
@@ -48,12 +49,13 @@ export function createRecordRow({ReceiptWorkbench, recordsState}) {
     const attribute = status === 'ready' ? 'data-job-start' : status === 'awaiting_upload' ? 'data-job-upload' : status === 'failed' ? 'data-job-retry' : 'data-open-task-job';
     const action = status === 'ready' ? '开始识别' : status === 'awaiting_upload' ? '补传图片' : status === 'failed' ? '重试' : '查看进度';
     const pending = status === 'failed' ? '—' : item.id ? '待重新识别' : '待识别';
+    const key = recordSelectionKey(item);
     return `<tr class="processing-row" data-job-id="${escapeHtml(job.id)}">
-      <td><input type="checkbox" disabled aria-label="${escapeHtml(name)}，请在任务详情选择任务" title="在任务详情中批量管理识别任务"></td>
+      <td><input class="record-select" type="checkbox" value="${escapeHtml(key || '')}" ${recordsState.selected.has(key) ? 'checked' : ''} ${key === null ? 'disabled title="正在识别，请等待处理结束"' : ''} aria-label="选择 ${escapeHtml(name)}"></td>
       <td class="file-cell"><strong title="${escapeHtml(item.filename || name)}">${escapeHtml(name)}</strong><small class="record-customer" title="${escapeHtml(fields['客户名称'] || pending)}">${escapeHtml(fields['客户名称'] || pending)}</small></td>
       <td class="processing-placeholder">${pending}</td><td class="processing-placeholder">${pending}</td><td class="processing-placeholder">${pending}</td>
       <td class="verdict-cell"><span class="pill ${status === 'failed' ? 'danger' : 'pending'}">${label}</span>${status === 'failed' ? `<small class="error-text">${escapeHtml(job.error_message || '识别未完成，请重试')}</small>` : item.id ? '<small>上次结果暂不作为当前结论</small>' : ''}</td>
-      <td><div class="row-actions processing-row-actions"><button type="button" class="mini-button row-secondary" data-preview-job="${escapeHtml(job.id)}" ${status === 'awaiting_upload' ? 'disabled title="图片尚未上传，请先补传图片"' : ''}>预览</button><button type="button" class="mini-button row-primary" ${attribute}="${escapeHtml(job.id)}">${action}</button></div></td></tr>`;
+      <td><div class="row-actions processing-row-actions"><button type="button" class="mini-button row-secondary" data-preview-job="${escapeHtml(job.id)}" ${status === 'awaiting_upload' ? 'disabled title="图片尚未上传，请先补传图片"' : ''}>预览</button><button type="button" class="mini-button row-primary" ${attribute}="${escapeHtml(job.id)}">${action}</button>${key !== null ? `<button type="button" class="mini-button row-secondary" data-delete-job="${escapeHtml(job.id)}">删除</button>` : ''}</div></td></tr>`;
   }
 
   return recordRow;

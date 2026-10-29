@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {createRecords} = require('../static/modules/records/records.mjs');
+const {createImports} = require('../static/modules/imports/imports.mjs');
 const {createState} = require('../static/modules/core/state.mjs');
 const ReceiptWorkbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 
@@ -24,7 +25,7 @@ function node() {
 }
 
 function harness({storedSize = null} = {}) {
-  const nodes = new Map(), fields = {}, requests = [], notices = [], timers = [], writes = [], scrolls = [];
+  const nodes = new Map(), collections = new Map(), fields = {}, requests = [], notices = [], timers = [], writes = [], scrolls = [], reviewScopes = [];
   const $ = selector => {
     const name = selector === '#import-date' ? 'import_date' : selector.match(/^#filters \[name=["']?([^"'\]]+)["']?\]$/)?.[1];
     if (name) return fields[name] || (fields[name] = node());
@@ -46,18 +47,43 @@ function harness({storedSize = null} = {}) {
   };
   $('.record-filter-table').scrollTo = options => scrolls.push(options);
   $('.record-filter-table').getBoundingClientRect = () => ({top: 250});
-  const controller = createRecords({environment, ui: {$, $$: () => [], toast: message => notices.push(message)}, recordsState, ReceiptWorkbench,
-    api: async (url, options) => { requests.push({url, options}); return respond(url, options); }, startReviewScope: async () => {}, retryOne: async () => {},
+  const controller = createRecords({environment, ui: {$, $$: selector => collections.get(selector) || [], toast: message => notices.push(message)}, recordsState, ReceiptWorkbench,
+    api: async (url, options) => { requests.push({url, options}); return respond(url, options); }, startReviewScope: async (...args) => { reviewScopes.push(args); }, retryOne: async () => {},
     refreshVisibleResults: async () => { refreshed++; }, setBatchStep() {},
   });
   controller.initialize();
-  return {controller, recordsState, $, fields, requests, notices, timers, writes, scrolls, environment,
+  return {controller, recordsState, $, fields, requests, notices, timers, writes, scrolls, environment, collections, reviewScopes,
     respond: callback => { respond = callback; }, get refreshed() { return refreshed; }};
 }
 
 const row = (id, ready = false) => ({id, filename: `${id}.jpg`, fields: {}, date_check: {actual: '2026-09-10', status: '匹配', reliable: ready}, seal_check: {recognized: '客户章', status: '匹配', reliable: ready}, review_status: '待复核'});
 const page = (items, total = items.length, number = 1, size = 100) => ({items, total, page: number, page_size: size});
 const target = name => ({closest: selector => selector === `[${name}]` ? {} : null});
+const processingRow = (id, status, resultId = null) => ({
+  id: resultId, filename: `${id}.jpg`, fields: {}, processing_status: status,
+  processing_job: {id, status, result_id: resultId},
+});
+
+function bulkRetryHarness(selected, {remote = true} = {}) {
+  const nodes = new Map(), requests = [], notices = [], shownTasks = [];
+  let confirmations = 0, settingsFlushes = 0;
+  const $ = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, node());
+    return nodes.get(selector);
+  };
+  const task = {id: 'retry-task', items: []};
+  const controller = createImports({
+    environment: {document: {}, window: {confirm() { confirmations++; return true; }}, location: {}, localStorage: {}},
+    ui: {$, $$: () => [], toast: message => notices.push(message)},
+    importsState: {ocrBackend: 'vision', sealRecognitionMode: 'local'}, recordsState: {selected: new Set(selected)},
+    ReceiptImport: {}, readRecognitionPlan: () => ({fields: ['vision']}), usesRemotePlan: () => remote,
+    updateRecognitionPlan() {}, loadDailyResults: async () => {}, closeModal() {},
+    flushSettings: async () => { settingsFlushes++; }, showQueuedRetry: async value => { shownTasks.push(value); },
+    api: async (url, options) => { requests.push({url, options}); return task; },
+  });
+  return {controller, $, requests, notices, shownTasks, task,
+    get confirmations() { return confirmations; }, get settingsFlushes() { return settingsFlushes; }};
+}
 
 test('empty records disable review and hide pagination until records return', async () => {
   const h = harness();
@@ -210,4 +236,232 @@ test('background row refresh preserves table scroll position', async () => {
   await h.controller.loadRecords({background: true});
   assert.equal(h.$('.record-filter-table').scrollTop, 540);
   assert.equal(h.$('.record-filter-table').scrollLeft, 32);
+});
+
+test('inactive processing rows can be selected and deleted while running rows stay protected', () => {
+  const h = harness();
+  for (const status of ['awaiting_upload', 'ready', 'queued', 'failed']) {
+    const markup = h.controller.recordRow(processingRow(`task-${status}`, status));
+    const checkbox = markup.match(/<input\b[^>]*>/)?.[0];
+    assert(checkbox, `${status} row has a checkbox`);
+    assert.match(checkbox, /class="record-select"/);
+    assert.match(checkbox, new RegExp(`value="job:task-${status}"`));
+    assert.doesNotMatch(checkbox, /\bdisabled\b/);
+    assert.match(markup, new RegExp(`data-delete-job="task-${status}"`));
+  }
+  const running = h.controller.recordRow(processingRow('task-running', 'running', 81));
+  assert.match(running.match(/<input\b[^>]*>/)[0], /\bdisabled\b/);
+  assert.doesNotMatch(running, /data-delete-job=/);
+});
+
+test('select current page includes unuploaded jobs and ordinary results without enabling mixed review', async () => {
+  const h = harness();
+  h.respond(async () => page([
+    row(1, true), processingRow('upload-1', 'awaiting_upload'), processingRow('ready-1', 'ready'),
+    processingRow('queued-1', 'queued'), processingRow('failed-1', 'failed', 8), processingRow('running-1', 'running', 9),
+  ]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  assert.deepEqual(new Set(h.recordsState.selected), new Set([1, 'job:upload-1', 'job:ready-1', 'job:queued-1', 'job:failed-1']));
+  assert.equal(h.$('#select-all').checked, true);
+  assert.equal(h.$('#bulk-delete').disabled, false);
+  for (const selector of ['#bulk-pass', '#bulk-pending', '#bulk-retry', '#review-selected-records']) {
+    assert.equal(h.$(selector).disabled, true, `${selector} blocks mixed processing selection`);
+  }
+  const before = h.requests.length;
+  await h.controller.bulkReview('确认通过', '通过');
+  await h.controller.bulkReview('待复核', '需人工复核');
+  await h.controller.startRecordsReview('selected');
+  assert.equal(h.requests.length, before);
+  assert.equal(h.reviewScopes.length, 0);
+  h.controller.selectCurrentPage(false);
+  assert.equal(h.recordsState.selected.size, 0);
+  assert.equal(h.$('#select-all').checked, false);
+});
+
+test('processing checkbox events retain the job key instead of converting it into a number', async () => {
+  const h = harness(), checkbox = node();
+  checkbox.value = 'job:upload-1'; checkbox.checked = true;
+  h.collections.set('.record-select', [checkbox]);
+  h.respond(async () => page([processingRow('upload-1', 'awaiting_upload')]));
+  await h.controller.loadRecords();
+  await checkbox.emit('change');
+  assert.deepEqual([...h.recordsState.selected], ['job:upload-1']);
+  assert.equal(h.$('#bulk-delete').disabled, false);
+  checkbox.checked = false;
+  await checkbox.emit('change');
+  assert.equal(h.recordsState.selected.size, 0);
+});
+
+test('mixed deletion removes queue jobs first and then all distinct related result IDs', async () => {
+  const h = harness();
+  h.respond(async () => page([row(11, true), processingRow('failed-1', 'failed', 12), processingRow('ready-1', 'ready')]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  const before = h.requests.length;
+  h.respond(async url => {
+    if (url === '/api/jobs/delete') return {deleted: ['failed-1', 'ready-1'], result_ids: [12, 11, 12]};
+    if (url === '/api/results/delete') return {deleted: 2};
+    throw Error(`Unexpected request: ${url}`);
+  });
+  await h.controller.deleteRecords([...h.recordsState.selected]);
+  const calls = h.requests.slice(before);
+  assert.deepEqual(calls.map(call => call.url), ['/api/jobs/delete', '/api/results/delete']);
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(new Set(calls[0].options.json.ids), new Set(['failed-1', 'ready-1']));
+  assert.deepEqual(new Set(calls[1].options.json.ids), new Set([11, 12]));
+  assert.equal(calls[1].options.json.ids.length, 2);
+  assert(calls[1].options.json.ids.every(Number.isSafeInteger));
+  assert.equal(h.refreshed, 1);
+});
+
+test('deleting only unuploaded jobs never sends empty or job IDs to result deletion', async () => {
+  const h = harness();
+  h.respond(async () => page([processingRow('upload-1', 'awaiting_upload')]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  const before = h.requests.length;
+  h.respond(async url => {
+    assert.equal(url, '/api/jobs/delete');
+    return {deleted: ['upload-1'], result_ids: []};
+  });
+  await h.controller.deleteRecords([...h.recordsState.selected]);
+  const calls = h.requests.slice(before);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].options.json.ids, ['upload-1']);
+  assert.equal(h.refreshed, 1);
+});
+
+test('queue deletion failure preserves selection and never deletes the ordinary result first', async () => {
+  const h = harness();
+  h.respond(async () => page([row(11, true), processingRow('queued-1', 'queued')]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  const before = h.requests.length;
+  h.respond(async () => { throw Error('任务状态已更新'); });
+  await h.controller.deleteRecords([...h.recordsState.selected]);
+  assert.deepEqual(h.requests.slice(before).map(call => call.url), ['/api/jobs/delete']);
+  assert.deepEqual(new Set(h.recordsState.selected), new Set([11, 'job:queued-1']));
+  assert.equal(h.$('#bulk-delete').disabled, false);
+  assert.equal(h.refreshed, 0);
+});
+
+test('a queued job that starts running during deletion is kept without removing its previous result', async () => {
+  const h = harness();
+  h.respond(async () => page([processingRow('q', 'queued', 12)]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  const before = h.requests.length;
+  h.respond(async url => {
+    assert.equal(url, '/api/jobs/delete');
+    return {deleted: true, deleted_ids: [], kept_ids: ['q'], result_ids: []};
+  });
+  await h.controller.deleteRecords([...h.recordsState.selected]);
+  assert.deepEqual(h.requests.slice(before).map(call => call.url), ['/api/jobs/delete']);
+  assert.deepEqual(h.requests.at(-1).options.json.ids, ['q']);
+  assert(h.notices.some(message => /保留/.test(message)));
+  assert.equal(h.refreshed, 1);
+});
+
+test('successful queue deletion still refreshes rows if deleting its related result fails', async () => {
+  const h = harness();
+  h.respond(async () => page([row(11, true), processingRow('failed-1', 'failed', 12)]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  const before = h.requests.length;
+  h.respond(async url => {
+    if (url === '/api/jobs/delete') return {deleted: true, deleted_ids: ['failed-1'], kept_ids: [], result_ids: [12]};
+    assert.equal(url, '/api/results/delete');
+    throw Error('回单记录删除失败');
+  });
+  await h.controller.deleteRecords([...h.recordsState.selected]);
+  assert.deepEqual(h.requests.slice(before).map(call => call.url), ['/api/jobs/delete', '/api/results/delete']);
+  assert.equal(h.refreshed, 1);
+  assert(h.notices.some(message => /回单记录删除失败/.test(message)));
+  assert.equal(h.$('#selection-toolbar').attributes['aria-busy'], 'false');
+});
+
+test('background polling keeps selectable job keys and clears vanished or newly running selections', async () => {
+  const h = harness();
+  h.respond(async () => page([
+    row(1, true), processingRow('stays-ready', 'ready'), processingRow('starts-running', 'queued'),
+    processingRow('vanishes', 'awaiting_upload'),
+  ]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  h.respond(async () => page([row(1, true), processingRow('stays-ready', 'queued'), processingRow('starts-running', 'running')]));
+  await h.controller.loadRecords({background: true});
+  assert.deepEqual(new Set(h.recordsState.selected), new Set([1, 'job:stays-ready']));
+  assert.equal(h.$('#bulk-delete').disabled, false);
+  assert.equal(h.$('#select-all').checked, true);
+  assert.match(h.controller.recordRow(h.recordsState.records[1]), /\bchecked\b/);
+  h.respond(async () => page([row(1, true)]));
+  await h.controller.loadRecords({background: true});
+  assert.deepEqual([...h.recordsState.selected], [1]);
+  assert.equal(h.$('#bulk-pass').disabled, false);
+  assert.equal(h.$('#bulk-pending').disabled, false);
+  assert.equal(h.$('#bulk-retry').disabled, false);
+  assert.equal(h.$('#review-selected-records').disabled, false);
+});
+
+test('single processing row delete button uses queue deletion without selecting its checkbox', async () => {
+  const h = harness(), button = node();
+  button.dataset.deleteJob = 'upload-1';
+  button.closest = selector => selector === '[data-delete-job]' ? button : null;
+  button.parentNode = h.$('#records-body');
+  h.collections.set('[data-delete-job]', [button]);
+  h.respond(async () => page([processingRow('upload-1', 'awaiting_upload')]));
+  await h.controller.loadRecords();
+  const before = h.requests.length;
+  h.respond(async () => ({deleted: ['upload-1'], result_ids: []}));
+  await button.emit('click');
+  assert.deepEqual(h.requests.slice(before).map(call => call.url), ['/api/jobs/delete']);
+  assert.deepEqual(h.requests.at(-1).options.json.ids, ['upload-1']);
+  assert.equal(h.refreshed, 1);
+});
+
+test('ordinary result selection continues to support bulk review and result-only deletion', async () => {
+  const h = harness();
+  h.respond(async () => page([row(11, true)]));
+  await h.controller.loadRecords();
+  h.controller.selectCurrentPage(true);
+  assert.equal(h.$('#bulk-pass').disabled, false);
+  assert.equal(h.$('#bulk-pending').disabled, false);
+  assert.equal(h.$('#bulk-retry').disabled, false);
+  assert.equal(h.$('#review-selected-records').disabled, false);
+  const before = h.requests.length;
+  h.respond(async () => ({updated: 1}));
+  await h.controller.bulkReview('确认通过', '通过');
+  assert.equal(h.requests.at(-1).url, '/api/results/bulk-review');
+  assert.deepEqual(h.requests.at(-1).options.json.ids, [11]);
+  await h.controller.startRecordsReview('selected');
+  assert.deepEqual(h.reviewScopes[0][0].ids, [11]);
+  await h.controller.deleteRecords([11]);
+  assert.equal(h.requests.at(-1).url, '/api/results/delete');
+  assert.deepEqual(h.requests.at(-1).options.json.ids, [11]);
+  assert.equal(h.requests.length, before + 2);
+});
+
+for (const selected of [['job:q'], [11, 'job:q'], ['11']]) {
+  test(`bulk retry rejects non-result selection ${JSON.stringify(selected)} before remote confirmation`, async () => {
+    const h = bulkRetryHarness(selected);
+    await h.controller.bulkRetry();
+    assert.equal(h.confirmations, 0);
+    assert.equal(h.settingsFlushes, 0);
+    assert.deepEqual(h.requests, []);
+    assert.deepEqual(h.shownTasks, []);
+  });
+}
+
+test('bulk retry of ordinary numeric result IDs retains confirmation and retry behavior', async () => {
+  const h = bulkRetryHarness([11, 12]);
+  await h.controller.bulkRetry();
+  assert.equal(h.confirmations, 1);
+  assert.equal(h.settingsFlushes, 1);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].url, '/api/results/bulk-retry');
+  assert.equal(h.requests[0].options.method, 'POST');
+  assert.deepEqual(h.requests[0].options.json.ids, [11, 12]);
+  assert.deepEqual(h.shownTasks, [h.task]);
+  assert.equal(h.$('#bulk-retry').disabled, false);
 });

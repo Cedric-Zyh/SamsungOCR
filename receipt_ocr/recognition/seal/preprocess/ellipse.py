@@ -1,5 +1,7 @@
 """Stamp orientation: ellipse."""
 
+from receipt_ocr.runtime.image_processing import image_operation
+
 from pathlib import Path
 import re
 import tempfile
@@ -127,7 +129,8 @@ def prepare_ellipse_stamp(source, destination, *, model_variant="v6"):
             candidate_rows = {}
             for angle in (0, 90, 180, 270):
                 candidate_path = Path(tmp) / f"center-{angle}.png"
-                rotated = rgb.rotate(angle, expand=True, fillcolor="white")
+                with image_operation('rotation', '旋转校正'):
+                    rotated = rgb.rotate(angle, expand=True, fillcolor="white")
                 width, height = rotated.size
                 left, right = round(width * 0.04), round(width * 0.96)
                 # Crop after rotating the full stamp. Cropping before a

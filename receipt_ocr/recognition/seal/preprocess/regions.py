@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import image_operation
+
 import re
 from pathlib import Path
 
@@ -281,7 +283,8 @@ def _collect_primary_region_evidence(
         # text can enter this image.
         try:
             with Image.open(evidence.unwrapped) as image:
-                image.rotate(180, expand=False).save(evidence.unwrapped_rotated)
+                with image_operation('rotation', '旋转校正'):
+                    image.rotate(180, expand=False).save(evidence.unwrapped_rotated)
         except Exception:
             evidence.unwrapped_rotated = None
         # The legal company name normally follows the circular
@@ -297,10 +300,10 @@ def _collect_primary_region_evidence(
             rotation_source = evidence.ellipse_normalized or evidence.color_isolated
             with Image.open(rotation_source) as image:
                 base = image.convert("RGB")
-                rotations = [
-                    base.rotate(angle, expand=True, fillcolor="white")
-                    for angle in (90, 180, 270)
-                ]
+                rotations = []
+                for angle in (90, 180, 270):
+                    with image_operation('rotation', '旋转校正'):
+                        rotations.append(base.rotate(angle, expand=True, fillcolor="white"))
                 gap = 24
                 sheet_width = max(item.width for item in rotations)
                 sheet_height = sum(item.height for item in rotations) + gap * (
@@ -342,7 +345,8 @@ def _collect_primary_region_evidence(
             and index not in request.orientation_resolved_indices):
         try:
             with Image.open(evidence.isolated) as image:
-                image.rotate(180, expand=False).save(evidence.rotated)
+                with image_operation('rotation', '旋转校正'):
+                    image.rotate(180, expand=False).save(evidence.rotated)
             evidence.rotated_texts = []
         except Exception:
             evidence.rotated_texts = []

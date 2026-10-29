@@ -10,7 +10,7 @@ from pathlib import Path
 
 from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.providers import paddle_runtime
-from receipt_ocr.providers.text import current_text_recognizer
+from receipt_ocr.providers.text import CatalogTextRecognizer, current_text_recognizer
 from ..contracts import OcrRead
 
 
@@ -57,6 +57,15 @@ class OcrReader:
 
 
 _DEFAULT_READER = OcrReader()
+
+
+def write_temporary_input(path, image):
+    """Only the catalog adapter consumes scratch pixels directly from memory."""
+    from receipt_ocr.imaging.working_images import write_temporary, write_cv
+    if type(current_text_recognizer()) is CatalogTextRecognizer:
+        write_temporary(path, image)
+    elif not write_cv(path, image):
+        raise ValueError('临时识别图片保存失败')
 
 
 def detect_boxes(
@@ -126,4 +135,5 @@ def normalize_reads(
     ]
 
 
-__all__ = ["OcrRead", "OcrReader", "normalize_reads", "detect_boxes", "read_line", "read_text"]
+__all__ = ["OcrRead", "OcrReader", "normalize_reads", "detect_boxes", "read_line", "read_text",
+           "write_temporary_input"]

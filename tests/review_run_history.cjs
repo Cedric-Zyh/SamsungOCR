@@ -13,6 +13,11 @@ const response = (calls = [call(1),call(2),call(3,{seconds:3,status:'failed',err
   filename:'customer/receipt.jpg',available:true,status:'succeeded',
   summary:{total:3,succeeded:2,failed:1,cache_hits:4},calls,
   started_at:time(0),finished_at:time(5),processing_seconds:5,model_initialization_seconds:0,result_id:9,...extra});
+const imageProcessing = () => ({seconds:8,steps:[
+  {stage:'seal',operation:'rotation',label:'旋转校正',calls:20,seconds:3,failed:0},
+  {stage:'date',operation:'crop',label:'裁剪',calls:4,seconds:.5,failed:0},
+  {stage:'seal',operation:'unwrap',label:'文字展开',calls:2,seconds:4.5,failed:1},
+]});
 
 test('UTC start times display in the browser local timezone and invalid times stay unknown', () => {
   const moduleUrl = pathToFileURL(require.resolve('../static/modules/review/run_history_view.mjs')).href;
@@ -29,7 +34,7 @@ test('latest input calls stay distinct, including repeated inputs, and parallel 
   assert.match(html,/实际调用<\/span><strong>3<\/strong>/);
   assert.match(html,/复用已有识别结果 4 次，未计入实际调用/);
   assert.match(html,/处理用时 <strong>5 秒/);
-  assert.match(html,/title="调用耗时合计">7 秒/);
+  assert.match(html,/title="调用耗时合计"><small>识别累计<\/small> 7 秒/);
   assert.match(html,/并行识别时，各次耗时相加可能超过处理用时/);
   assert.doesNotMatch(html,/data-runs-result|data-runs-more|第 \d+ 次运行|历史测试/);
   assert.match(html,/data-call-explanation="count">/);
@@ -46,6 +51,39 @@ test('initialization is displayed separately and excluded from processing time w
   const unknown = renderRunHistory(response(undefined,{model_initialization_seconds:null}));
   assert.match(unknown,/处理用时 <strong>未记录/);
   assert.match(unknown,/此记录未单独采集/);
+});
+
+test('image operations display separately without adding their count or cumulative time to OCR totals', () => {
+  const html = renderRunHistory(response(undefined,{processing_seconds:7,model_initialization_seconds:2,
+    image_processing:imageProcessing()}));
+  assert.match(html,/data-image-processing="steps">/);
+  assert.doesNotMatch(html,/data-image-processing="steps" open/);
+  assert.match(html,/图像处理累计耗时"><small>累计<\/small> 8 秒/);
+  assert.match(html,/<td>旋转校正<\/td><td>客户印章<\/td><td>20<\/td><td>3 秒/);
+  assert.match(html,/<td>裁剪<\/td><td>签收日期<\/td><td>4<\/td><td>0.5 秒/);
+  assert.match(html,/文字展开<small class="review-image-processing-failed">失败 1 次/);
+  assert.match(html,/实际调用<\/span><strong>3<\/strong>/);
+  assert.match(html,/处理用时 <strong>5 秒/);
+  assert.match(html,/处理用时已包含图像处理/);
+  assert.doesNotMatch(html,/处理用时 <strong>13 秒/);
+});
+
+test('unmeasured image processing stays unknown while measured zero and escaped labels remain truthful', () => {
+  for (const image_processing of [undefined,null,{seconds:null,steps:[]},{seconds:2,steps:null}]) {
+    const html = renderRunHistory(response(undefined,{image_processing}));
+    assert.match(html,/图像处理耗时未单独采集，重新测试后可查看/);
+    assert.doesNotMatch(html,/data-image-processing=/);
+  }
+  const zero = renderRunHistory(response(undefined,{image_processing:{seconds:0,steps:[]}}));
+  assert.match(zero,/图像处理累计耗时"><small>累计<\/small> 0 秒/);
+  assert.doesNotMatch(zero,/图像处理耗时未单独采集/);
+  const html = renderRunHistory(response(undefined,{image_processing:{seconds:.5,steps:[
+    {stage:'custom',stage_label:'<script>x</script>',label:'<img src=x onerror=x>',calls:1,seconds:.5,failed:0},
+  ]}}),{processingOpen:true});
+  assert.match(html,/data-image-processing="steps" open/);
+  assert.match(html,/&lt;img src=x onerror=x&gt;/);
+  assert.match(html,/&lt;script&gt;x&lt;\/script&gt;/);
+  assert.doesNotMatch(html,/<script>|<img src=x/);
 });
 
 test('historic timing can use the matching open receipt but never a different run or failed retry', () => {
@@ -104,7 +142,7 @@ test('missing historical measurements show dashes, while explicitly recorded zer
   assert.equal(runDuration(''),'未记录'); assert.equal(runDuration(false),'未记录');
   assert.equal(runDuration(0),'0 秒'); assert.equal(runDuration(-1),'未记录');
   assert.equal(runDuration(.001),'< 0.01 秒');
-  assert.match(renderRunHistory(response([call(1,{seconds:null}),call(2)])),/title="调用耗时合计">未记录/);
+  assert.match(renderRunHistory(response([call(1,{seconds:null}),call(2)])),/title="调用耗时合计"><small>识别累计<\/small> 未记录/);
 });
 
 function harness() {
@@ -123,7 +161,7 @@ function harness() {
       get innerHTML() { return html; },
       set innerHTML(value) {
         html = value;
-        details = [...html.matchAll(/<details[^>]*(data-call-group|data-call-image|data-call-explanation)="([^"]*)"([^>]*)>/g)]
+        details = [...html.matchAll(/<details[^>]*(data-call-group|data-call-image|data-call-explanation|data-image-processing)="([^"]*)"([^>]*)>/g)]
           .map(match=>({open:match[3].includes(' open'),attr:match[1],key:match[2],getAttribute(){return this.key;}}));
       },
       querySelectorAll(selector) { return details.filter(node=>`[${node.attr}]` === selector); },
@@ -197,20 +235,22 @@ test('Escape and dialog cancellation consume only the side panel and preserve fo
 
 test('refresh replaces the latest calls while preserving expanded groups, image previews and scroll', async () => {
   const h = harness(), opening = h.history.open();
-  h.calls[0].resolve(response([call(1,{image_url:'/files/artifacts/x/seal.png'}),call(2,{stage:'date'})])); await opening;
+  h.calls[0].resolve(response([call(1,{image_url:'/files/artifacts/x/seal.png'}),call(2,{stage:'date'})],{image_processing:imageProcessing()})); await opening;
   const body = h.$('#review-runs-body');
   body.scrollTop = 410;
   body.querySelectorAll('[data-call-group]').find(row=>row.key==='date').open = true;
   body.querySelectorAll('[data-call-image]')[0].open = true;
   body.querySelectorAll('[data-call-explanation]')[0].open = true;
+  body.querySelectorAll('[data-image-processing]')[0].open = true;
   const refreshing = h.click('[data-runs-refresh]');
   assert.match(body.innerHTML,/data-runs-refresh disabled/);
   await h.click('[data-runs-refresh]'); assert.equal(h.calls.length,2);
-  h.calls[1].resolve(response([call(1,{input_name:'latest.png',image_url:'/files/artifacts/x/seal.png'}),call(2,{stage:'date'})])); await refreshing;
+  h.calls[1].resolve(response([call(1,{input_name:'latest.png',image_url:'/files/artifacts/x/seal.png'}),call(2,{stage:'date'})],{image_processing:imageProcessing()})); await refreshing;
   assert.match(body.innerHTML,/latest.png/); assert.doesNotMatch(body.innerHTML,/seal_1.png/);
   assert.match(body.innerHTML,/data-call-group="date" open/);
   assert.match(body.innerHTML,/data-call-image="1" open/);
   assert.match(body.innerHTML,/data-call-explanation="count" open/);
+  assert.match(body.innerHTML,/data-image-processing="steps" open/);
   assert.equal(body.scrollTop,410);
 });
 

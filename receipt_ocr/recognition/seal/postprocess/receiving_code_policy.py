@@ -7,6 +7,7 @@ from .receiving_identity import (
     choose_receiving_identity, decide_receiving_identity, normalize_receiving_text,
     observation_confidence, verified_grid_alternatives,
 )
+from .receiving_purpose import resolved_purpose_covers
 
 
 def _correct_observation(value, requirement, adjustments, source):
@@ -77,7 +78,7 @@ def _identity_observations(rows, purpose):
     for row in rows:
         if row['row_index'] <= purpose:
             yield row
-            yield from row.get('variants') or []
+            yield from (dict(value, row_index=row['row_index']) for value in row.get('variants') or [])
 
 
 def resolve_receiving_code(requirement, primary, rows, detections, grid, *,
@@ -118,13 +119,14 @@ def resolve_receiving_code(requirement, primary, rows, detections, grid, *,
     # The normal selector deliberately prioritizes an already usable primary.
     # This late fallback is stricter: it must not hide a separate remaining
     # name, numeric, stamp-number, or fragment conflict while resolving O/0.
-    observations = list(_identity_observations(adjusted_rows, revised_primary.get('purpose_row_index')))
+    observations = [(value, revised_primary) for value in
+                    _identity_observations(adjusted_rows, revised_primary.get('purpose_row_index'))]
     indexes = {row['row_index'] for row in revised_primary.get('identity_rows') or []}
-    observations.extend(box for box in adjusted_boxes if box.get('row_index') in indexes)
+    observations.extend((box, revised_primary) for box in adjusted_boxes if box.get('row_index') in indexes)
     for direction in adjusted_grid['directions']:
-        observations.extend(_identity_observations(direction['rows'],
-                            direction['decision'].get('purpose_row_index')))
-    observations.extend(adjusted_old)
+        observations.extend((value, direction['decision']) for value in _identity_observations(
+            direction['rows'], direction['decision'].get('purpose_row_index')))
+    observations.extend((value, revised_primary) for value in adjusted_old)
     accepted = revised.get('can_compare') is True
     decisions = [('primary', revised_primary), *[
         (f'grid[{index}]', direction['decision'])
@@ -145,10 +147,11 @@ def resolve_receiving_code(requirement, primary, rows, detections, grid, *,
         revised = dict(revised, can_compare=False, reason='complete_identity_not_requirement_compatible')
     if accepted:
         text = normalize_receiving_text(revised['text'])
-        conflicts = [value for value in observations
+        conflicts = [value for value, decision in observations
                      if observation_confidence(value.get('confidence')) >= .75
                      and normalize_receiving_text(value.get('text'))
-                     and normalize_receiving_text(value.get('text')) not in text]
+                     and normalize_receiving_text(value.get('text')) not in text
+                     and not resolved_purpose_covers(value, decision, revised['text'])]
         if conflicts:
             accepted = False
             revised = dict(revised, can_compare=False, reason='remaining_reliable_identity_conflict',

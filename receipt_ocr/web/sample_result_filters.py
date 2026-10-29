@@ -233,22 +233,61 @@ def sample_result_filters(job, truth, *, result=None):
         check = check.get('local_channel') if _present(check.get('local_channel') or {}) else check
         key = method if method == 'danzhengtong' else 'local:' + method
         seals[key] = cell(check, text(check), enabled=enabled(method), error=variant.get('error') or '')
-    # Successful evidence from any enabled channel outranks a review-workflow
-    # fallback. Keep provider verdicts independent and retain explicit human or
-    # measured shape rejections; neither is an unresolved review status.
+    # An unresolved standard check must not freeze the displayed OCR source.
+    # Keep explicit human/shape rejections, and cap unresolved shape evidence
+    # at partial even when another channel supplies fully matching text.
     human = primary.get('human_confirmed_match')
+    standard_pending = (primary.get('comparison_policy') == 'manual_standard_text_and_shape'
+                        and primary.get('status') != '匹配')
     fixed = ((isinstance(human, (bool, int)) and human in (0, 1))
-             or (primary.get('comparison_policy') == 'manual_standard_text_and_shape'
-                 and primary.get('status') != '匹配'))
+             or (standard_pending and primary.get('status') == '不匹配'))
+    selected_source = 'combined'
     if not fixed:
         remote_summary = cell(remote, text(remote), enabled=enabled('qingtong'), error=remote_error)
-        candidates = [current for current in [*seals.values(), remote_summary]
+        candidates = [(key, current) for key, current in [*seals.items(), ('qingtong', remote_summary)]
                       if current['state'] in SAMPLE_SEAL_DECISIONS]
         if candidates:
             rank = {'匹配': 3, '部分匹配': 2, '不匹配': 1}
-            seals['combined'] = dict(max(candidates, key=lambda current: rank[current['state']]))
+            requirement = ((result.get('fields') or {}).get('签章要求')
+                           or (truth.get('fields') or {}).get('签章要求') or primary.get('requirement') or '')
+            def display_rank(item):
+                current = item[1]
+                # Two partial readings may differ only because a later OCR
+                # omitted an already observed number. Keep the fuller display
+                # without promoting a withheld identity to a verified match.
+                comparison = (compare_seal_text_strict(requirement, [current['value']])
+                              if requirement and current['state'] == '部分匹配' else {})
+                return (rank[current['state']], comparison.get('requirement_coverage', 0),
+                        comparison.get('score', 0))
+            selected_source, selected = max(candidates, key=display_rank)
+            seals['combined'] = dict(selected)
+            if standard_pending and selected['state'] == '匹配':
+                seals['combined'].update(state='部分匹配',
+                    accuracy=_accuracy(truth, 'seal', '部分匹配', selected['value']))
+    seals['combined']['source_key'] = selected_source
     return {'date': cell(date_check, date_check.get('actual'), kind='date',
                          enabled=bool(config.get('date')) if config is not None else None), 'seals': seals}
+
+
+def _seal_display_source(result, source_key):
+    """Resolve display metadata without adopting withheld stamp identities."""
+    primary = result.get('seal_check') or {}
+    variants = {v.get('method'): v for v in (result.get('recognition_variants') or {}).get('seal') or []}
+    if source_key.startswith('qingtong'):
+        remote = ((variants.get('qingtong') or {}).get('details') or {}).get('seal_check') or primary
+        if source_key == 'qingtong':
+            return remote
+        name = source_key.removeprefix('qingtong_')
+        reading = ((remote.get('dual_check') or {}).get('selected') or {}).get(name) or {}
+        comparison = reading.get('requirement_match' if name == 'template' else 'comparison') or {}
+        return {**reading, **comparison,
+                'source': '清瞳 · 印章模板识别' if name == 'template' else '清瞳 · 印章文字 OCR',
+                'backend': remote.get('backend') or '清瞳印章 API'}
+    method = source_key.removeprefix('local:')
+    check = ((variants.get(method) or {}).get('details') or {}).get('seal_check') or {}
+    if not variants:
+        check = primary.get('local_channel') or primary
+    return check.get('local_channel') if _present(check.get('local_channel') or {}) else check
 
 
 def project_sample_seal_result(result):
@@ -300,8 +339,25 @@ def project_sample_seal_result(result):
     remote_notes(primary)
     combined = filters['seals']['combined']
     if combined['state'] in SAMPLE_SEAL_DECISIONS:
+        message = messages[combined['state']]
+        if (combined['source_key'] == 'combined' and combined['state'] == '不匹配'
+                and primary.get('status') == '不匹配'
+                and primary.get('comparison_policy') == 'manual_standard_text_and_shape'):
+            message = primary.get('message') or message
+        if combined['source_key'] != 'combined':
+            selected = _seal_display_source(result, combined['source_key'])
+            for key in ('score', 'confidence', 'requirement_coverage', 'company_score',
+                        'company_conflict', 'field_comparison', 'receiving_review'):
+                if key in selected:
+                    primary[key] = deepcopy(selected[key])
+                else:
+                    primary.pop(key, None)
+            primary['source'] = selected.get('source') or selected.get('backend') or ''
+            primary['backend'] = selected.get('backend') or primary['source']
+            if isinstance(primary.get('provider_comparison'), dict):
+                primary['provider_comparison']['selected_source'] = primary['source']
         primary.update(status=combined['state'], recognized=combined['value'],
-                       display_text=combined['value'], message=messages[combined['state']],
+                       display_text=combined['value'], message=message,
                        reliable=combined['state'] == '匹配', sample_decision_policy='any_matching_channel')
         result['seal_check'] = primary
         code_note(primary, combined['value'])

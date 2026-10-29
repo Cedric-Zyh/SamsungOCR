@@ -1,4 +1,6 @@
 """Conservative round-ring calibration; analysis thresholds never alter OCR ink."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 import cv2
 import numpy as np
 
@@ -184,6 +186,7 @@ def _letter_edge_maps(gray, geometry):
                   "safety_margin_px": margin*radius, "sampling_height": out_height}
 
 
+@timed_image('normalize', '形状校正')
 def calibrate_round_ring(intact, masked, *, color="red"):
     """Return a shared guide only for a poor fit with independently better support.
 

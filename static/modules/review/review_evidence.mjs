@@ -6,8 +6,10 @@ import {problemHistoryChanges} from './problem_annotations.mjs';
 import {simplifySealText} from '../core/seal_script.mjs';
 import {renderReceivingEvidence} from './receiving_evidence.mjs';
 import {renderReceivingNumberEvidence} from './receiving_number_evidence.mjs';
+import {renderSealWorkspace, bindSealWorkspaces} from './seal_workspace.mjs';
+import {dateWorkspaceModel, requirementWorkspaceModel, renderRegionWorkspace, bindRegionWorkspace} from './region_workspace.mjs';
 
-export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema}) {
+export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema, previewSeal, previewRegion}) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {history} = environment;
   const {$} = ui;
@@ -226,125 +228,29 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function renderArtifacts() {
     renderArtifactMarkup();
-    artifactImages.attach($('[data-artifacts]', $('#review-content')));
+    const root = $('[data-artifacts]', $('#review-content'));
+    artifactImages.attach(root);
+    if (reviewState.artifactTab === 'seals') {
+      const show = bindSealWorkspaces(root, mergeSealArtifacts(reviewState.current?.processing_artifacts?.seals || []), previewSeal);
+      if (root.closest?.('details')?.open) show?.();
+    } else if (['date', 'signature_requirement'].includes(reviewState.artifactTab)) {
+      const model = reviewState.artifactTab === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
+      const show = bindRegionWorkspace(root, model, previewRegion);
+      if (root.closest?.('details')?.open) show?.();
+    }
   }
 
   function renderArtifactMarkup() {
     const target = $('[data-artifacts]', $('#review-content'));
     let artifacts = reviewState.current?.processing_artifacts?.[reviewState.artifactTab] || [];
-    // There is one date location now. Prefer the current date-region artifact;
-    // retain the old compact label only as a fallback for historical records.
-    if (reviewState.artifactTab === 'date') {
-      const current = artifacts.find(item => item.variant === '日期区域');
-      const legacy = artifacts.find(item => item.variant === '紧凑区域');
-      const single = current || legacy;
-      artifacts = single ? [single] : [];
-    }
-    if (reviewState.artifactTab === 'signature_requirement') {
-      target.innerHTML = artifacts.length
-        ? artifacts.map(item => {
-          const pageRead = item.ocr_scope === 'clean_page';
-          const source = pageRead ? '整页识别结果' : '二次识别 OCR';
-          const caption = pageRead ? '去印章色整页识别输入（局部）' : '签章要求行去印章色图（识别输入）';
-          return `<article class="artifact-group"><h4>签章要求行 <small>${escapeHtml(item.backend || '')} · ${source}：${escapeHtml(item.error ? `识别失败：${item.error}` : item.ocr_text || '未识别')}</small></h4><div class="artifact-grid">${artifactCard('签章要求行原图', item.original_url)}${artifactCard(caption, item.color_clean_url)}</div></article>`;
-        }).join('')
-        : '<div class="empty-state">没有保存的签章要求区域（旧记录可重新识别生成）</div>';
+    if (['date', 'signature_requirement'].includes(reviewState.artifactTab)) {
+      const model = reviewState.artifactTab === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
+      target.innerHTML = renderRegionWorkspace(model);
       return;
     }
     if (!artifacts.length) { target.innerHTML = '<div class="empty-state">没有保存的中间处理图（旧记录可重新识别生成）</div>'; return; }
-    if (reviewState.artifactTab === 'seals') artifacts = mergeSealArtifacts(artifacts);
-    if (reviewState.artifactTab === 'date') {
-      target.innerHTML = artifacts.map(item => {
-        activeArtifactItem = item;
-        const textsFor = (variants, labels) => (variants || [])
-          .filter(row => !labels || labels.includes(row.preprocessing))
-          .flatMap(row => row.ocr_texts || [])
-          .filter(Boolean)
-          .join(' | ');
-        const cropText = labels => textsFor(item.ocr_variants, labels);
-        const lineText = labels => textsFor(item.date_line_ocr_variants, labels);
-        const lineWhiteInfo = item.date_line_white_candidate
-          ? `<small>原色白底候选（历史证据）：${escapeHtml(item.date_line_white_candidate)}</small><small class="low-note">${escapeHtml(item.date_line_white_acceptance_note || '')}</small>`
-          : '';
-        const farLowerInfo = item.far_lower_server_backend
-          ? `<small>远下方跨几何复核：Mobile 完整区域 + ${escapeHtml(item.far_lower_server_backend)} 窄日期行${item.far_lower_cross_model_mode === 'right_padding_complementary' ? ' + 右侧补白互补证据' : ''}${item.far_lower_cross_model_candidate ? ` · 可靠候选 ${escapeHtml(item.far_lower_cross_model_candidate)}` : ' · 未形成一致日期'}</small>`
-          : '';
-        const maxChannelMismatchInfo = item.date_max_channel_mismatch_candidate
-          ? `<small>最大通道跨模型不匹配日期：${escapeHtml(item.date_max_channel_mismatch_candidate)} · ${escapeHtml(item.date_max_channel_mismatch_note || '')}</small>`
-          : '';
-        const maxChannelConsensusInfo = item.date_max_channel_consensus_candidate
-          ? `<small>最大通道 3 单元格日期共识：${escapeHtml(item.date_max_channel_consensus_candidate)} · ${escapeHtml(item.date_max_channel_consensus_note || '')}</small>`
-          : '';
-        const partialYearDayBeforeInfo = item.date_partial_year_day_before_candidate
-          ? `<small class="low-note">残缺年份四单元人工建议：${escapeHtml(item.date_partial_year_day_before_candidate)} · ${escapeHtml(item.date_partial_year_day_before_note || '')}</small>`
-          : '';
-        const dominantDateInfo = item.date_server_mobile_dominance_candidate
-          ? `<small>Server/Mobile 跨区域主证据：${escapeHtml(item.date_server_mobile_dominance_candidate)} · ${escapeHtml(item.date_server_mobile_dominance_note || '')}</small>`
-          : '';
-        const repeatedServerDateInfo = item.date_repeated_server_candidate
-          ? `<small>Server 三预处理完整日期：${escapeHtml(item.date_repeated_server_candidate)} · ${escapeHtml(item.date_repeated_server_note || '')}</small>`
-          : '';
-        const serverMobileComponentInfo = item.date_server_mobile_component_candidate
-          ? `<small>Server 双几何 + Mobile 残缺组件共识：${escapeHtml(item.date_server_mobile_component_candidate)} · ${escapeHtml(item.date_server_mobile_component_note || '')}</small>`
-          : '';
-        const crossYearConsensusInfo = item.date_cross_year_consensus_candidate
-          ? `<small>跨年完整日期双模型/双几何共识：${escapeHtml(item.date_cross_year_consensus_candidate)} · ${escapeHtml(item.date_cross_year_consensus_note || '')}</small>`
-          : '';
-        const componentConsensusInfo = item.date_component_consensus_candidate
-          ? `<small>年月日分槽双模型共识：${escapeHtml(item.date_component_consensus_candidate)} · ${escapeHtml(item.date_component_consensus_note || '')}</small>`
-          : '';
-        const serverComponentConsensusInfo = item.date_server_component_candidate
-          ? `<small>Server 双几何完整日期 + 固定槽位共识：${escapeHtml(item.date_server_component_candidate)} · ${escapeHtml(item.date_server_component_note || '')}</small>`
-          : '';
-        const daySlotConsensusInfo = item.date_day_slot_consensus_candidate
-          ? `<small>两位日窄槽共识：${escapeHtml(item.date_day_slot_consensus_candidate)} · ${escapeHtml(item.date_day_slot_consensus_note || '')}</small>`
-          : '';
-        const missingYearSeparatorInfo = item.date_missing_year_separator_candidate
-          ? `<small>漏“年”完整日期 + 去单位日槽共识：${escapeHtml(item.date_missing_year_separator_candidate)} · ${escapeHtml(item.date_missing_year_separator_note || '')}</small>`
-          : '';
-        const nondestructiveCrossYearInfo = item.date_cross_year_nondestructive_candidate
-          ? `<small>跨年非破坏性原图共识：${escapeHtml(item.date_cross_year_nondestructive_candidate)} · ${escapeHtml(item.date_cross_year_nondestructive_note || '')}</small>`
-          : '';
-        const monthSlotConflictInfo = item.date_month_slot_conflict_candidate
-          ? `<small>月份窄槽冲突解析：${escapeHtml(item.date_month_slot_conflict_candidate)} · 排除 ${escapeHtml(item.date_month_slot_discarded_conflict || '')} · ${escapeHtml(item.date_month_slot_conflict_note || '')}</small>`
-          : '';
-        const businessYearMonthDayInfo = item.date_unanimous_month_day_business_year_candidate
-          ? `<small>跨模型月日一致 + 三业务日期年份共识：${escapeHtml(item.date_unanimous_month_day_business_year_candidate)} · 排除旧年份候选 ${escapeHtml(item.date_unanimous_month_day_business_year_discarded || '')} · ${escapeHtml(item.date_unanimous_month_day_business_year_note || '')}</small>`
-          : '';
-        const missingMonthBusinessInfo = item.date_partial_year_missing_month_candidate
-          ? `<small>残缺年份 + 缺月份跨槽位共识：${escapeHtml(item.date_partial_year_missing_month_candidate)} · ${escapeHtml(item.date_partial_year_missing_month_note || '')}</small>`
-          : '';
-        const upperDateCards = item.upper_date_line_original_url
-          ? `${artifactCard('盖章行手写日期', item.upper_date_line_original_url)}${artifactCard('盖章行日期去印章色后', item.upper_date_line_color_clean_url)}`
-          : '';
-        const farLowerPaddedCard = item.far_lower_padded_line_url
-          ? artifactCard('远下方日期行右侧补白图（Mobile/Server）', item.far_lower_padded_line_url)
-          : '';
-        const slotCards = item.date_slot_year_original_url
-          ? `${artifactCard('年份槽位原图', item.date_slot_year_original_url)}${artifactCard('年份槽位最大通道增强', item.date_slot_year_processed_url)}${item.date_slot_year_line_clean_url ? artifactCard('年份槽位去横线增强', item.date_slot_year_line_clean_url) : ''}${item.date_slot_year_white_url ? artifactCard('年份槽位白底标准化（Paddle 双模型）', item.date_slot_year_white_url) : ''}${item.date_slot_month_context_original_url ? artifactCard('月份上下文槽位原图', item.date_slot_month_context_original_url) : ''}${item.date_slot_month_context_processed_url ? artifactCard('月份上下文槽位最大通道增强', item.date_slot_month_context_processed_url) : ''}${item.date_slot_day_context_original_url ? artifactCard('日期上下文槽位原图', item.date_slot_day_context_original_url) : ''}${item.date_slot_day_context_processed_url ? artifactCard('日期上下文槽位最大通道增强', item.date_slot_day_context_processed_url) : ''}${item.date_slot_adaptive_day_original_url ? artifactCard('左移两位日自适应原图', item.date_slot_adaptive_day_original_url) : ''}${item.date_slot_adaptive_day_processed_url ? artifactCard('左移两位日去印章色后', item.date_slot_adaptive_day_processed_url) : ''}${item.date_slot_day_context_white_url ? artifactCard('日期上下文白边标准化（冲突复核）', item.date_slot_day_context_white_url) : ''}${item.date_slot_month_digit_original_url ? artifactCard('月份数字窄槽原图', item.date_slot_month_digit_original_url) : ''}${item.date_slot_month_digit_processed_url ? artifactCard('月份数字窄槽最大通道增强', item.date_slot_month_digit_processed_url) : ''}${item.date_slot_month_digit_line_clean_url ? artifactCard('月份数字窄槽去横线增强', item.date_slot_month_digit_line_clean_url) : ''}${artifactCard('月日联合槽位原图', item.date_slot_month_day_original_url)}${artifactCard('月日联合槽位最大通道增强', item.date_slot_month_day_processed_url)}${item.date_slot_month_day_line_clean_url ? artifactCard('月日槽位去横线增强', item.date_slot_month_day_line_clean_url) : ''}${item.date_slot_month_day_vision_url ? artifactCard('月日槽位裁后去章色白底', item.date_slot_month_day_vision_url) : ''}`
-          : '';
-        const daySlotCards = item.date_slot_day_digit_original_url
-          ? `${artifactCard('日数字窄槽原图', item.date_slot_day_digit_original_url)}${artifactCard('日数字窄槽最大通道增强', item.date_slot_day_digit_processed_url)}${item.date_slot_day_digit_line_clean_url ? artifactCard('日数字窄槽去横线增强', item.date_slot_day_digit_line_clean_url) : ''}`
-          : '';
-        const innerDaySlotCards = item.date_slot_day_inner_original_url
-          ? `${artifactCard('去单位日数字窄槽原图', item.date_slot_day_inner_original_url)}${artifactCard('去单位日数字窄槽最大通道增强', item.date_slot_day_inner_processed_url)}${item.date_slot_day_inner_line_clean_url ? artifactCard('去单位日数字窄槽去横线增强', item.date_slot_day_inner_line_clean_url) : ''}`
-          : '';
-        const slotTexts = (item.date_slot_ocr_variants || []).map(row => `${row.method}：${(row.ocr_texts || []).join(' | ') || '未识别'}`).join('；');
-        const slotInfo = item.date_slot_year_original_url
-          ? `<small>槽位 OCR：${escapeHtml(slotTexts)}${item.date_slot_candidate ? ` · ${item.date_slot_reliable ? '可靠候选' : '候选'} ${escapeHtml(item.date_slot_candidate)}` : ''}${item.date_slot_candidate_source ? ` · ${escapeHtml(item.date_slot_candidate_source)}` : ''}</small><small class="${item.date_slot_reliable ? '' : 'low-note'}">${escapeHtml(item.date_slot_acceptance_note || '')}</small>`
-          : '';
-        const daySlotTexts = (item.date_slot_day_ocr_variants || []).map(row => `${row.method}：${(row.ocr_texts || []).join(' | ') || '未识别'}`).join('；');
-        const daySlotInfo = item.date_slot_day_digit_original_url
-          ? `<small>日数字窄槽 OCR：${escapeHtml(daySlotTexts)}${item.date_slot_day_candidate ? ` · ${item.date_slot_day_reliable ? '可靠候选' : '候选'} ${escapeHtml(item.date_slot_day_candidate)}` : ''}</small><small class="${item.date_slot_day_reliable ? '' : 'low-note'}">${escapeHtml(item.date_slot_day_acceptance_note || '')}</small>`
-          : '';
-        const innerDaySlotTexts = (item.date_slot_day_inner_ocr_variants || []).map(row => `${row.method}：${(row.ocr_texts || []).join(' | ') || '未识别'}`).join('；');
-        const innerDaySlotInfo = item.date_slot_day_inner_original_url
-          ? `<small>去单位日数字窄槽 OCR：${escapeHtml(innerDaySlotTexts)}${item.date_slot_day_inner_candidate ? ` · ${item.date_slot_day_inner_reliable ? '可靠候选' : '候选'} ${escapeHtml(item.date_slot_day_inner_candidate)}` : ''}</small><small class="${item.date_slot_day_inner_reliable ? '' : 'low-note'}">${escapeHtml(item.date_slot_day_inner_acceptance_note || '')}</small>`
-          : '';
-        const originalUrl = item.date_line_original_url || item.original_url;
-        return `<article class="artifact-group"><h4>${escapeHtml(item.variant)}</h4><div class="artifact-grid">${artifactCard('仅手写日期行原图', originalUrl, lineText(['日期行原图']))}${artifactCard('日期行去红章', item.date_line_color_clean_url, lineText(['日期行去印章色']))}${item.date_line_positioned_frame_clean_url ? artifactCard('日期行去外框', item.date_line_positioned_frame_clean_url, lineText(['日期行去外框'])) : ''}</div></article>`;
-      }).join('');
-    } else {
+    if (reviewState.artifactTab === 'seals') {
+      artifacts = mergeSealArtifacts(artifacts);
       target.innerHTML = artifacts.map(item => {
         activeArtifactItem = item;
         const reference = item.visual_reference_match;
@@ -420,8 +326,10 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
           + (modernRound ? modernSealInputChain(item, typeBandLabel, unwrapLabel) : '');
         const debugCards = `${artifactCard('颜色分离高对比图', item.isolated_url)}${item.color_isolated_url ? artifactCard('保留章色白底图', item.color_isolated_url) : ''}${rectangularRowCards}${reference?.candidate_chromatic_crop_url ? artifactCard('章色稳健裁剪图（SIFT）', reference.candidate_chromatic_crop_url) : ''}${reference?.candidate_trimmed_chromatic_crop_url ? artifactCard('去稀疏噪点章色裁剪图（SIFT）', reference.candidate_trimmed_chromatic_crop_url) : ''}${(item.unwrapped_band_urls || []).map((url, index) => artifactCard(`${ellipse ? '椭圆' : '圆章'}展开独立分带 ${index + 1}`, url)).join('')}${item.robust_unwrapped_url ? artifactCard(`稳健边界${ellipse ? '椭圆' : '圆章'}展开图`, item.robust_unwrapped_url) : ''}${(item.robust_unwrapped_band_urls || []).map((url, index) => artifactCard(`稳健${ellipse ? '椭圆' : '圆心'}独立分带 ${index + 1}`, url)).join('')}${item.unwrapped_rotated_url ? artifactCard(unwrap180Label, item.unwrapped_rotated_url) : ''}${item.color_isolated_rotations_url ? artifactCard('保留章色旋转对照图', item.color_isolated_rotations_url) : ''}${item.rotated_url ? artifactCard('矩形印章 180° 旋转图', item.rotated_url) : ''}${referenceCard}`;
         const modernReads = modernRound ? modernSealReads(item) : '';
-        return `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>${modernRound ? '新版输入契约' : `增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}`}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>${ellipse ? '椭圆' : '圆章'}跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${typeBandLabel}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_line_text || item.robust_reader_text ? `<small>稳健圆心分带 OCR：${escapeHtml(item.robust_line_text || '未识别')}</small><small>稳健圆心补充识别：${escapeHtml(item.robust_reader_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.secondary_read_text ? `<small>补充识别：${escapeHtml(item.secondary_read_text)}</small>` : ''}${item.secondary_read_rejection_reason ? `<small class="low-note">${escapeHtml(item.secondary_read_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${primaryCards}</div>${modernChain}${modernReads || sealSourceResults(item)}${!modernRound && debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;
-      }).join('');
+        const audit = `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>${modernRound ? '新版输入契约' : `增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}`}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>${ellipse ? '椭圆' : '圆章'}跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${typeBandLabel}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_line_text || item.robust_reader_text ? `<small>稳健圆心分带 OCR：${escapeHtml(item.robust_line_text || '未识别')}</small><small>稳健圆心补充识别：${escapeHtml(item.robust_reader_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.secondary_read_text ? `<small>补充识别：${escapeHtml(item.secondary_read_text)}</small>` : ''}${item.secondary_read_rejection_reason ? `<small class="low-note">${escapeHtml(item.secondary_read_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${primaryCards}</div>${modernChain}${modernReads || sealSourceResults(item)}${!modernRound && debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;
+        return renderSealWorkspace(item, {audit});
+      }).map((markup, index) => `<div data-seal-workspace-panel="${index}"${index ? ' hidden' : ''}>${markup}</div>`).join('');
+      if (artifacts.length > 1) target.innerHTML = `<nav class="seal-workspace-nav" aria-label="选择印章">${artifacts.map((item, index) => `<button type="button" class="mini-button" data-seal-workspace-select="${index}" aria-pressed="${index === 0}">印章 ${index + 1}${item.shape ? ` · ${escapeHtml(item.shape)}` : ''}</button>`).join('')}</nav>` + target.innerHTML;
     }
   }
 

@@ -1,4 +1,6 @@
 """Conservative multi-row ellipse layout; geometry never uses expected text."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 
 import cv2
@@ -8,6 +10,7 @@ from receipt_ocr.imaging.ring_border import trace_ellipse_border
 from .company_border import company_border_points
 
 
+@timed_image('detection', '图形定位')
 def _inner_rows(image, rho, axes):
     a, b = axes
     ink = ((255 - image[:, :, 1].astype(float)) > 35) & (rho < .95)
@@ -138,6 +141,7 @@ def _company_arc_parts(group, rho, cx, cy):
     return (kept, seam) if seam is not None else (group, None)
 
 
+@timed_image('unwrap', '环形文字展开')
 def _arc_maps(masked, rho, guide, *, allow_empty_lower=False, allow_sparse_lower=False,
               allow_continuous_name=False):
     (cx, cy), (a, b), _ = guide.annulus[0][2]

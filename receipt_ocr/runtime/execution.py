@@ -26,11 +26,14 @@ class Execution:
     timing_lock: Lock = field(default_factory=Lock)
 
     def snapshot(self):
+        from ..imaging.working_images import current_workspace
+        workspace = current_workspace()
         return {
             'steps': {name: {'calls': value['calls'], 'seconds': round(value['seconds'], 4)}
                       for name, value in self.steps.items()},
             'page_ocr_cache_hits': self.cache_hits,
             'text_box_ocr_cache_hits': self.text_box_cache_hits,
+            **({'image_processing_cache': workspace.snapshot()} if workspace is not None else {}),
         }
 
 
@@ -77,8 +80,10 @@ def recognition_run(function):
         execution = Execution()
         token = _current.set(execution)
         try:
-            result = function(*args, **kwargs)
-            result['processing_timings'] = execution.snapshot()
+            from ..imaging.working_images import image_workspace_scope
+            with image_workspace_scope():
+                result = function(*args, **kwargs)
+                result['processing_timings'] = execution.snapshot()
             return result
         finally:
             _current.reset(token)
@@ -117,18 +122,31 @@ def record_page_reuse():
 
 
 def reuse_text_boxes(source, model_signature, recognize):
-    """Reuse identical encoded inputs within this run, after provider checks.
+    """Reuse identical model inputs within this run, after provider checks.
 
     Paths alone are unsafe: temporary paths can be rewritten, while identical
     direction-search images can have different paths. The model signature
-    includes every inference option; different encodings remain separate even
-    when they might decode to the same pixels. ``recognize`` returns the boxes
-    and a cacheability flag, preserving providers' existing failure behavior.
+    includes every inference option. Known pixels use their immutable content
+    key; other files use encoded content. ``recognize`` returns the boxes and
+    a cacheability flag, preserving providers' existing failure behavior.
     Only stable file versions and successful calls can populate the cache.
     """
     execution = _current.get()
     if execution is None:
         return recognize()
+    from ..imaging.working_images import buffered_key
+    pixels = buffered_key(source)
+    if pixels is not None:
+        key = (model_signature, ('bgr_pixels', pixels))
+        if key in execution.text_boxes and buffered_key(source) == pixels:
+            with execution.timing_lock:
+                execution.text_box_cache_hits += 1
+            record_recognition_cache_hit()
+            return deepcopy(execution.text_boxes[key]), True
+        result, cacheable = recognize()
+        if cacheable and buffered_key(source) == pixels:
+            execution.text_boxes[key] = deepcopy(result)
+        return result, cacheable
     path = Path(source)
     try:
         version = _file_version(path)

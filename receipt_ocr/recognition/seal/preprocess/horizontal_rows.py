@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from receipt_ocr.imaging.working_images import open_rgb
 
 from .orientation_angles import _stamp_type_marker_strength
 from .orientation_geometry import _rotation_geometry, _transform_points, rotate_stamp_image
@@ -55,7 +55,7 @@ def grouped_type_candidate(source, boxes, scratch, band_dir, coarse, *, model_va
     """A group must read coherently before AND after its small correction."""
     from ..ocr.interface import detect_boxes
 
-    with Image.open(source) as image:
+    with open_rgb(source) as image:
         width, height = image.size
     candidates = []
     for index, (group, angle) in enumerate(itertools.islice(split_type_rows(boxes), 6)):

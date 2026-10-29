@@ -3,6 +3,8 @@ from copy import deepcopy
 from ..domain.stages import STAGES, STAGE_LABELS as LABELS
 from ..domain.issues import issue
 from ..domain.fields.schema import PRINTED_FIELDS
+from ..domain.handwriting_selection import select_handwriting
+from ..domain.printed_field_selection import select_printed_fields
 from ..providers.catalog import backend_label
 from ..runtime.safety import _ocr_model_config
 from ..imaging.contracts import SealRegion
@@ -52,6 +54,26 @@ def select_variants(stage, successful, acceptance):
     if stage == 'seal' and provider_seal is not None:
         decision_variants = successful
     primary = decision_variants[0]["result"]
+    if stage == "fields":
+        selection = select_printed_fields(successful)
+        primary = deepcopy(primary)
+        primary.setdefault("fields", {}).update(selection["fields"])
+        for key, selected_key in (("field_metadata", "metadata"), ("field_fallbacks", "field_fallbacks")):
+            primary[key] = {name: value for name, value in (primary.get(key) or {}).items()
+                            if name not in PRINTED_FIELDS}
+            primary[key].update(selection[selected_key])
+        primary["printed_field_selection"] = {
+            "fields": selection["selections"], "conflicts": selection["conflicts"],
+        }
+    if stage == "handwriting":
+        selection = select_handwriting(successful)
+        selected = next((v for v in successful if v["method"] == selection["selected_method"]), None)
+        primary = deepcopy(selected["result"] if selected else primary)
+        primary["handwriting_fields"] = selection["fields"]
+        primary["handwriting_metadata"] = selection["metadata"]
+        primary["handwriting_selection"] = {
+            key: selection[key] for key in ("selected_method", "conflict", "reason")
+        }
     return provider_seal, decision_variants, primary
 
 
@@ -88,9 +110,10 @@ def apply_match_mode(output, stage, variants, successful, provider_seal, accepta
 def merge_primary(output, stage, primary, successful, variants, provider_seal, acceptance):
     preview_regions, preview_date_box = [], None
     if stage == "fields":
-        output["fields"] = primary.get("fields", {})
-        output["field_metadata"] = primary.get("field_metadata", {})
+        output["fields"] = deepcopy(primary.get("fields", {}))
+        output["field_metadata"] = deepcopy(primary.get("field_metadata", {}))
         output["field_fallbacks"] = primary.get("field_fallbacks", {})
+        output["printed_field_selection"] = deepcopy(primary["printed_field_selection"])
         requirement_artifacts = [
             artifact for variant in successful
             for artifact in variant["result"].get("processing_artifacts", {})
@@ -101,6 +124,7 @@ def merge_primary(output, stage, primary, successful, variants, provider_seal, a
     elif stage == "handwriting":
         output["fields"].update(primary.get("handwriting_fields", {}))
         output["field_metadata"].update(primary.get("handwriting_metadata", {}))
+        output["handwriting_selection"] = deepcopy(primary["handwriting_selection"])
     elif stage == "products":
         output["product_table"] = primary.get("product_table", {})
     else:
@@ -211,7 +235,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
     output["field_fallbacks"] = {}
     output["date_ocr_texts"] = []
     output["safety_policy"] = ""
-    output["fields"] = previous_fields if not config["fields"] else {}
+    output["fields"] = deepcopy(previous_fields) if not config["fields"] else {}
     output["field_metadata"] = {}
     output["product_table"] = {"rows": [], "status": "未执行"}
     output["date_check"] = {"status": "未执行", "actual": "", "reliable": False}
@@ -226,7 +250,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
     preview_date_box = None
     for stage, variants in results.items():
         successful = [v for v in variants if "result" in v]
-        output["recognition_variants"][stage] = [
+        output["recognition_variants"][stage] = deepcopy([
             {
                 "method": v["method"],
                 "error": v.get("error"),
@@ -239,6 +263,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
                             "handwriting_metadata",
                             "fields",
                             "field_metadata",
+                            "field_fallbacks",
                             "product_table",
                             "date_check",
                             "seal_check",
@@ -251,7 +276,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
                 ),
             }
             for v in variants
-        ]
+        ])
         if not successful:
             if config[stage] and stage in ("date", "seal"):
                 output[f"{stage}_check"]["status"] = "识别失败"
@@ -260,10 +285,26 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
             continue
         acceptance = config.get('acceptance') or {}
         provider_seal, decision_variants, primary = select_variants(stage, successful, acceptance)
+        rejected_field_warnings = False
         for variant in decision_variants:
             if provider_seal is None or not provider_seal.get('reliable'):
-                stage_reasons.extend(variant["result"].get("stage_review_reasons", []))
-                stage_issues.extend(variant["result"].get("stage_review_issues", []))
+                variant_issues = variant["result"].get("stage_review_issues", [])
+                superseded = [item for item in variant_issues if stage == "fields"
+                              and item.get("scope") == "fields" and item.get("code") == "low_confidence"]
+                rejected_field_warnings |= bool(superseded)
+                messages = {item["message"] for item in superseded}
+                stage_reasons.extend(reason for reason in variant["result"].get("stage_review_reasons", [])
+                                     if reason not in messages)
+                stage_issues.extend(item for item in variant_issues if item not in superseded)
+        if stage == "fields" and rejected_field_warnings:
+            # Chosen metadata drives low-confidence review at finalization.
+            # Keep a missing-critical-field warning if no reader filled it.
+            missing = [name for name in ("客户名称", "要求到货", "签章要求")
+                       if not primary["fields"].get(name)]
+            if missing:
+                message = "关键字段尚未识别：" + "、".join(missing)
+                stage_reasons.append(message)
+                stage_issues.append(issue("low_confidence", "fields", message))
         regions, date_box = merge_primary(output, stage, primary, successful, variants, provider_seal, acceptance)
         if stage == "date":
             preview_date_box = date_box
@@ -273,9 +314,14 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
             primary.get("safety_policy") or output["safety_policy"]
         )
         stage_match_mode = acceptance.get(f'{stage}_match_mode')
-        if provider_seal is None and stage_match_mode != 'any' and any(
-            _value(stage, v["result"]) != _value(stage, primary) for v in decision_variants[1:]
-        ):
+        if stage == "fields":
+            conflicting = bool(primary["printed_field_selection"]["conflicts"])
+        elif stage == "handwriting":
+            conflicting = primary["handwriting_selection"]["conflict"]
+        else:
+            conflicting = any(_value(stage, v["result"]) != _value(stage, primary)
+                              for v in decision_variants[1:])
+        if provider_seal is None and stage_match_mode != 'any' and conflicting:
             conflicts.append(f"{LABELS[stage]}：多种识别方式结果不一致")
             conflicts_issues.append(issue("provider_conflict", stage, conflicts[-1]))
             if stage in ("date", "seal"):

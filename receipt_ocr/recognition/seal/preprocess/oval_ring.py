@@ -1,4 +1,6 @@
 """Corroborate a source-chroma, normal-offset view of moderate oval seals."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -59,8 +61,9 @@ def prepare_oval_ring(source, region, working, mask_path, guide, rotations,
                 return None
             h, w = gray.shape
             matrix, width, height = _rotation_geometry(w, h, angle)
-            gray = cv2.warpAffine(gray, matrix, (width, height),
-                                  flags=cv2.INTER_CUBIC, borderValue=255)
+            with image_operation('rotation', '旋转校正'):
+                gray = cv2.warpAffine(gray, matrix, (width, height),
+                                      flags=cv2.INTER_CUBIC, borderValue=255)
         if gray.shape != guide.source_shape:
             return None
         covered = gray.copy()

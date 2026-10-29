@@ -5,6 +5,7 @@ import threading
 
 from receipt_ocr.runtime.calls import recognition_call, check_prediction_errors
 from receipt_ocr.runtime.execution import measure
+from receipt_ocr.runtime.model_paths import prepare_model_cache
 
 
 MODEL_NAME = "PP-LCNet_x0_25_textline_ori"
@@ -21,11 +22,10 @@ _lock = threading.Lock()
 
 def _document_classifier():
     global _doc_classifier
-    from receipt_ocr.providers.paddle_runtime import paddle_model_home
     with _lock:
         if _doc_classifier is None:
             with measure('paddle_doc_orientation_model_setup'):
-                os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
+                prepare_model_cache()
                 os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
                 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
                 from paddleocr import DocImgOrientationClassification
@@ -73,11 +73,11 @@ def classify_doc_orientation(image_path):
 
 def _line_classifier():
     global _classifier
-    from receipt_ocr.providers.paddle_runtime import paddle_model_home, paddle_engine
+    from receipt_ocr.providers.paddle_runtime import paddle_engine
     with _lock:
         if _classifier is None:
             with measure('paddle_line_orientation_model_setup'):
-                os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(paddle_model_home()))
+                prepare_model_cache()
                 os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
                 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
                 from paddleocr import TextLineOrientationClassification

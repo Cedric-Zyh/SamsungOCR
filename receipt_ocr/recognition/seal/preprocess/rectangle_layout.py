@@ -1,4 +1,6 @@
 """Prepare measured rectangle rows or one canonical multi-column OCR input."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 from pathlib import Path
 import re
 
@@ -106,7 +108,8 @@ def prepare_frame_layout(source, directory, index, prefix, provider, mode, reade
     # opposite direction using its own complete frame, not clipped OCR boxes.
     if direction["original_score"] < 4:
         try:
-            opposite, opposite_crop, opposite_angle = measure_frame(cv2.rotate(original, cv2.ROTATE_180))
+            with image_operation('rotation', '旋转校正'):
+                opposite, opposite_crop, opposite_angle = measure_frame(cv2.rotate(original, cv2.ROTATE_180))
             l2, t2, r2, b2 = opposite_crop
             opposite_canonical, opposite_height = _canonical(opposite[t2:b2, l2:r2])
             _, opposite_path = save("rectangle-direction-180", opposite_canonical, "180° 方向判断输入")

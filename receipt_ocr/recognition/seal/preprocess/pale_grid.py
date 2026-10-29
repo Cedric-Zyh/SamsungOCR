@@ -1,4 +1,6 @@
 """Recover only complete, pale red table stamps before any circular unwrapping."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 from pathlib import Path
 
 import cv2
@@ -31,8 +33,9 @@ def prepare_pale_grid(source, directory, index, prefix, mode, *, color="red", au
     reference_height = round(original.shape[0]*1000/original.shape[1])
     enhanced = cv2.resize(enhance_pale_red(original), (1000, reference_height))
     matrix, width, height = _rotation_geometry(1000, reference_height, measured["angle"])
-    enhanced = cv2.warpAffine(enhanced, matrix, (width, height), flags=cv2.INTER_CUBIC,
-                              borderValue=(255, 255, 255))
+    with image_operation('rotation', '旋转校正'):
+        enhanced = cv2.warpAffine(enhanced, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                                  borderValue=(255, 255, 255))
     if enhanced.shape != measured["image"].shape:
         raise ValueError("淡色增强与矩形定位图片坐标不一致")
     inputs, jobs = [], []

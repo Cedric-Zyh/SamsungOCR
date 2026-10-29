@@ -80,6 +80,29 @@ def test_new_trace_keeps_initialization_separate_from_processing_time(store):
     assert data['summary']['total'] == 1
 
 
+def test_image_processing_is_latest_only_and_does_not_change_recognition_count(store):
+    measured = {'seconds': .2, 'steps': [
+        {'stage': 'seal', 'stage_label': '客户印章', 'operation': 'rotation',
+         'label': '旋转校正', 'calls': 3, 'seconds': .2, 'failed': 0}]}
+    snapshot = {**trace(), 'model_initialization_seconds': .1, 'image_processing': measured}
+    identity = save(store.database, snapshot=snapshot)
+    data = store.database.latest_recognition_calls(identity)
+    assert data['image_processing'] == measured
+    assert data['summary']['total'] == 1
+    assert data['recognition_seconds'] == .9  # Image work is already in the total.
+    store.database.begin_recognition_calls('one.png', 'next')
+    assert store.database.latest_recognition_calls(identity)['image_processing'] is None
+    store.database.save_recognition_calls('one.png',
+        {**trace(status='failed'), 'image_processing': {'seconds': 0, 'steps': []}},
+        result_id=identity, run_key='next')
+    latest = store.database.latest_recognition_calls(identity)
+    assert latest['image_processing'] == {'seconds': 0, 'steps': []}
+    assert latest['status'] == 'failed'
+    assert store.database.get_result(identity).get('image_processing') is None
+    with store.database.connect() as con:
+        assert con.execute('SELECT COUNT(*) FROM latest_recognition_calls').fetchone()[0] == 1
+
+
 def test_legacy_timing_uses_the_result_for_the_latest_successful_job(store):
     db = store.database
     old = save(db, processing_timings={'steps': {'paddle_model_setup': {'seconds': .1}}})
@@ -115,6 +138,7 @@ def test_unmeasured_initialization_stays_unknown_instead_of_becoming_zero(store)
     data = store.database.latest_recognition_calls(identity)
     assert data['recognition_seconds'] is None
     assert data['model_initialization_seconds'] is None
+    assert data['image_processing'] is None
 
 
 def test_unkeyed_late_result_uses_actual_start_time_and_full_filename(store):
@@ -210,6 +234,9 @@ def test_sample_and_production_routes_are_isolated_and_sample_urls_are_projected
     service = SampleCenter(ctx)
     sample_trace = trace()
     sample_trace['calls'][0]['image_url'] = '/files/artifacts/token/seal.png'
+    sample_trace['image_processing'] = {'seconds': .12, 'steps': [
+        {'stage': 'seal', 'stage_label': '客户印章', 'operation': 'rotation',
+         'label': '旋转校正', 'calls': 2, 'seconds': .12, 'failed': 0}]}
     sample_id = save(service.database, snapshot=sample_trace)
     production_id = save(ctx.database, snapshot=trace(name='production.png'))
     assert production_id == sample_id
@@ -217,6 +244,8 @@ def test_sample_and_production_routes_are_isolated_and_sample_urls_are_projected
     assert data['status'] == 'succeeded'
     assert data['calls'][0]['image_url'] == '/files/samples/artifacts/token/seal.png'
     assert data['calls'][0]['input_name'] == 'seal-1.png'
+    assert data['image_processing'] == sample_trace['image_processing']
+    assert ctx.database.latest_recognition_calls(production_id)['image_processing'] is None
     assert client.get('/api/samples/results/9999/recognition-calls').status_code == 404
     assert client.get(f'/api/samples/results/{sample_id}/runs').status_code == 404
     service.library.remove(['one.png'])

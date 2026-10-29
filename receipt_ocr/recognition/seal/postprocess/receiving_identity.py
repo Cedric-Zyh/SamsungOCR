@@ -8,9 +8,12 @@ from __future__ import annotations
 import math
 import re
 
+from .receiving_purpose import real_observation, resolve_observed_purpose
+from .receiving_row_consensus import resolve_original_row_tail
+
 MIN_CONFIDENCE = .75
 _PURPOSE = "收货专用章"
-_NUMBERED_PURPOSE = re.compile(r"^收货专用章([①-⑳]|[（(][0-9]{1,3}[)）])?$")
+_NUMBERED_PURPOSE = re.compile(r"^收货专用章([①-⑳]|[（(][0-9０-９]{1,3}[)）])?$")
 _CAPTION = re.compile(r"^(?:收货人|收货日期|收货时间|签收人|签收日期|日期)")
 
 
@@ -45,12 +48,12 @@ def _compatible(left, right):
 
 def _row_candidates(row):
     values = []
-    if row.get("text") is not None:
+    if row.get("text") is not None and real_observation(row):
         values.append({"text": str(row.get("text") or ""),
                        "confidence": observation_confidence(row.get("confidence")),
                        "source": row.get("source", "primary")})
     for value in row.get("variants") or []:
-        if isinstance(value, dict):
+        if real_observation(value):
             values.append({"text": str(value.get("text") or ""),
                            "confidence": observation_confidence(value.get("confidence")),
                            "source": value.get("source", value.get("name", "variant"))})
@@ -113,7 +116,7 @@ def decide_receiving_identity(rows, *, detected_boxes=None, grid_verified=False)
         index = row["row_index"]
         values = _row_candidates(row)
         boxes = [b for b in detections.get(index, [])
-                 if observation_confidence(b.get("confidence")) >= MIN_CONFIDENCE
+                 if real_observation(b) and observation_confidence(b.get("confidence")) >= MIN_CONFIDENCE
                  and str(b.get("text") or "").strip()]
         if boxes:
             boxes.sort(key=lambda box: _finite_coordinate(box.get("left", box.get("x", 0))))
@@ -145,12 +148,26 @@ def decide_receiving_identity(rows, *, detected_boxes=None, grid_verified=False)
             result["conflicts"].append({"row_index": index, "reason": "unread_nonblank_or_unknown_row"})
             continue
         text, conflicts = _select_row(values)
+        resolution = resolve_observed_purpose(values, index) if index == purpose and conflicts else None
+        if resolution:
+            text, conflicts = resolution['text'], []
+            result['purpose_resolution'] = resolution
+        reread_resolution = (resolve_original_row_tail(values, index, purpose_row_index=purpose)
+                             if index < purpose and conflicts else None)
+        if reread_resolution:
+            text, conflicts = reread_resolution['text'], []
+            result.setdefault('row_resolutions', []).append(reread_resolution)
         if conflicts:
             result["conflicts"].append({"row_index": index,
                                         "reason": "disagreeing_whole_row_observations",
                                         "observations": values, "pairs": conflicts})
         else:
-            result["identity_rows"].append({"row_index": index, "text": text, "observations": values})
+            identity_row = {"row_index": index, "text": text, "observations": values}
+            if resolution:
+                identity_row['purpose_resolution'] = resolution
+            if reread_resolution:
+                identity_row['reread_resolution'] = reread_resolution
+            result["identity_rows"].append(identity_row)
     subject = [row for row in result["identity_rows"] if row["row_index"] < purpose]
     if not subject or sum("\u4e00" <= ch <= "\u9fff" for row in subject for ch in row["text"]) < 2:
         result["warnings"].append("missing_observed_subject")

@@ -1,10 +1,13 @@
 """Color masks for seal ink."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 import cv2
 import numpy as np
 
 
+@timed_image('color_cleanup', '章色分离')
 def _seal_ink_strength(crop: np.ndarray, color: str) -> np.ndarray:
     """Retain observed coloured strokes while suppressing neutral black ink.
 
@@ -102,6 +105,7 @@ def _isolate_blue_ink(crop: np.ndarray) -> np.ndarray:
     return result
 
 
+@timed_image('color_cleanup', '章色分离')
 def _color_masks(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     red_a = cv2.inRange(hsv, (0, 55, 70), (16, 255, 255))

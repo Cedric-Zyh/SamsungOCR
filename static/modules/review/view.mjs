@@ -90,6 +90,9 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     reviewState.artifactTab = firstImageIssue?.target === 'seal' ? 'seals' : 'date';
     $$('[data-artifact-tab]', content).forEach(button => { button.classList.toggle('active', button.dataset.artifactTab === reviewState.artifactTab); button.addEventListener('click', () => { reviewState.artifactTab = button.dataset.artifactTab; $$('[data-artifact-tab]', content).forEach(x => x.classList.toggle('active', x === button)); renderArtifacts(); }); });
     renderArtifacts();
+    $('[data-review-panel="evidence"]', content)?.addEventListener('toggle', event => {
+      if (event.currentTarget.open) renderArtifacts();
+    });
     $('[data-retry]', content).addEventListener('click', () => { if (canLeaveReview()) retryOne(id); });
     $('[data-save-pending]', content).addEventListener('click', () => submitReview('待复核', '需人工复核'));
     $('[data-confirm-pass]', content).addEventListener('click', () => submitReview('确认通过', '通过'));

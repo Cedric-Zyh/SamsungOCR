@@ -13,6 +13,14 @@ import numpy as np
 
 
 def _decode_image(path: str | Path) -> np.ndarray:
+    from .working_images import current_workspace
+    workspace = current_workspace()
+    if workspace is not None:
+        return workspace.cv_read(path, decoder=_decode_pixels)
+    return _decode_pixels(path)
+
+
+def _decode_pixels(path: str | Path) -> np.ndarray:
     data = np.fromfile(str(path), dtype=np.uint8)
     image = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if image is None:
@@ -103,3 +111,6 @@ def _write_stage_image(destination: str | Path, image: np.ndarray, suffix: str) 
     if not ok:
         raise ValueError(f"中间图片编码失败: {destination.name}")
     encoded.tofile(str(destination))
+    if suffix.lower() == '.png':
+        from .working_images import remember_png
+        remember_png(destination, image)

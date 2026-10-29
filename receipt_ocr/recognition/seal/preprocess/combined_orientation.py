@@ -4,7 +4,8 @@ from pathlib import Path
 import math
 import tempfile
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import ImageOps
+from receipt_ocr.imaging.working_images import open_rgb, write_pil, copy_image
 from receipt_ocr.recognition.seal.preprocess.orientation_settings import (
     FOUR_WAY_ANCHOR_MIN_CONFIDENCE, FOUR_WAY_COARSE_ANGLES,
     FOUR_WAY_MIN_FINE_ROTATION, FOUR_WAY_MAX_FINE_ROTATION,
@@ -89,7 +90,7 @@ def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None
     """
     from receipt_ocr.recognition.seal.ocr.interface import read_line
 
-    with Image.open(image_path) as image:
+    with open_rgb(image_path) as image:
         rgb = image.convert("RGB")
         width, height = rgb.size
         if focus_box and len(focus_box) == 4:
@@ -103,8 +104,8 @@ def _read_type_band_text(image_path, band_path, *, model_variant, focus_box=None
             return "", 0.0
         band_path = Path(band_path)
         band_path.parent.mkdir(parents=True, exist_ok=True)
-        ImageOps.expand(rgb.crop((left, top, right, bottom)),
-                        border=blank_padding, fill="white").save(band_path)
+        write_pil(band_path, ImageOps.expand(rgb.crop((left, top, right, bottom)),
+                                           border=blank_padding, fill="white"))
     rows = [
         row for row in read_line(band_path, model_variant=model_variant)
         if getattr(row, "text", "")
@@ -127,7 +128,7 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant, obse
     candidate_path = Path(source) if not angle else scratch / f"coarse-{angle}.png"
     if angle:
         rotate_stamp_image(source, candidate_path, angle)
-    with Image.open(candidate_path) as image:
+    with open_rgb(candidate_path) as image:
         candidate_width, candidate_height = image.size
 
     boxes = []
@@ -166,7 +167,7 @@ def _four_way_candidate(source, scratch, band_dir, angle, *, model_variant, obse
         fine_path = scratch / f"coarse-{angle}-fine.png"
         rotate_stamp_image(candidate_path, fine_path, fine_rotation)
         final_path = fine_path
-        with Image.open(final_path) as image:
+        with open_rgb(final_path) as image:
             final_width, final_height = image.size
         fine_matrix, _, _ = _rotation_geometry(
             candidate_width, candidate_height, fine_rotation
@@ -265,7 +266,7 @@ def _rebase_large_angle(source, scratch, band_dir, item, *, model_variant):
     old_angle = float(item["angle"])
     shift = 90 if fine > 0 else -90
     new_angle = (old_angle + shift) % 360
-    with Image.open(source) as image:
+    with open_rgb(source) as image:
         width, height = image.size
     old_matrix, _, _ = _rotation_geometry(width, height, old_angle)
     new_matrix, _, _ = _rotation_geometry(width, height, new_angle)
@@ -319,7 +320,7 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
     band_dir = destination.parent / f"{destination.stem}-fourway"
     band_dir.mkdir(parents=True, exist_ok=True)
     source = Path(source)
-    with Image.open(source) as image:
+    with open_rgb(source) as image:
         source_width, source_height = image.size
     candidates = []
     with tempfile.TemporaryDirectory(prefix="receipt-four-way-") as scratch:
@@ -446,9 +447,7 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
             # falls back to the original colour-isolated image.
             oriented = None
         else:
-            from shutil import copyfile
-
-            copyfile(Path(best["path"]), destination)
+            copy_image(Path(best["path"]), destination)
             oriented = destination
             decision["oriented_path"] = str(destination)
 
@@ -456,11 +455,11 @@ def prepare_round_stamp_combined(source, destination, *, model_variant="v6", ret
         # removed. A later cleaned crop must not discard a more complete read.
         if best["focus_box"]:
             verified_row = destination.with_name(destination.stem + "-verified-type-row.png")
-            with Image.open(best["path"]) as image:
+            with open_rgb(best["path"]) as image:
                 crop = image.convert("RGB").crop(tuple(round(v) for v in
                                                        (best.get("read_box") or best["focus_box"])))
-                ImageOps.expand(crop, border=best.get("blank_padding", 0),
-                                fill="white").save(verified_row)
+                write_pil(verified_row, ImageOps.expand(crop, border=best.get("blank_padding", 0),
+                                                      fill="white"))
             decision["type_band_path"] = str(verified_row)
 
     decision.update(

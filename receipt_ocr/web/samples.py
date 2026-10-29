@@ -46,6 +46,10 @@ class SampleJobStore(JobStore):
         super().__init__(database)
         self.library = library
 
+    def _prepare_result(self, con, job, result):
+        from .sample_renaming import rename_recognized_sample
+        return rename_recognized_sample(self.library, con, job, result)
+
     def claim(self):
         job = super().claim()
         if job:

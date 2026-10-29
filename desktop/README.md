@@ -20,6 +20,10 @@ pnpm tauri:dev:mac
 
 ## Windows 安装包
 
+所有 ONNX、原生 Paddle、印章专用及方向模型统一保存在所选安装位置的 `models/official_models/`；字体、临时缓存、下载锁等共用 `models/` 根目录。启动器在识别库导入前同时设置 `PADDLE_MODEL_HOME` 和 `PADDLE_PDX_CACHE_HOME`，避免继承旧环境变量后出现多个模型目录。
+
+安装位置需要当前用户可写；无法创建或写入 `models/` 时，启动页会显示具体目录。旧版 AppData 中已下载的完整模型在首次加载时复制复用，不覆盖新目录中已有的模型，也不删除旧缓存。运行数据库、回单图片和识别结果继续使用原有数据目录。
+
 在 Windows 开发机上执行：
 
 ```powershell

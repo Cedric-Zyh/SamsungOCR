@@ -89,17 +89,7 @@ const ReceiptWorkbench = (() => {
     }
     return found;
   }
-  function imageSources(record) {
-    const sources = [], seen = new Set();
-    const usableOrientation = item => item?.color_isolated_oriented_url &&
-      !(item.orientation?.mode === 'doc_ori' && !(Number(item.orientation.confidence) >= 0.9));
-    const orientationLabel = item => item?.orientation?.mode === 'doc_ori'
-      ? '文档方向粗校正' : '按章型文字旋正';
-    function add(url, label, group) {
-      if (typeof url !== 'string' || !url.startsWith('/files/') || seen.has(url)) return;
-      seen.add(url); sources.push({url, label, group});
-    }
-    add(record.preview_url, '整页回单', 'page');
+  function localSealArtifactsForSelection(record) {
     const normalizeSeal = value => String(value || '').replace(/[\s（）()]/g, '');
     const primarySeal = record.seal_check || {};
     const localChecks = [primarySeal.local_channel,
@@ -116,9 +106,32 @@ const ReceiptWorkbench = (() => {
       'rotated_text', 'same_region_reconstructed_text', 'combined_text',
       'secondary_isolated_text', 'secondary_color_isolated_text',
       'secondary_unwrapped_text', 'secondary_rotated_text', 'secondary_code_line_text'];
-    const selectedLocalArtifact = localSelected && (record.processing_artifacts?.seals || []).find(item =>
-      [...(item.matching_texts || []), ...textKeys.flatMap(key => String(item[key] || '').split('|'))]
-        .some(text => normalizeSeal(text) === selectedText));
+    return localSelected ? (record.processing_artifacts?.seals || []).filter(item =>
+      [...(item.matching_texts || []), ...textKeys.flatMap(key => String(item[key] || '').split('|')),
+        // A withheld form candidate still locates its preview; it does not
+        // become accepted matching evidence merely by being displayed.
+        ...(item.receiving_form?.managed === true
+          ? [item.receiving_form.identity_text, item.receiving_form.candidate_text] : [])]
+        .some(text => normalizeSeal(text) === selectedText)) : [];
+  }
+  function selectedLocalSealArtifact(record) {
+    const candidates = localSealArtifactsForSelection(record);
+    // A shared warehouse title can occur on multiple stamps. Extra identity
+    // details must never be borrowed from an ambiguous physical region.
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+  function imageSources(record) {
+    const sources = [], seen = new Set();
+    const usableOrientation = item => item?.color_isolated_oriented_url &&
+      !(item.orientation?.mode === 'doc_ori' && !(Number(item.orientation.confidence) >= 0.9));
+    const orientationLabel = item => item?.orientation?.mode === 'doc_ori'
+      ? '文档方向粗校正' : '按章型文字旋正';
+    function add(url, label, group) {
+      if (typeof url !== 'string' || !url.startsWith('/files/') || seen.has(url)) return;
+      seen.add(url); sources.push({url, label, group});
+    }
+    add(record.preview_url, '整页回单', 'page');
+    const selectedLocalArtifact = localSealArtifactsForSelection(record)[0];
     for (const [key, group, label] of [['date', 'date', '日期区域'], ['seals', 'seal', '印章区域']]) {
       if (key === 'seals' && selectedLocalArtifact) {
         const item = selectedLocalArtifact;
@@ -181,6 +194,6 @@ const ReceiptWorkbench = (() => {
   function nextReview(rows, currentId, deferred) {
     return rows.find(row => row.id !== currentId && !deferred.has(row.id));
   }
-  return {hasProviderFailure, category, matches, ordered, signatureCheck, checkStatus, dateReview, chooseDate, issues, imageSources, nextReview};
+  return {hasProviderFailure, category, matches, ordered, signatureCheck, checkStatus, dateReview, chooseDate, issues, imageSources, selectedLocalSealArtifact, nextReview};
 })();
 export {ReceiptWorkbench};

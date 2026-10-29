@@ -125,11 +125,13 @@ export function createImports({
 
   async function bulkRetry() {
     if (!recordsState.selected.size) return toast('请先勾选回单', 'warning');
+    const ids = [...recordsState.selected];
+    if (ids.some(id => typeof id === 'string')) return toast('所选回单尚未全部完成识别，请识别完成后再重新识别', 'warning');
     const button = $('#bulk-retry'); button.disabled = true;
-    if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: `批量重新识别会将 ${recordsState.selected.size} 张完整回单上传至所选远程识别服务。`})) { button.disabled = false; return; }
+    if (usesRemotePlan() && !await confirmInline({environment, anchor: button, message: `批量重新识别会将 ${ids.length} 张完整回单上传至所选远程识别服务。`})) { button.disabled = false; return; }
     try {
       await flushSettings();
-      const payload = {background: true, ids: [...recordsState.selected], ocr_backend: importsState.ocrBackend,
+      const payload = {background: true, ids, ocr_backend: importsState.ocrBackend,
         seal_recognition_mode: importsState.sealRecognitionMode, recognition_config: readRecognitionPlan(), acceptance_policy: readAcceptancePolicy?.()};
       const task = await (services.records.bulkRetry(payload));
       await showQueuedRetry(task);

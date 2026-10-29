@@ -79,6 +79,56 @@ test('accepted requirement code policy is explained while the raw O reading rema
   assert.doesNotMatch(html, /0\/O 已按签章要求判定/);
 });
 
+test('a verified title correction explains the adopted reread without hiding original readings', () => {
+  const {calls, options} = harness();
+  const item = sample(), form = item.receiving_form;
+  const before = '北京永乐bC 010DCM', after = '北京永乐DC 010DCM';
+  Object.assign(form, {identity_text: after + '收货专用章②', candidate_text: after + '收货专用章②',
+    selected_source: 'verified_title_reread', reason: 'same_row_title_corrected_by_verified_rereads',
+    title_read_resolution: {policy: 'same_row_title_reread_consensus', accepted: true,
+      row_index: 0, before_texts: [before], text: after},
+    split: {accepted: true, requires_review: true, matching_allowed: false,
+      title_text: after, identity_text: after + '收货专用章', conflicts: [{text: before, confidence: .98}]}});
+  form.primary.conflicts = [{row_index: 0, observations: [
+    {text: before, confidence: .975}, {text: after, confidence: .98}]}];
+  const html = renderReceivingEvidence(item, options);
+  assert.match(html, /首行补读（已采用）/);
+  assert.match(html, /第1格原始读数（已采用补读结果）/);
+  assert.match(html, /北京永乐bC 010DCM · 97.5%/);
+  assert.match(html, /同一处首行字母分歧已由同格补读确认/);
+  assert.match(html, /收货专用章②/);
+  assert.doesNotMatch(html, /分段补读存在分歧，需人工核对|待核对候选/);
+  assert.match(calls.find(call => call.url.endsWith('/detect.png')).label, /同格文字区域重新识别/);
+
+  form.split.conflicts.push({text: '北京永乐DC 011DCM', confidence: .99});
+  assert.match(renderReceivingEvidence(item, options), /分段补读存在分歧，需人工核对/);
+  form.title_read_resolution.accepted = false;
+  const rejected = renderReceivingEvidence(item, options);
+  assert.doesNotMatch(rejected, /首行补读（已采用）|第1格原始读数（已采用补读结果）/);
+  assert.doesNotMatch(rejected, /已采用补读结果纠正首行字母误读/);
+  assert.match(rejected, /第1格的不同读数/);
+});
+
+test('a retained same-row consensus is explained while the older extra character remains visible', () => {
+  const {options} = harness();
+  const item = sample(), form = item.receiving_form;
+  const text = '北京永乐DC 010DCM';
+  form.identity_text = text + '收货专用章';
+  form.primary.identity_rows = [{row_index: 0, text, reread_resolution: {
+    policy: 'same_row_reread_tail_consensus', accepted: true, row_index: 0, text,
+    before_texts: [text + '1']}}];
+  item.reads[0].text = text + '1';
+  const html = renderReceivingEvidence(item, options);
+  assert.match(html, /第1格（采用一致补读）/);
+  assert.match(html, /原始差异保留在下方/);
+  assert.match(html, /北京永乐DC 010DCM1 · 99%/);
+  form.primary.identity_rows[0].reread_resolution.accepted = false;
+  assert.doesNotMatch(renderReceivingEvidence(item, options), /第1格（采用一致补读）/);
+  form.primary.identity_rows[0].reread_resolution.accepted = true;
+  form.status = 'conflict';
+  assert.doesNotMatch(renderReceivingEvidence(item, options), /第1格（采用一致补读）/);
+});
+
 test('a cleaned title dot is explained even when another row remains conflicted', () => {
   const {options} = harness();
   const item = sample();

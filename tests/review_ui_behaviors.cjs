@@ -306,6 +306,62 @@ test('main recognized seal shows the backend winner instead of the retained Qing
   assert.equal(h.$('[data-confirm-pass]').disabled, false);
 });
 
+function conflictedReceivingStamp() {
+  return {original_url: '/files/current-stamp.png', matching_texts: [],
+    receiving_form: {managed: true, status: 'conflict', identity_text: '', candidate_text: '北京永乐DC010DCM',
+      primary: {purpose_row_index: 1, conflicts: [{row_index: 1, observations: [
+        {text: '收费专用章②', confidence: .94},
+        {text: '收费专用章', confidence: .91},
+        {text: '收货专用章', confidence: .89},
+      ]}]}}};
+}
+
+function receivingReviewHarness(...stamps) {
+  const h = reviewHarness(), record = h.reviewState.current;
+  record.fields['签章要求'] = '北京永乐DC010DCM收货专用章②';
+  record.seal_check = {recognized: '北京永乐DC010DCM', status: '部分匹配', reliable: false,
+    recognition_mode: 'local'};
+  record.processing_artifacts = {seals: stamps};
+  h.$('[name=field:签章要求]').value = record.fields['签章要求'];
+  h.controller.setupSealConfirmation(record, {});
+  h.controller.syncReviewReadiness();
+  return h;
+}
+
+test('a retained number is shown separately without constructing or confirming a complete seal', async () => {
+  const stamp = conflictedReceivingStamp(), original = JSON.stringify(stamp);
+  const h = receivingReviewHarness(stamp), note = h.$('[data-seal-observed-components]');
+  assert.equal(note.classList.contains('hidden'), false);
+  assert.match(note.innerHTML, /已识别编号：<strong>②<\/strong>/);
+  assert.match(note.innerHTML, /用途文字待核对：收费专用章 \/ 收货专用章/);
+  assert.equal(h.$('[name=seal_text]').value, '北京永乐DC010DCM');
+  assert.equal(h.$('[name=seal_confirmed_match]').value, '');
+  assert.equal(h.$('[data-confirm-pass]').disabled, true);
+  assert.equal(JSON.stringify(stamp), original);
+  await h.$('[data-seal-change]').dispatch('click');
+  h.$('[name=seal_text]').value = '人工修改后的印章';
+  await h.$('[name=seal_text]').dispatch('input');
+  assert.equal(note.classList.contains('hidden'), true);
+});
+
+test('confirmed manual seal choices hide stale number hints without altering the saved observation', async () => {
+  const stamp = conflictedReceivingStamp(), h = receivingReviewHarness(stamp);
+  await h.$('[data-seal-choice=different]').dispatch('click');
+  assert.equal(h.$('[data-seal-observed-components]').classList.contains('hidden'), true);
+  assert.equal(stamp.receiving_form.status, 'conflict');
+});
+
+test('number details cannot be borrowed from another or ambiguous stamp', () => {
+  const other = conflictedReceivingStamp();
+  other.receiving_form.candidate_text = '另一个客户';
+  assert.equal(receivingReviewHarness(other).$('[data-seal-observed-components]').classList.contains('hidden'), true);
+  const sameTitleOtherNumber = conflictedReceivingStamp();
+  sameTitleOtherNumber.original_url = '/files/other-stamp.png';
+  sameTitleOtherNumber.receiving_form.primary.conflicts[0].observations[0].text = '收费专用章③';
+  assert.equal(receivingReviewHarness(conflictedReceivingStamp(), sameTitleOtherNumber)
+    .$('[data-seal-observed-components]').classList.contains('hidden'), true);
+});
+
 test('submitting disables all controls and blocks duplicate requests until completion', async () => {
   const h = reviewHarness(); h.controller.syncReviewReadiness();
   const pending = h.controller.submitReview('确认通过', '通过');
@@ -328,4 +384,37 @@ test('local seal evidence displays the selected comparison instead of other stam
     assert.doesNotMatch(markup, /其他公司章/);
     assert.ok(markup.includes(`>${status}</span>`));
   }
+});
+
+test('seal evidence keeps provider order independent of match status', () => {
+  const record = {sample_center: true, seal_check: {message: '保留当前结论', dual_check: {selected: {
+    template: {label: '北京永乐DC010DCM收货专用章2', requirement_match: {status: '不匹配'}},
+    ocr: {text: '北京永乐DC010DCM收费专用章', comparison: {status: '不匹配'}},
+  }}}, recognition_variants: {seal: [
+    {method: 'danzhengtong', details: {seal_check: {recognized: '北京永乐DC010DCM收货专用章②', status: '匹配'}}},
+    {method: 'paddle_v6', details: {seal_check: {recognized: '北京永乐DC010DCM', status: '部分匹配', reliable: false}}},
+  ]}};
+  const before = JSON.stringify(record);
+  const markup = sealEvidenceMarkup(record);
+  assert.deepEqual([...markup.matchAll(/<div><span>([^<]+)<\/span>/g)].map(match => match[1]), [
+    '清瞳 · 印章模板识别', '清瞳 · 印章文字 OCR',
+    '单证通 · 印章文字 OCR', '本地 PaddleOCR PP-OCRv6 Small · 印章文字 OCR',
+  ]);
+  assert.match(markup, /<p>保留当前结论<\/p>$/);
+  assert.equal(JSON.stringify(record), before);
+});
+
+test('failed and unrun seal channels keep provider order without relabeling stale text', () => {
+  const markup = sealEvidenceMarkup({sample_center: true, recognition_variants: {seal: [
+    {method: 'danzhengtong', error: '调用失败', details: {seal_check: {recognized: '旧文字', status: '匹配'}}},
+    {method: 'paddle_seal', details: {seal_check: {recognized: '旧文字', status: '未执行'}}},
+    {method: 'paddle_v6', details: {seal_check: {recognized: '其他公司章', status: '不匹配'}}},
+  ]}});
+  assert.deepEqual([...markup.matchAll(/<div><span>([^<]+)<\/span>/g)].map(match => match[1]), [
+    '单证通 · 印章文字 OCR', '本地 PaddleOCR 印章专用检测模型 · 印章文字 OCR',
+    '本地 PaddleOCR PP-OCRv6 Small · 印章文字 OCR',
+  ]);
+  assert.match(markup, />识别失败<\/span>/);
+  assert.match(markup, />未执行<\/span>/);
+  assert.doesNotMatch(markup, />部分匹配<\/span>|>匹配<\/span>/);
 });

@@ -1,4 +1,6 @@
 /** Filter request lifecycle, cancellation and stale-response protection. */
+import {recordSelectionKey} from './selection.mjs';
+
 export function createRecordQuery({environment, ui, recordsState, services, searchState,
   syncColumnFilters, renderFilterChips, closeMoreMenu, updateSelectionToolbar,
   showRecordEmptyState, renderRecords}) {
@@ -61,7 +63,7 @@ export function createRecordQuery({environment, ui, recordsState, services, sear
       if (result.page > lastPage) { recordsState.recordLoading = false; return await loadRecords({background, page:lastPage, scrollToTable}); }
       recordsState.records = result.items; recordsState.recordPage = result.page; recordsState.recordTotal = result.total;
       recordsState.recordsLoaded = true; recordsState.recordsStale = false;
-      const visibleIds = new Set(recordsState.records.filter(record => record.id && !record.processing_status).map(record => Number(record.id)));
+      const visibleIds = new Set(recordsState.records.map(recordSelectionKey).filter(key => key !== null));
       recordsState.selected = new Set([...recordsState.selected].filter(id => visibleIds.has(id)));
       $('#record-count').textContent = `共 ${result.total} 张`;
       renderStatusCounts(result.status_counts);

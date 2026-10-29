@@ -1,4 +1,6 @@
 """Complete detector rows for oval stamps with separate contact information."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +13,7 @@ from ..layout_fields import inner_role
 from .row_extent import save_row_polygon
 
 
+@timed_image('detection', '图形定位')
 def fitted_guide(image, *, color='red', geometry=None):
     """A bounded ellipse estimate when scan lines interrupt border tracing."""
     annulus = geometry if geometry is not None else _fit_ellipse_annulus(_ocr_color_mask(image, color))

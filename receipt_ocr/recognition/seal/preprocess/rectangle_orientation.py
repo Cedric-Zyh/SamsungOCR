@@ -1,5 +1,7 @@
 """Stamp orientation: rectangle orientation."""
 
+from receipt_ocr.runtime.image_processing import image_operation
+
 from pathlib import Path
 import cv2
 import numpy as np
@@ -39,7 +41,10 @@ def _check_rectangle_direction(image, boxes, matrix, padding, destination, model
                                   16, 16, 16, 16, cv2.BORDER_CONSTANT, value=(255, 255, 255))
         for coarse in (0, 180):
             path = destination.with_name(f"{destination.stem}-direction-{i}-{coarse}.png")
-            pixels = crop if coarse == 0 else cv2.rotate(crop, cv2.ROTATE_180)
+            pixels = crop
+            if coarse:
+                with image_operation('rotation', '旋转校正'):
+                    pixels = cv2.rotate(crop, cv2.ROTATE_180)
             if not cv2.imwrite(str(path), pixels):
                 raise ValueError("矩形章正反方向判断图保存失败")
             observations = read_line(path, model_variant=model_variant)
@@ -100,14 +105,15 @@ def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
         matrix, new_width, new_height = _rotation_geometry(
             padded_width, padded_height, angle
         )
-        output = cv2.warpAffine(
-            padded,
-            matrix,
-            (new_width, new_height),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
-        )
+        with image_operation('rotation', '旋转校正'):
+            output = cv2.warpAffine(
+                padded,
+                matrix,
+                (new_width, new_height),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
         decision["status"] = "矩形章已按横向文字行旋正并加白边"
     else:
         output = padded
@@ -125,7 +131,8 @@ def prepare_rectangular_stamp(source, destination, *, model_variant="v6"):
             h, w = output.shape[:2]
             flip = np.array([[-1., 0., w-1], [0., -1., h-1], [0., 0., 1.]])
             matrix = (flip @ np.vstack([matrix, [0., 0., 1.]]))[:2]
-            output = cv2.rotate(output, cv2.ROTATE_180)
+            with image_operation('rotation', '旋转校正'):
+                output = cv2.rotate(output, cv2.ROTATE_180)
             angle += 180
             decision['status'] = '矩形章已验证正反方向，旋转 180° 并校平文字'
         elif direction.get('reason') == 'ambiguous_directions' or (

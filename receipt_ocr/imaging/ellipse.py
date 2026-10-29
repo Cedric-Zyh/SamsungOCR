@@ -1,9 +1,12 @@
 """Ellipse normalization and annulus sampling."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
+from .working_images import remember_png
 from .contracts import SealRegion
 from .io import _read_image
 from .colors import _ocr_color_mask
@@ -26,6 +29,7 @@ def _concentric_inner(inner, outer):
     return np.linalg.norm(np.subtract(inner[2][0], outer[2][0])) <= outer[0] * .08
 
 
+@timed_image('normalize', '形状校正')
 def save_ellipse_normalized_seal(
     source: str | Path,
     destination: str | Path,
@@ -86,6 +90,7 @@ def save_ellipse_normalized_seal(
     if not ok:
         raise ValueError("椭圆章拉伸图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, normalized)
     return destination
 
 
@@ -419,6 +424,7 @@ def _trim_ring_whitespace(image, *, preserve_short_strokes=False):
                  max(0, left - pad):min(width, right + pad)]
 
 
+@timed_image('unwrap', '环形文字展开')
 def _save_ellipse_annulus_unwrapped(
     gray: np.ndarray,
     mask: np.ndarray,
@@ -524,4 +530,5 @@ def _save_ellipse_annulus_unwrapped(
     if not ok:
         raise ValueError("椭圆环形文字展开图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, output)
     return True

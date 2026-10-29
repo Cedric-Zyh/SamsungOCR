@@ -13,6 +13,7 @@ from time import perf_counter
 from urllib.parse import quote, urlsplit
 
 from .progress import MODEL_LABELS, STAGE_LABELS, current_progress_context
+from .image_processing import ImageProcessingTimings, image_processing_scope, exclude_image_interval
 
 
 _current = ContextVar('receipt_recognition_calls', default=None)
@@ -45,6 +46,7 @@ class RecognitionCalls:
         self._started = perf_counter()
         self._finished = None
         self._model_initializations = []
+        self._image_processing = ImageProcessingTimings()
         self._lock = Lock()
 
     def input_metadata(self, source):
@@ -53,9 +55,13 @@ class RecognitionCalls:
             path = Path(source)
             metadata['input_name'] = path.name.replace('\\', '/').rsplit('/', 1)[-1]
             try:
+                from ..imaging.working_images import cached_size
                 from PIL import Image
-                with Image.open(path) as image:
-                    metadata['width'], metadata['height'] = image.size
+                size = cached_size(path)
+                if size is None:
+                    with Image.open(path) as image:
+                        size = image.size
+                metadata['width'], metadata['height'] = size
             except (OSError, ValueError):
                 pass
             prefix = self.artifact_url_prefix
@@ -109,14 +115,15 @@ class RecognitionCalls:
                 initialized += max(0, stop - max(last, start))
                 last = max(last, stop)
             initialized = round(min(total, initialized), 4)
-            return deepcopy(dict(version=2, started_at=self.started_at, finished_at=self.finished_at,
+            return deepcopy(dict(version=3, started_at=self.started_at, finished_at=self.finished_at,
                                  processing_seconds=total,
                                  model_initialization_seconds=initialized,
                                  recognition_seconds=round(max(0, total - initialized), 4), status=self.status,
                                  summary=dict(total=len(self.calls),
                                               succeeded=sum(row['status'] == 'succeeded' for row in self.calls),
                                               failed=sum(row['status'] == 'failed' for row in self.calls),
-                                              cache_hits=self.cache_hits), calls=self.calls))
+                                              cache_hits=self.cache_hits), calls=self.calls,
+                                 image_processing=self._image_processing.snapshot()))
 
 
 class RecognitionCall:
@@ -139,8 +146,10 @@ class RecognitionCall:
 
     def finish(self):
         if self.collector is not None:
+            finished = perf_counter()
+            exclude_image_interval(self._started, finished)
             with self.collector._lock:
-                self.row['seconds'] = round(max(0, perf_counter() - self._started), 4)
+                self.row['seconds'] = round(max(0, finished - self._started), 4)
                 if self.row['status'] == 'running':
                     self.row['status'] = 'succeeded'
 
@@ -156,7 +165,8 @@ def capture_recognition_calls(source=None, artifact_dir=None, artifact_url_prefi
     token = _current.set(collector)
     failure = None
     try:
-        yield collector
+        with image_processing_scope(collector._image_processing):
+            yield collector
     except BaseException as exc:
         failure = exc
         raise
@@ -201,6 +211,7 @@ def record_model_initialization(started, finished):
     """Keep model preparation separate without adding an OCR invocation."""
     collector = _current.get()
     if collector is not None and finished > started:
+        exclude_image_interval(started, finished)
         with collector._lock:
             collector._model_initializations.append((started, finished))
 

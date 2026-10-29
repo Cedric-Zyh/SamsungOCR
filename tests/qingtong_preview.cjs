@@ -117,3 +117,39 @@ test('a local reading which did not win does not replace the selected provider s
   item.processing_artifacts.seals = [{original_url: '/files/company.png', matching_texts: ['其他公司章']}];
   assert.match(imageSources(item).find(source => source.group === 'seal').url, /selected-seal/);
 });
+
+test('a local partial winner previews its own region ahead of a remote mismatch', () => {
+  const item = record();
+  item.sample_center = true;
+  item.seal_check.recognized = '北京永乐DC010DCM';
+  item.seal_check.status = '部分匹配';
+  item.seal_check.reliable = false;
+  item.seal_check.local_channel = {recognized: '北京永乐DC010DCM', status: '部分匹配', reliable: false};
+  item.seal_check.dual_check.selected.ocr = {text: '北京永乐DC010DCM收费专用章', status: '不匹配'};
+  item.processing_artifacts.seals = [
+    {index: 0, original_url: '/files/local-partial.png', matching_texts: ['北京永乐DC010DCM']},
+    {index: 1, api_index: 1, original_url: '/files/remote-mismatch.png'},
+  ];
+  assert.deepEqual(imageSources(item).filter(source => source.group === 'seal'), [
+    {url: '/files/local-partial.png', label: '印章区域', group: 'seal'},
+  ]);
+});
+
+test('a displayed receiving-form candidate locates its preview without accepting its conflict', () => {
+  const item = record();
+  item.seal_check.recognized = '北京永乐DC010DCM';
+  item.seal_check.status = '部分匹配';
+  item.seal_check.reliable = false;
+  item.seal_check.local_channel = {recognized: '北京永乐DC010DCM', status: '部分匹配', reliable: false};
+  item.processing_artifacts.seals = [
+    {index: 0, original_url: '/files/form-original.png', color_isolated_oriented_url: '/files/form-oriented.png',
+      matching_texts: [], color_isolated_text: '北京永乐DC 010DCM | 收费专用章② | 收货人 | 日期',
+      receiving_form: {managed: true, status: 'conflict', identity_text: '', candidate_text: '北京永乐DC010DCM'}},
+    {index: 1, api_index: 1, original_url: '/files/remote-mismatch.png'},
+  ];
+  const before = JSON.stringify(item);
+  assert.deepEqual(imageSources(item).filter(source => source.group === 'seal'), [
+    {url: '/files/form-oriented.png', label: '印章区域 · 按章型文字旋正', group: 'seal'},
+  ]);
+  assert.equal(JSON.stringify(item), before);
+});

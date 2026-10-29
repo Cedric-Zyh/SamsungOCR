@@ -1,4 +1,8 @@
 """Measure rectangular rims and full-width rows without OCR-derived clipping."""
+
+from receipt_ocr.runtime.image_processing import image_operation
+
+from receipt_ocr.runtime.image_processing import timed_image
 import cv2
 import numpy as np
 
@@ -37,7 +41,8 @@ def _rim_angle(mask):
     scores = []
     for angle in np.arange(-15, 15.001, .25):
         matrix = cv2.getRotationMatrix2D((width / 2, height / 2), float(angle), 1)
-        rotated = cv2.warpAffine(small, matrix, (width, height), flags=cv2.INTER_LINEAR)
+        with image_operation('rotation', '旋转校正'):
+            rotated = cv2.warpAffine(small, matrix, (width, height), flags=cv2.INTER_LINEAR)
         profile = rotated[:, int(width * .22):int(width * .78)].mean(1)
         bands = (profile[:int(height * .28)], profile[int(height * .72):])
         score = sum(float(np.sum(band ** 4) / (np.sum(band) + 1e-6)) for band in bands)
@@ -73,8 +78,9 @@ def _contrast_frame(reference):
     angle = rect[2] if rect[2] <= 45 else rect[2] - 90
     height, width = reference.shape[:2]
     matrix, width, height = _rotation_geometry(width, height, angle)
-    image = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
-                           borderValue=(255, 255, 255))
+    with image_operation('rotation', '旋转校正'):
+        image = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                               borderValue=(255, 255, 255))
     points = cv2.transform(cv2.boxPoints(rect)[None], matrix)[0]
     x0, y0 = np.maximum(0, np.floor(points.min(0)).astype(int))
     x1, y1 = np.minimum([width, height], np.ceil(points.max(0)).astype(int))
@@ -103,8 +109,9 @@ def _projection_frame(reference):
     threshold = geometry_threshold(reference)
     angle = _rim_angle(red_ink(reference, threshold))
     matrix, width, height = _rotation_geometry(width, height, angle)
-    measured = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
-                             borderValue=(255, 255, 255))
+    with image_operation('rotation', '旋转校正'):
+        measured = cv2.warpAffine(reference, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                                 borderValue=(255, 255, 255))
     mask = red_ink(measured, threshold)
     xp = mask[int(height * .25):int(height * .75)].mean(0)
     yp = mask[:, int(width * .22):int(width * .78)].mean(1)
@@ -133,6 +140,7 @@ def _clips_outer_frame(reference, current, alternative):
                 or max(low[1]-t, b-high[1]) > (b-t)*.10)
 
 
+@timed_image('normalize', '形状校正')
 def measure_frame(image):
     """Preserve a sound measured frame; recover only missing/clipped rims."""
     source_height, source_width = image.shape[:2]
@@ -169,8 +177,9 @@ def measure_frame(image):
         rotated = measured
     else:
         matrix, output_width, output_height = _rotation_geometry(source_width, source_height, angle)
-        rotated = cv2.warpAffine(image, matrix, (output_width, output_height), flags=cv2.INTER_CUBIC,
-                                 borderValue=(255, 255, 255))
+        with image_operation('rotation', '旋转校正'):
+            rotated = cv2.warpAffine(image, matrix, (output_width, output_height), flags=cv2.INTER_CUBIC,
+                                     borderValue=(255, 255, 255))
         scale = [output_width / measured.shape[1], output_height / measured.shape[0]] * 2
         crop = np.rint(np.asarray(crop) * scale).astype(int).tolist()
     return rotated, crop, angle

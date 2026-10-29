@@ -11,6 +11,9 @@ import {createReviewStandard} from '../seals/review_standard.mjs';
 import {createSampleAnnotationSubmission} from './sample_annotations.mjs';
 import {createSampleBrowse} from './sample_browse.mjs';
 import {createReviewRunHistory} from './run_history.mjs';
+import {createSealPreview} from './seal_preview.mjs';
+import {sealWorkspaceModel} from './seal_workspace.mjs';
+import {dateWorkspaceModel, requirementWorkspaceModel} from './region_workspace.mjs';
 
 const optionalStageReasons = new Set([
   '部分识别：未执行项目不能据此判定整单通过',
@@ -28,6 +31,14 @@ export function createReview({
   const {$, $$, toast} = ui;
   const reviewImage = createReviewImage({environment, ui, reviewState});
   const reviewPreview = createReviewPreview({environment, ui});
+  let evidenceSource = null;
+  let activeSealPreview = null;
+  const sealPreview = createSealPreview({environment, ui, showSource: source => {
+    evidenceSource = source;
+    let index = reviewState.reviewImages.findIndex(image => image.group === source.group);
+    if (index < 0) index = reviewState.reviewImages.push(source) - 1;
+    setReviewImage(index, `${source.label} · 可拖动与缩放`, {evidence: true});
+  }});
   const sampleBrowse = createSampleBrowse({ui, reviewState, openReview});
   const runHistory = createReviewRunHistory({environment, ui, reviewState, services});
 
@@ -131,11 +142,14 @@ export function createReview({
     $('#review-revisit').classList.toggle('hidden', loading || !!error || !deferred);
   }
   function setReviewImage(index, note = '', options = {}) {
-    const source = reviewState.reviewImages?.[index], content = $('#review-content');
+    const evidence = options.evidence || (options.retry && evidenceSource);
+    if (!evidence) { sealPreview.clear(); evidenceSource = null; }
+    const source = evidence ? evidenceSource : reviewState.reviewImages?.[index], content = $('#review-content');
     reviewState.reviewImageIndex = index; reviewState.reviewZoom = 1;
     $$('[data-image-source-group]', content).forEach(button => {
       const group = button.dataset.imageSourceGroup;
-      const available = reviewState.reviewImages?.some(image => image.group === group);
+      const available = reviewState.reviewImages?.some(image => image.group === group)
+        || (group === 'requirement' && reviewState.current?.processing_artifacts?.signature_requirement?.some(item => item.original_url || item.color_clean_url));
       button.disabled = !available;
       button.setAttribute('aria-pressed', String(!!source && group === source.group));
     });
@@ -149,9 +163,28 @@ export function createReview({
     reviewImage.reset();
   }
   function focusReviewImage(group) {
+    if (group === 'date' || group === 'requirement') {
+      const detail = group === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
+      if (detail.original || detail.processed) { previewRegion({...detail, location: null, evidenceLabel: detail.original ? `${detail.label}原图` : '处理后'}); return; }
+    }
+    if (group === 'seal') {
+      const item = reviewState.current;
+      const artifact = item?.processing_artifacts?.seals?.[0];
+      const detail = activeSealPreview?.id === item?.id ? activeSealPreview.detail
+        : artifact ? {label: '印章 1', ...sealWorkspaceModel(artifact)} : null;
+      if (detail?.original || detail?.processed) {
+        previewSeal({...detail, url: detail.original || detail.processed, evidenceLabel: '印章原图'});
+        return;
+      }
+    }
     const index = reviewState.reviewImages.findIndex(source => source.group === group);
     if (index >= 0) setReviewImage(index);
     else setReviewImage(0, `没有保存${group === 'date' ? '日期' : '印章'}区域图，请在整页回单中核对。`);
+  }
+  function previewRegion(detail) { sealPreview.show({...detail, location: detail.location || null}); }
+  function previewSeal(detail) {
+    activeSealPreview = {id: reviewState.current?.id, detail};
+    sealPreview.show(detail);
   }
   function focusReviewIssue(target) {
     const content = $('#review-content');
@@ -253,6 +286,9 @@ export function createReview({
 
   function dismissReview() {
     runHistory.clear();
+    sealPreview.clear();
+    evidenceSource = null;
+    activeSealPreview = null;
     reviewPreview.cancel();
     reviewState.current = null;
     reviewState.sampleView = false;
@@ -312,5 +348,5 @@ export function createReview({
 
   }
 
-  return {initialize, canLeaveReview, setReviewDirty, syncReviewReadiness, showReviewEmpty, setReviewImage, focusReviewImage, focusReviewIssue, openReview, setupDateConfirmation, setupSealConfirmation, submitReview, dismissReview, closeModal, openBatchReview};
+  return {initialize, canLeaveReview, setReviewDirty, syncReviewReadiness, showReviewEmpty, setReviewImage, focusReviewImage, focusReviewIssue, openReview, setupDateConfirmation, setupSealConfirmation, submitReview, dismissReview, closeModal, openBatchReview, previewSeal, previewRegion};
 }

@@ -62,7 +62,8 @@ export function createReviewRunHistory({environment, ui, services}) {
     const openKeys = preserve ? expanded('[data-call-group]', 'data-call-group') : undefined;
     const imageKeys = expanded('[data-call-image]', 'data-call-image');
     const explanationOpen = expanded('[data-call-explanation]', 'data-call-explanation').has('count');
-    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, loading, error, timingContext:context?.timing});
+    const processingOpen = expanded('[data-image-processing]', 'data-image-processing').has('steps');
+    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, processingOpen, loading, error, timingContext:context?.timing});
     body().scrollTop = top;
     const count = $('[data-run-count]');
     if (count) { count.textContent = data.available === true ? `${data.summary?.total || 0} 次` : '—'; count.hidden = false; }

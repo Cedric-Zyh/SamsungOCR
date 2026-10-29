@@ -129,7 +129,8 @@ def main() -> int:
             report, failures = _collect(write_check=False)
             report["platform"] = "Windows（模拟路由）"
             report["model_home"] = (
-                "模拟模式不检查；Windows 使用 PADDLE_MODEL_HOME，"
+                "模拟模式不检查；Windows 安装版使用安装位置下的 models；"
+                "源码使用 PADDLE_PDX_CACHE_HOME / PADDLE_MODEL_HOME，"
                 "未配置时为 %USERPROFILE%\\.paddlex"
             )
             for backend in report["backends"]:

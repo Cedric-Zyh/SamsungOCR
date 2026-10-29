@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from receipt_ocr.persistence.database import Database
+from receipt_ocr.domain.fields.schema import PRINTED_FIELDS
 from receipt_ocr.provider_result_refresh import REFRESH_ACTION, has_human_edits, refresh_provider_result
 
 
@@ -56,6 +57,25 @@ def refresh_database(path, *, ids=None, apply=False):
             if current.get("document_type") != updated.get("document_type"):
                 change["stages"]["fields"] = {"before": current.get("document_type"),
                                               "after": updated.get("document_type")}
+            printed_changes = {}
+            for name in PRINTED_FIELDS:
+                before_field = {"value": (current.get("fields") or {}).get(name, ""),
+                                "source": ((current.get("field_metadata") or {}).get(name) or {}).get("source", "")}
+                after_field = {"value": (updated.get("fields") or {}).get(name, ""),
+                               "source": ((updated.get("field_metadata") or {}).get(name) or {}).get("source", "")}
+                if before_field != after_field:
+                    printed_changes[name] = {"before": before_field, "after": after_field}
+            if printed_changes:
+                change["stages"]["printed_fields"] = printed_changes
+            receiver_before = (current.get("fields") or {}).get("仓库接收人", "")
+            receiver_after = (updated.get("fields") or {}).get("仓库接收人", "")
+            source_before = ((current.get("field_metadata") or {}).get("仓库接收人") or {}).get("source", "")
+            source_after = ((updated.get("field_metadata") or {}).get("仓库接收人") or {}).get("source", "")
+            if (receiver_before, source_before) != (receiver_after, source_after):
+                change["stages"]["handwriting"] = {
+                    "before": {"receiver": receiver_before, "source": source_before},
+                    "after": {"receiver": receiver_after, "source": source_after},
+                }
             if current.get("review_reasons") != updated.get("review_reasons"):
                 change["review_reasons"] = {"before": current.get("review_reasons", []),
                                            "after": updated.get("review_reasons", [])}

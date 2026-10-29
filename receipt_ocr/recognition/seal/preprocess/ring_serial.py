@@ -1,4 +1,6 @@
 """Read small, oppositely oriented ring digits without changing company OCR."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 import math
 from pathlib import Path
 import re
@@ -226,7 +228,10 @@ def read_ring_serial(source, directory, index, prefix, artifact, *, reader, prov
     artifact["ring_serial_detection"] = detection
     candidates = []
     for rotation in (0, 180):
-        upright = cv2.rotate(crop, cv2.ROTATE_180) if rotation else crop
+        upright = crop
+        if rotation:
+            with image_operation('rotation', '旋转校正'):
+                upright = cv2.rotate(crop, cv2.ROTATE_180)
         upright = cv2.copyMakeBorder(upright, 10, 10, 10, 10,
                                     cv2.BORDER_CONSTANT, value=(255, 255, 255))
         path = directory / f"seal-{index}-serial-{rotation}.png"

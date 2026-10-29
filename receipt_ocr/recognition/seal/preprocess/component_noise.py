@@ -1,4 +1,6 @@
 """Reclassify fragmented, unreadable component rows using their own pixels."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from copy import deepcopy
 from pathlib import Path
 import re
@@ -32,6 +34,7 @@ def _texture_evidence(image, box, color):
     return evidence
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def component_noise_candidate(artifact, directory, index, prefix):
     """Return a separate two-row candidate; never change the saved raw input.
 

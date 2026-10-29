@@ -1,4 +1,6 @@
 """Separate a small outer serial-number band from upright company lettering."""
+
+from receipt_ocr.runtime.image_processing import timed_image
 from pathlib import Path
 
 import cv2
@@ -57,6 +59,7 @@ def small_outer_groups(image):
     return excluded
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def save_company_ring_input(source, destination):
     """Keep the existing company-only derivative unchanged."""
     image = _read_image(source)

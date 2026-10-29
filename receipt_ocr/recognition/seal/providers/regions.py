@@ -7,10 +7,10 @@ box exists it becomes the local region set, so the cropped evidence image and
 the local OCR pass both describe the one stamp the API decided about instead of
 two different ones.
 
-``商品付讫章`` (the dispatch stamp) never reaches this module:
+Stamps whose OCR explicitly reads ``商品付讫章`` do not reach this module:
 :func:`receipt_ocr.recognition.seal.providers.qingtong.compare_qingtong_seal` moves it to
-``excluded_candidates`` before a candidate list exists, so every box here is a
-stamp that may carry the customer's receipt seal.
+``excluded_candidates`` before a candidate list exists. A template label alone
+does not exclude a box; incomplete or conflicting OCR still needs a local read.
 """
 
 from __future__ import annotations

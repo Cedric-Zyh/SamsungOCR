@@ -19,7 +19,7 @@ def _bounds(values):
     return numbers if len(numbers) == 4 and all(math.isfinite(v) for v in numbers) else None
 
 
-def map_receiving_detections(artifact, *, minimum_vertical_overlap=.80):
+def _mapped_receiving_detections(artifact, *, minimum_vertical_overlap=.80):
     """Map a canonical detector box only when >=80% belongs to one real cell."""
     import numpy as np
     frame = artifact.get("rectangular_frame") or {}
@@ -70,8 +70,63 @@ def map_receiving_detections(artifact, *, minimum_vertical_overlap=.80):
         if len(possible) == 1:
             index = possible[0]
             out.append(dict(box, row_index=index, left=float(xs.min()),
-                            vertical_overlap=overlaps[index], detection_index=detection_index))
+                            vertical_overlap=overlaps[index], detection_index=detection_index,
+                            oriented_box=[float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]))
     return out
+
+
+def receiving_detection_evidence(artifact, *, minimum_vertical_overlap=.80):
+    """Separate tiny detached edge marks from same-row text, retaining an audit.
+
+    A short OCR token is not itself noise. Exclusion requires a substantially
+    larger, reliable text detection in the same measured cell, a disjoint
+    vertical text band, and a very small box adjacent to the cell boundary.
+    Nothing is inferred from the requested stamp text or from token spelling.
+    Raw detector boxes remain untouched.
+    """
+    _, confidence = _helpers()
+    mapped = _mapped_receiving_detections(artifact, minimum_vertical_overlap=minimum_vertical_overlap)
+    rows = artifact.get("rectangular_fixed_rows") or []
+    excluded = []
+    for index, row in enumerate(rows):
+        bounds = _bounds(row.get("crop_box") or [])
+        if bounds is None:
+            continue
+        height = bounds[3] - bounds[1]
+        candidates = [box for box in mapped if box["row_index"] == index]
+        # Do not let a lone tiny token or an uncertain giant box establish the
+        # geometry needed to discard another observed character.
+        support = [box for box in candidates
+                   if str(box.get("text") or "").strip() and confidence(box.get("confidence")) >= .75
+                   and box["oriented_box"][3] - box["oriented_box"][1] >= height * .35
+                   and box["oriented_box"][2] - box["oriented_box"][0] >= height * .5]
+        if not support:
+            continue
+        reference = max(box["oriented_box"][3] - box["oriented_box"][1] for box in support)
+        band = [min(box["oriented_box"][1] for box in support),
+                max(box["oriented_box"][3] for box in support)]
+        for box in candidates:
+            left, top, right, bottom = box["oriented_box"]
+            width, box_height, center = right-left, bottom-top, (top+bottom)/2
+            if box_height > min(reference * .2, height * .18) or width > height * .18:
+                continue
+            gap = max(2., reference * .05)
+            edge_limit = min(height * .12, reference * .15)
+            top_edge = bottom <= band[0] - gap and center - bounds[1] <= edge_limit
+            bottom_edge = top >= band[1] + gap and bounds[3] - center <= edge_limit
+            if not (top_edge or bottom_edge):
+                continue
+            excluded.append(dict(box, reason="small_off_baseline_edge_detection",
+                                 edge="top" if top_edge else "bottom", text_band=band,
+                                 physical_row_box=list(bounds), reference_text_height=reference))
+    rejected = {box["detection_index"] for box in excluded}
+    return {"mapped": [box for box in mapped if box["detection_index"] not in rejected],
+            "excluded": excluded}
+
+
+def map_receiving_detections(artifact, *, minimum_vertical_overlap=.80):
+    """Map usable detections, leaving excluded raw boxes in their source audit."""
+    return receiving_detection_evidence(artifact, minimum_vertical_overlap=minimum_vertical_overlap)["mapped"]
 
 
 def verify_blank_row(image_or_path, *, known_padding=20, reference_row_height=None):
@@ -228,8 +283,17 @@ def older_identity_observations(artifact):
     else:
         out = [r for r in reads if r.get("channel") == "center"
                and "收货专用章" in normalize(r.get("text"))]
-    for container in [artifact.get("rectangular_frame") or {}, artifact.get("orientation") or {}]:
-        boxes = container.get("detected_boxes") or []
+    evidence = receiving_detection_evidence(artifact)
+    excluded = {box["detection_index"] for box in evidence["excluded"]}
+    mapped_rows = {box["detection_index"]: box["row_index"] for box in evidence["mapped"]}
+    for key in ["rectangular_frame", "orientation"]:
+        container = artifact.get(key) or {}
+        # These row indices are measured in this frame only. Orientation
+        # detections use another coordinate space and retain no inferred row.
+        boxes = [dict(box, row_index=mapped_rows[index])
+                 if key == "rectangular_frame" and index in mapped_rows else box
+                 for index, box in enumerate(container.get("detected_boxes") or [])
+                 if key != "rectangular_frame" or index not in excluded]
         purposes = [b for b in boxes if "收货专用章" in normalize(b.get("text"))
                     and confidence(b.get("confidence")) >= .75 and _finite_points(b.get("points"))]
         if len(purposes) != 1:

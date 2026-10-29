@@ -13,6 +13,8 @@ from typing import Iterable
 from ..domain.ocr import TextObservation
 from .registry import PROVIDERS
 from ..runtime.execution import measure, reuse_text_boxes
+from ..imaging.working_images import buffered_key, cached_size, predictor_input
+from ..runtime.model_paths import model_home, prepare_model_cache
 
 
 # Intel/OpenMP may try to allocate a shared-memory control segment while
@@ -84,9 +86,8 @@ def is_lightweight_backend(value: str | None) -> bool:
 
 # PP-OCR runs several times faster through the ONNX Runtime provider than
 # through the default CPU kernels, with identical text on every sample the two
-# have been compared against.  The first use converts each model once and
-# caches the result next to the PaddleX weights, so that cost is paid per
-# machine rather than per receipt.  ``PADDLE_OCR_ENGINE`` accepts any other
+# have been compared against. Official ONNX model packages are cached under
+# the same model root as native Paddle weights. ``PADDLE_OCR_ENGINE`` accepts any other
 # PaddleX engine id; ``paddle`` / ``off`` / ``cpu`` restore the default kernels.
 # The setting is silently ignored when onnxruntime is not installed, so a
 # machine without it keeps working unchanged.
@@ -147,13 +148,7 @@ def _prediction_slot():
 
 
 def paddle_model_home() -> Path:
-    configured = os.getenv("PADDLE_PDX_CACHE_HOME") or os.getenv("PADDLE_MODEL_HOME")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    external = Path("/Volumes/SN770/OCR")
-    if external.is_dir():
-        return external
-    return (Path.home() / ".paddlex").resolve()
+    return model_home()
 
 
 def _pipeline(model_variant: str):
@@ -165,10 +160,8 @@ def _pipeline(model_variant: str):
     with _PIPELINE_LOCK:
         if model_variant in _PIPELINES:
             return _PIPELINES[model_variant]
-        model_home = paddle_model_home()
-        model_home.mkdir(parents=True, exist_ok=True)
+        prepare_model_cache()
         # PaddleX reads these during import, so they must be set first.
-        os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(model_home))
         os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         from paddleocr import PaddleOCR
@@ -196,9 +189,7 @@ def _line_recognizer(model_variant: str):
     with _PIPELINE_LOCK:
         if model_variant in _LINE_RECOGNIZERS:
             return _LINE_RECOGNIZERS[model_variant]
-        model_home = paddle_model_home()
-        model_home.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(model_home))
+        prepare_model_cache()
         os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         from paddleocr import TextRecognition
@@ -219,9 +210,7 @@ def _seal_pipeline():
     with _PIPELINE_LOCK:
         if "seal" in _SEAL_DETECTORS:
             return _SEAL_DETECTORS["seal"]
-        model_home = paddle_model_home()
-        model_home.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(model_home))
+        prepare_model_cache()
         os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         from paddleocr import PaddleOCR
@@ -269,13 +258,16 @@ def recognize_seal_text(image_path: str | Path) -> list[TextObservation]:
     if not provider_allowed("paddle_seal"):
         return []
     path = Path(image_path).expanduser().resolve()
-    with Image.open(path) as image:
-        width, height = image.size
+    size = cached_size(path)
+    if size is None:
+        with Image.open(path) as image:
+            size = image.size
+    width, height = size
     with model_operation("paddle_seal", "识别印章区域"), _prediction_slot():
         with measure("paddle_seal_model_setup"):
             pipeline = _seal_pipeline()
         with measure("paddle_seal_inference"), recognition_call("paddle_seal", "识别印章区域", path) as invocation:
-            results = list(pipeline.predict(input=str(path)))
+            results = list(pipeline.predict(input=predictor_input(path)))
             check_prediction_errors(invocation, results)
     output = []
     for result in results:
@@ -317,13 +309,13 @@ def recognize_line(
     if not provider_allowed(provider_of(model_variant)):
         return []
     path = Path(image_path).expanduser().resolve()
-    if not path.is_file():
+    if not path.is_file() and buffered_key(path) is None:
         raise FileNotFoundError(path)
     with model_operation(provider_of(model_variant), '识别文字行'), _prediction_slot():
         with measure('paddle_model_setup'):
             recognizer = _line_recognizer(model_variant)
         with measure("paddle_line_inference"), recognition_call(provider_of(model_variant), "识别文字行", path) as invocation:
-            results = list(recognizer.predict(input=str(path)))
+            results = list(recognizer.predict(input=predictor_input(path)))
             check_prediction_errors(invocation, results)
     output: list[TextObservation] = []
     for result in results:
@@ -358,13 +350,16 @@ def recognize_text(
     if not provider_allowed(provider_of(model_variant)):
         return []
     path = Path(image_path).expanduser().resolve()
-    if not path.is_file():
+    if not path.is_file() and buffered_key(path) is None:
         raise FileNotFoundError(path)
 
     from PIL import Image
 
-    with Image.open(path) as image:
-        image_width, image_height = image.size
+    size = cached_size(path)
+    if size is None:
+        with Image.open(path) as image:
+            size = image.size
+    image_width, image_height = size
     if image_width <= 0 or image_height <= 0:
         raise ValueError(f"无法读取图片尺寸: {path}")
 
@@ -377,7 +372,7 @@ def recognize_text(
         with measure('paddle_model_setup'):
             pipeline = _pipeline(model_variant)
         with measure("paddle_text_inference"), recognition_call(provider_of(model_variant), "文字检测与识别", inference_path) as invocation:
-            results = list(pipeline.predict(input=str(inference_path)))
+            results = list(pipeline.predict(input=predictor_input(inference_path)))
             check_prediction_errors(invocation, results)
     for result in results:
         texts = result.get("rec_texts", [])
@@ -424,12 +419,15 @@ def detect_text_boxes(
     if not provider_allowed(provider):
         return []
     path = Path(image_path).expanduser().resolve()
-    if not path.is_file():
+    if not path.is_file() and buffered_key(path) is None:
         raise FileNotFoundError(path)
     from PIL import Image
 
-    with Image.open(path) as image:
-        width, height = image.size
+    size = cached_size(path)
+    if size is None:
+        with Image.open(path) as image:
+            size = image.size
+    width, height = size
     if width <= 0 or height <= 0:
         return []
 
@@ -446,7 +444,7 @@ def _predict_text_boxes(path, model_variant, width, height):
         with measure("paddle_text_box_setup"):
             pipeline = _pipeline(model_variant)
         with measure("paddle_text_box_inference"), recognition_call(provider_of(model_variant), "文字框检测与识别", path) as invocation:
-            results = list(pipeline.predict(input=str(path)))
+            results = list(pipeline.predict(input=predictor_input(path)))
             check_prediction_errors(invocation, results)
 
     cacheable = not any(result.get('error') for result in results)

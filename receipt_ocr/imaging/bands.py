@@ -1,11 +1,15 @@
 """Seal text band crops."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 from .io import _read_image
+from .working_images import remember_png
 
 
+@timed_image('crop', '区域裁剪')
 def save_unwrapped_seal_bands(
     source: str | Path,
     destination_prefix: str | Path,
@@ -34,10 +38,12 @@ def save_unwrapped_seal_bands(
         if not ok:
             raise ValueError("圆章展开分带图片编码失败")
         encoded.tofile(str(destination))
+        remember_png(destination, band)
         output.append(destination)
     return output
 
 
+@timed_image('crop', '区域裁剪')
 def save_rectangular_seal_bands(
     source: str | Path,
     destination_prefix: str | Path,
@@ -71,10 +77,12 @@ def save_rectangular_seal_bands(
         if not ok:
             raise ValueError("矩形印章横向分带图片编码失败")
         encoded.tofile(str(destination))
+        remember_png(destination, band)
         output.append(destination)
     return output
 
 
+@timed_image('crop', '区域裁剪')
 def save_round_seal_type_band(
     source: str | Path,
     destination: str | Path,
@@ -114,6 +122,7 @@ def save_round_seal_type_band(
     if not ok:
         raise ValueError("圆章章类型分带图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, band)
     return destination
 
 

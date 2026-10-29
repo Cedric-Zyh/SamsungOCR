@@ -4,6 +4,10 @@ import math
 from pathlib import Path
 
 from PIL import Image
+import cv2
+import numpy as np
+from receipt_ocr.imaging.working_images import open_rgb, cached_transform
+from ..ocr.interface import write_temporary_input
 
 from .orientation_angles import choose_round_stamp_angle
 from .orientation_settings import FOUR_WAY_ANCHOR_MIN_CONFIDENCE
@@ -14,14 +18,17 @@ from ..layout_fields import inner_role
 def detect_orientation_boxes(source, scratch, *, model_variant):
     from ..ocr.interface import detect_boxes
 
-    with Image.open(source) as image:
+    with open_rgb(source) as image:
         width, height = image.size
         scale = min(1.0, 512 / max(width, height))
         if scale == 1:
             return detect_boxes(source, model_variant=model_variant)
         size = (max(1, round(width * scale)), max(1, round(height * scale)))
         preview = Path(scratch) / f"{Path(source).stem}-detection.png"
-        image.convert("RGB").resize(size, Image.Resampling.LANCZOS).save(preview)
+        rgb = image.convert('RGB')
+        scaled = cached_transform(np.asarray(rgb), 'resize', ('pil_rgb_lanczos', size),
+                                  lambda: np.asarray(rgb.resize(size, Image.Resampling.LANCZOS)))
+        write_temporary_input(preview, cv2.cvtColor(scaled, cv2.COLOR_RGB2BGR))
 
     boxes = detect_boxes(preview, model_variant=model_variant)
     anchor = choose_round_stamp_angle(

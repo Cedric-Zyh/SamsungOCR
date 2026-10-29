@@ -3,11 +3,12 @@
 The detector supplies all search locations. Agreeing reads select a complete
 line; reading context and the conservative white mask remain separate.
 """
+
+from receipt_ocr.runtime.image_processing import timed_image
 from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 import math
-import shutil
 import tempfile
 
 import cv2
@@ -18,6 +19,9 @@ from receipt_ocr.imaging.ellipse import _fit_ellipse_annulus, _ellipse_normal_ma
 from .detection_scale import detect_orientation_boxes
 from .orientation_angles import _stamp_type_marker_strength
 from .orientation_geometry import _rotation_geometry, _transform_points, rotate_stamp_image
+from .orientation_geometry import rotate_stamp_pixels
+from receipt_ocr.imaging.working_images import read_cv, write_cv, cached_transform, copy_image
+from ..ocr.interface import write_temporary_input
 
 # Bounded contexts measured in detected row heights, shared by all stamps.
 CONTEXTS = ((0, 0, .03, .03), (.35, .35, .03, .03), (.7, .7, .03, .03),
@@ -25,7 +29,7 @@ CONTEXTS = ((0, 0, .03, .03), (.35, .35, .03, .03), (.7, .7, .03, .03),
 
 
 def _write(path, image):
-    if not cv2.imwrite(str(path), image):
+    if not write_cv(path, image):
         raise ValueError("横排识别图片保存失败")
 
 
@@ -118,18 +122,19 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
                                  model_variant, prior=None, ink_color="red"):
     """Return a verified single-row plan, or leave the existing path in charge."""
     destination = Path(destination)
-    base, raw = cv2.imread(str(color)), cv2.imread(str(original))
+    base, raw = read_cv(color), read_cv(original)
     if base is None or raw is None:
         return None
     bh, bw = base.shape[:2]
-    raw = cv2.resize(raw, (bw, bh), interpolation=cv2.INTER_CUBIC)
+    raw = cached_transform(raw, 'resize', ('opencv_cubic', bw, bh),
+                           lambda: cv2.resize(raw, (bw, bh), interpolation=cv2.INTER_CUBIC))
     trials, seeds = [], []
     with tempfile.TemporaryDirectory(prefix="seal-horizontal-") as temp:
         scratch = Path(temp)
         for coarse in (0, 90, 180, 270):
             path = scratch / f"coarse-{coarse}.png"
             rotate_stamp_image(color, path, coarse)
-            image = cv2.imread(str(path))
+            image = read_cv(path)
             boxes = detect_orientation_boxes(path, scratch, model_variant=model_variant)
             for group in horizontal_groups(boxes, image.shape[1]):
                 group.update(coarse=coarse, path=path)
@@ -139,7 +144,7 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
         if not seeds or len(seeds) > 8:
             return None
         for index, seed in enumerate(seeds):
-            image = cv2.imread(str(seed["path"]))
+            image = read_cv(seed["path"])
             h, w = image.shape[:2]
             matrix, fw, fh = _rotation_geometry(w, h, seed["angle"])
             points = np.concatenate([np.asarray(_transform_points(b["points"], matrix))
@@ -147,19 +152,16 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
             x0, y0 = points.min(0)
             x1, y1 = points.max(0)
             height = y1 - y0
-            coarse_matrix, cw, ch = _rotation_geometry(bw, bh, seed["coarse"])
-            reference = cv2.warpAffine(raw, coarse_matrix, (cw, ch), flags=cv2.INTER_CUBIC,
-                                       borderValue=(255, 255, 255))
+            reference = rotate_stamp_pixels(raw, seed['coarse'])
             b, g, r = cv2.split(reference.astype(float))
             # Continuous source colour evidence: never threshold faint strokes
             # out, and never reconstruct characters from the required string.
             difference = r - np.minimum(b, g) if ink_color == "red" else b - np.minimum(r, g)
             soft = np.clip(255 - np.maximum(difference, 0) * 3, 0, 255).astype(np.uint8)
             for mode, source in (("existing", image), (f"soft-{ink_color}", soft), ("raw", reference)):
-                whole = cv2.warpAffine(source, matrix, (fw, fh), flags=cv2.INTER_CUBIC,
-                                       borderValue=(255, 255, 255))
+                whole = rotate_stamp_pixels(source, seed['angle'])
                 whole_path = scratch / f"whole-{index}-{mode}.png"
-                _write(whole_path, whole)
+                write_temporary_input(whole_path, whole)
                 for pad, (left, right, top, bottom) in enumerate(CONTEXTS):
                     box = [max(0, round(x0-left*height)), max(0, round(y0-top*height)),
                            min(fw, round(x1+right*height)), min(fh, round(y1+bottom*height))]
@@ -167,7 +169,7 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
                     row = cv2.copyMakeBorder(row, 16, 16, 16, 16, cv2.BORDER_CONSTANT,
                                              value=(255, 255, 255))
                     row_path = scratch / f"row-{index}-{mode}-{pad}.png"
-                    _write(row_path, row)
+                    write_temporary_input(row_path, row)
                     reads = reader.read_line(row_path, provider=provider)
                     trials.append(dict(seed=index, mode=mode, pad=pad, box=box,
                                        text="".join(x.text for x in reads),
@@ -182,20 +184,20 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
         if not preserves_verified_row(previous, winner["text"]):
             return None
         seed = seeds[winner["seed"]]
-        clean = cv2.imread(str(scratch / f"whole-{winner['seed']}-existing.png"))
+        clean = read_cv(scratch / f"whole-{winner['seed']}-existing.png")
         geometry = _fit_ellipse_annulus(_ocr_color_mask(clean, ink_color))
         if geometry is None:
             return None
         mx, my = _ellipse_normal_maps(*geometry)
         guide = SimpleNamespace(annulus=geometry, source_shape=clean.shape[:2], map_x=mx, map_y=my)
-        mono = cv2.imread(str(scratch / f"whole-{winner['seed']}-soft-{ink_color}.png"), 0)
+        mono = read_cv(scratch / f"whole-{winner['seed']}-soft-{ink_color}.png", 0)
         channels = [mono, mono, np.full_like(mono, 255)]
         working = cv2.merge(channels if ink_color == "red" else channels[::-1])
         quality = ring_evidence_quality(clean, working, guide)
         if not quality["accepted"]:
             return None
         center = destination.with_stem(destination.stem + "-row")
-        shutil.copyfile(winner["path"], center)
+        copy_image(winner["path"], center)
         _write(destination, working)
     left, top, right, bottom = winner["mask_box"]
     orientation = {
@@ -220,10 +222,11 @@ def prepare_horizontal_consensus(original, color, destination, *, reader, provid
             "guide": guide, "audit": audit}
 
 
+@timed_image('denoise', '去噪与干扰清理')
 def protect_consensus_border(source, destination, mask_path, guide):
     """Restore the pre-mask border pixels; never refit a partly erased stamp."""
-    image = cv2.imread(str(source))
-    mask = cv2.imread(str(mask_path), 0)
+    image = read_cv(source)
+    mask = read_cv(mask_path, 0)
     rim = np.zeros(image.shape[:2], np.uint8)
     cv2.ellipse(rim, guide.annulus[0][2], 255, max(5, round(min(image.shape[:2])*.03)))
     mask[rim > 0] = 0

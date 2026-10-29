@@ -1,4 +1,6 @@
 """Recover verified horizontal ink still joined to neighbouring artwork."""
+
+from receipt_ocr.runtime.image_processing import image_operation
 import math
 import re
 from types import SimpleNamespace
@@ -21,8 +23,9 @@ def _row_geometry(source, orientation, color, image_shape):
     for angle in orientation.get("rotation_steps", []):
         height, width = image.shape[:2]
         matrix, width, height = _rotation_geometry(width, height, angle)
-        image = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_CUBIC,
-                               borderValue=(255, 255, 255))
+        with image_operation('rotation', '旋转校正'):
+            image = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_CUBIC,
+                                   borderValue=(255, 255, 255))
     if image.shape[:2] != image_shape:
         return None
     annulus = _fit_ellipse_annulus(_ocr_color_mask(image, color))

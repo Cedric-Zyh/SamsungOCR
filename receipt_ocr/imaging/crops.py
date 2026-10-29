@@ -1,14 +1,18 @@
 """Region crop and seal ink preparation."""
 from __future__ import annotations
 
+from receipt_ocr.runtime.image_processing import timed_image
+
 from pathlib import Path
 import cv2
 import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
+from .working_images import remember_png
 from .colors import _color_masks, _isolate_red_ink, _isolate_blue_ink
 
 
+@timed_image('crop', '区域裁剪')
 def save_isolated_seal(
     source: str | Path,
     destination: str | Path,
@@ -35,6 +39,7 @@ def save_isolated_seal(
     if not ok:
         raise ValueError("印章裁剪图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, canvas)
 
 
 def _seal_source_crop(source, region):
@@ -44,16 +49,26 @@ def _seal_source_crop(source, region):
                  int(region.x * width):int((region.x + region.width) * width)]
 
 
+@timed_image('resize', '缩放调整')
 def _enlarge_seal(crop):
     scale = max(1000, crop.shape[1]) / max(1, crop.shape[1])
     return cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
 
-def seal_source_reference(source, region):
-    """Original pixels in exactly the color-isolation frame, without JPEG re-encoding."""
-    return _enlarge_seal(_seal_source_crop(source, region))
+def seal_source_reference(source, region, *, isolate_color=False):
+    """Source pixels in the isolation frame, optionally retaining trusted ink.
+
+    Isolate before enlarging: colour support and printed-rule rejection use
+    native-pixel neighbourhoods and must not change with the OCR scale.
+    """
+    crop = _seal_source_crop(source, region)
+    if isolate_color:
+        crop = (_isolate_red_ink(crop) if region.color == "red"
+                else _isolate_blue_ink(crop))
+    return _enlarge_seal(crop)
 
 
+@timed_image('crop', '区域裁剪')
 def save_color_isolated_seal(
     source: str | Path,
     destination: str | Path,
@@ -79,8 +94,10 @@ def save_color_isolated_seal(
     if not ok:
         raise ValueError("保留章色裁剪图片编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, canvas)
 
 
+@timed_image('crop', '区域裁剪')
 def save_rectangular_seal_code_line(
     source: str | Path,
     destination: str | Path,
@@ -140,8 +157,10 @@ def save_rectangular_seal_code_line(
     if not ok:
         raise ValueError("矩形编号章数字行编码失败")
     encoded.tofile(str(destination))
+    remember_png(destination, canvas)
 
 
+@timed_image('crop', '区域裁剪')
 def save_region_crop(
     source: str | Path,
     destination: str | Path,
@@ -161,6 +180,7 @@ def save_region_crop(
     encoded.tofile(str(destination))
 
 
+@timed_image('crop', '区域裁剪')
 def save_pixel_region_crop(
     source: str | Path,
     destination: str | Path,

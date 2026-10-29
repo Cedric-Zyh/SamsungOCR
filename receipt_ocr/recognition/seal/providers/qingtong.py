@@ -28,8 +28,10 @@ def compare_qingtong_seal(requirement, external, match_mode="any"):
         template = template if isinstance(template, dict) else {}
         label = template.get('label') if isinstance(template.get('label'), str) else ''
         text = seal.get('text_formatted') if isinstance(seal.get('text_formatted'), str) else ''
-        # Dispatch stamps cannot supply evidence for the customer's receipt seal.
-        if any('商品付讫章' in normalize_text(value) for value in (label, text)):
+        # Exclude a dispatch stamp only when its own OCR explicitly reads it.
+        # Template labels are guesses: a wrong dispatch template must not drop
+        # a customer's complete box, even when its OCR is incomplete or empty.
+        if '商品付讫章' in normalize_text(text):
             excluded_candidates.append({
                 'index': index, 'xyxy': seal.get('xyxy'),
                 'template_label': label, 'ocr_text': text,

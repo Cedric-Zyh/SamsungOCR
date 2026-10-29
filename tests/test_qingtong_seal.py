@@ -151,7 +151,6 @@ def test_missing_requirements_and_failed_api_cannot_pass():
 
 
 @pytest.mark.parametrize('label,text', [
-    ('中国外运物流发展有限公司广州分公司商品付讫章', REQUIRED),
     (REQUIRED, '中国外运物流发展有限公司广州分公司商品付讫章'),
     ('中国外运物流发展有限公司广州分公司商品付讫章',
      '中国外运物流发展有限公司广州分公司商品付讫章'),
