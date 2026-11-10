@@ -37,6 +37,34 @@ def test_phone_length_and_contact_label_do_not_reduce_score(text):
     assert metadata(text, .93)["confidence"] == .93
 
 
+@pytest.mark.parametrize("separator", ["：", ":", " ： ", " : "])
+def test_colon_between_printed_contact_and_phone_preserves_name_and_evidence(separator):
+    text = f"孙媛媛{separator}13812345678"
+    result = metadata(text, .97)
+    assert result["value"] == "孙媛媛"
+    assert result["confidence"] == .97
+    assert not result["low_confidence"]
+    assert result["candidates"][0]["evidence_text"] == text
+
+
+@pytest.mark.parametrize("label", ["座机", "电话", "仓库电话", "联系电话"])
+def test_colon_phone_labels_are_not_mistaken_for_contact_names(label):
+    result = metadata(f"{label}：0379-65580081")
+    assert result["value"] == ""
+    assert result["candidates"] == []
+
+
+def test_multiple_colon_contacts_keep_all_names_and_ignore_the_phone_label():
+    result = metadata("座机：0755-29042475/张三：13812345678/李四:13912345678")
+    assert result["value"] == "张三、李四"
+    assert result["confidence"] == .98
+
+
+def test_colon_contact_outside_printed_contact_area_is_not_selected():
+    rows = [row("孙媛媛：13812345678", y=.10), row("发货单位：广州速达", y=.35)]
+    assert printed_extras(rows)["仓库联系人"] == ""
+
+
 def test_low_quality_ocr_is_not_boosted():
     result = metadata("于春梅15508666378/王红鑫13853187051", .51)
     assert result["confidence"] == .51

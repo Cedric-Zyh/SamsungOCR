@@ -5,8 +5,7 @@ from __future__ import annotations
 from .dependencies import ResultDependencies
 
 from datetime import date, datetime
-import hashlib
-import json
+from receipt_ocr.api.revisions import review_revision, with_review_revision
 
 from flask import abort, jsonify, request
 
@@ -166,15 +165,6 @@ def import_dates(ctx: ResultDependencies):
 
 def list_result_history(ctx: ResultDependencies):
     return receipt_listing(ctx, latest_by_filename=False)
-
-
-def review_revision(result):
-    evidence = {key: value for key, value in result.items() if key not in {"review_revision", "ground_truth_saved"}}
-    return hashlib.sha256(json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-
-
-def with_review_revision(result):
-    return {**result, "review_revision": review_revision(result)}
 
 
 def get_result(ctx: ResultDependencies, result_id: int):

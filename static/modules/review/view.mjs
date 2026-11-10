@@ -21,7 +21,8 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     $('#toggle-review-queue').classList.toggle('hidden', mode === 'view');
     $('#review-session-progress').classList.toggle('hidden', mode === 'view');
     $('.review-workspace').classList.toggle('view-mode', mode === 'view');
-    $('#review-title').textContent = filenameParts(item.filename).name;
+    $('#review-title').textContent = item.fields?.['客户订单号'] || item.internal_fields?.['客户订单号']
+      || filenameParts(item.filename).name;
     $('#review-title').title = item.filename;
     $('#review-subtitle').textContent = [item.fields?.['客户名称'], item.document_type?.label, item.page_group?.page_count > 1 ? `共 ${item.page_group.page_count} 页` : ''].filter(Boolean).join(' · ');
     $('[data-save-state]').textContent = ''; $('[data-save-state]').classList.remove('unsaved');

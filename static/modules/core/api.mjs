@@ -42,8 +42,10 @@ function query(path, params = {}) {
 export function createApiClients(api) {
   return {
     samples: {
-      list: () => api('/api/samples'),
-      run: filenames => api('/api/samples/run', {method: 'POST', json: {filenames}}),
+      list: revision => api(query('/api/samples', {revision})),
+      queryDanzhengtong: ids => api('/api/samples/danzhengtong/jobs', {method: 'POST', json: {ids, action: 'query'}}),
+      run: (filenames, mode) => api('/api/samples/run', {method: 'POST', json: {filenames, ...(mode ? {mode} : {})}}),
+      progress: taskId => api(`/api/samples/tasks/${encodeURIComponent(taskId)}`),
       classify: scope => api('/api/samples/classify', {method: 'POST', ...(scope ? {json: scope} : {})}),
       classifyRequirements: (company, scope = {}) => api('/api/samples/classify-requirements', {method: 'POST', json: {company, ...scope}}),
       importFiles: body => api('/api/samples/import', {method: 'POST', body}),
@@ -74,12 +76,17 @@ export function createApiClients(api) {
       list: (importDate, options) => api(query('/api/queue', {import_date: importDate, include_related: 1}), options),
       control: options => api('/api/queue/control', options),
       manage: (ids, action) => api('/api/jobs/manage', {method: 'POST', json: {ids, action}}),
-      start: ids => api('/api/jobs/start', {method: 'POST', json: {ids}}),
+      start: (ids, mode = 'all') => api('/api/jobs/start', {method: 'POST', json: {ids, mode}}),
       cancel: ids => api('/api/jobs/cancel', {method: 'POST', json: {ids}}),
       remove: ids => api('/api/jobs/delete', {method: 'POST', json: {ids}}),
       cancelOne: id => api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {method: 'POST'}),
       retry: id => api(`/api/jobs/${encodeURIComponent(id)}/retry`, {method: 'POST'}),
       upload: (id, body) => api(`/api/jobs/${encodeURIComponent(id)}/upload`, {method: 'POST', body}),
+    },
+    danzhengtong: {
+      action: (ids, action) => api('/api/danzhengtong/jobs', {method: 'POST', json: {ids, action}}),
+      control: changes => api('/api/danzhengtong/control', changes ? {method: 'PATCH', json: changes} : undefined),
+      detail: id => api(`/api/jobs/${encodeURIComponent(id)}/danzhengtong`),
     },
     records: {
       list: (params, options) => api(query('/api/results', params), options),

@@ -8,10 +8,10 @@ import pytest
 from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict
 from receipt_ocr.domain.sample_seal_decision import sample_seal_decision, sample_warehouse_code_adjustment
 from receipt_ocr.domain.seal_standards import standard_comparison
-from receipt_ocr.web.sample_result_filters import (
+from receipt_ocr.samples.result_filters import (
     LIST_RESULT_SQL, decode_list_result, sample_result_filters, project_sample_seal_result,
 )
-from receipt_ocr.web.sample_statistics import evaluate_sample
+from receipt_ocr.samples.statistics import evaluate_sample
 
 
 REQUIREMENT = '上海朱泾DC021DC0收货专用章①'

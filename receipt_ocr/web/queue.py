@@ -170,7 +170,7 @@ def start_jobs(ctx: QueueDependencies, wake=None):
             or any(not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 100 for job_id in ids)):
         return jsonify(error="请选择有效的待开始回单"), 400
     try:
-        started = ctx.job_store.start_jobs(ids)
+        started = ctx.job_store.start_jobs(ids, mode=payload.get('mode', 'all'))
     except KeyError:
         return jsonify(error="所选回单不存在"), 404
     except ValueError as exc:

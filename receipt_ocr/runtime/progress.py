@@ -60,6 +60,7 @@ STAGE_LABELS = dict(routing="整页文字与版式", fields="印刷字段", prod
                     handwriting="手写签名", date="签收日期", seal="客户印章",
                     finalizing="结果核验与整理", saving="保存结果")
 MODEL_LABELS = dict(paddle_v6="Paddle v6 Small", paddle_seal="Paddle 印章专用",
+                    seal_detector="本地印章定位",
                     qingtong="清瞳", danzhengtong="单证通", system="系统",
                     paddle_doc_ori="Paddle 图片方向", paddle_textline_ori="Paddle 文字行方向")
 

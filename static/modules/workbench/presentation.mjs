@@ -34,9 +34,10 @@ export function workbenchIssues(record, workbench) {
 export function workbenchAttention(item, {workbench, paused, uploading}) {
   const record = item.record || {}, job = item.job;
   if (uploading) return {primary: '正在上传图片', secondary: '上传期间请保持页面打开'};
-  if (item.status === 'awaiting_upload') return {primary: '图片待上传', secondary: job?.start_requested === false ? '补传后点击“开始识别”' : '补传图片后继续识别'};
-  if (item.status === 'ready') return {primary: '待开始', secondary: '图片已保存在本地，点击“开始识别”后处理'};
+  if (item.status === 'awaiting_upload') return {primary: '图片待上传', secondary: job?.start_requested === false ? '补传后点击“开始运行”' : '补传图片后继续识别'};
+  if (item.status === 'ready') return {primary: '待开始', secondary: '图片已保存在本地，点击“开始运行”后处理'};
   if (item.status === 'queued') return {primary: paused ? '已暂停，等待继续' : '等待后台识别', secondary: ''};
+  if (job?.danzhengtong?.pending && !['queued', 'running'].includes(item.status)) return {primary: '常规识别已完成', secondary: job.danzhengtong.error_message || '单证通独立查询中，可查看已有结果'};
   if (item.status === 'running') return providerProgress(job, {paused})
     || {primary: paused ? '正在完成当前图片' : '正在识别', secondary: job?.processing_seconds ? `已运行 ${job.processing_seconds} 秒` : paused ? '保存结果后暂停' : ''};
   if (item.status === 'failed') return {primary: '识别失败', secondary: job?.error_message || record.error_message || '可以重新尝试识别', danger: true};

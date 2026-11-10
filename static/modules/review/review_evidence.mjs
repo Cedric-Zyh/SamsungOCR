@@ -7,6 +7,7 @@ import {simplifySealText} from '../core/seal_script.mjs';
 import {renderReceivingEvidence} from './receiving_evidence.mjs';
 import {renderReceivingNumberEvidence} from './receiving_number_evidence.mjs';
 import {renderSealWorkspace, bindSealWorkspaces} from './seal_workspace.mjs';
+import {isDanzhengtongSealArtifact, danzhengtongProcessedUrl} from './seal_component_fields.mjs';
 import {dateWorkspaceModel, requirementWorkspaceModel, renderRegionWorkspace, bindRegionWorkspace} from './region_workspace.mjs';
 
 export function createReviewEvidence({environment, ui, reviewState, api, services = createApiClients(api), fieldSchema, previewSeal, previewRegion}) {
@@ -29,7 +30,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const merged = [];
     const byStamp = new Map();
     for (const item of items || []) {
-      const key = `${item.index ?? ''}|${item.color ?? ''}`;
+      const key = `${isDanzhengtongSealArtifact(item) ? 'danzhengtong' : 'local'}|${item.index ?? ''}|${item.color ?? ''}`;
       const current = byStamp.get(key);
       if (!current) {
         const copy = {...item};
@@ -253,6 +254,12 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
       artifacts = mergeSealArtifacts(artifacts);
       target.innerHTML = artifacts.map(item => {
         activeArtifactItem = item;
+        if (isDanzhengtongSealArtifact(item)) {
+          const result = item.provider_text || item.combined_text || '';
+          const returned = danzhengtongProcessedUrl(item);
+          const audit = `<article class="artifact-group"><h4>单证通印章识别</h4><small>上传未旋正的增强图，直接采用单证通返回的旋正图及识别结果。</small><div class="artifact-grid">${artifactCard('印章原始区域', item.original_url)}${artifactCard('上传的增强图', item.input_url || item.color_isolated_url)}${artifactCard('单证通返回的旋正图', returned, result)}</div>${item.returned_image_error ? `<p class="low-note">旋正图取回失败：${escapeHtml(item.returned_image_error)}</p>` : ''}</article>`;
+          return renderSealWorkspace(item, {audit});
+        }
         const reference = item.visual_reference_match;
         const docOrientation = item.orientation?.mode === 'doc_ori';
         const orientationStatus = docOrientation && !(Number(item.orientation.confidence) >= 0.9)

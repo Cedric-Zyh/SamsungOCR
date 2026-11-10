@@ -26,7 +26,7 @@ def commit():
         '实收数量':'', '拒收数量':0}.items()}
 
 
-def test_real_pipeline_uploads_once_polls_and_maps_all_stages(monkeypatch, tmp_path):
+def test_real_pipeline_shares_one_document_request_for_fields_handwriting_and_date(monkeypatch, tmp_path):
     calls, sleeps = [], []
     def request(method, url, **kwargs):
         calls.append((method, url))
@@ -45,23 +45,21 @@ def test_real_pipeline_uploads_once_polls_and_maps_all_stages(monkeypatch, tmp_p
     analyzer = SimpleNamespace(seal_api=SimpleNamespace(enabled=False), run_stage=forbidden)
     (tmp_path/'sample.jpg').write_bytes(b'sample')
     result = run_configured(analyzer, tmp_path/'sample.jpg', None,
-        config={stage:['danzhengtong'] for stage in ('fields','handwriting','date','seal')})
+        config={stage:['danzhengtong'] for stage in ('fields','handwriting','date')})
     assert [x[0] for x in calls] == ['POST','POST','GET','GET']
     assert sleeps == [2,2]
     assert result['fields']['拒收数量'] == '0'
     assert result['fields']['实收数量'] == ''
     assert result['fields']['签收日期'] == '2025-08-27'
-    assert '测试有限公司' in result['seal_check']['recognized']
+    assert result['seal_check']['status'] == '未执行'
     assert result['date_check']['status'] == '匹配'
     assert result['date_check']['reliable'] is True
     assert result['date_check']['source'] == '单证通'
-    assert result['seal_check']['status'] == '匹配'
-    assert result['seal_check']['reliable'] is True
     assert result['field_metadata']['客户名称']['provider_ratio'] == 1
     assert 'confidence' not in result['field_metadata']['客户名称']
     assert result['danzhengtong']['query']['attempts'] == 2
     assert not result['danzhengtong']['simulated']
-    assert result['overall'] == '通过'
+    assert result['overall'] == '需人工复核'  # This plan deliberately leaves the seal unexecuted.
     assert '单证通日期/印章为文字提取结果，需人工核对原图' not in result['review_reasons']
     assert '仅单证通识别，文档版式待复核' not in result['review_reasons']
     assert result['document_type']['provider_fields_accepted'] is True
@@ -217,36 +215,63 @@ def test_default_http_session_ignores_proxy_environment(monkeypatch, tmp_path):
     assert len(sessions) == 1
 
 
-def test_recognition_serializes_documents(monkeypatch):
-    entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
-    calls = []
+def test_page_and_seal_recognition_do_not_hold_http_lock_while_waiting(monkeypatch):
+    entered, release, seal_finished = threading.Event(), threading.Event(), threading.Event()
 
     def submit_file(self, source, **kwargs):
-        calls.append(source)
-        if source == 'first':
-            entered.set()
-            assert release.wait(3)
         self.jobs[source] = {'status': 'submitted'}
         return {'data': {'reqUuid': source}}
 
+    def get_result(self, req_uuid, **kwargs):
+        if req_uuid == 'page':
+            entered.set()
+            assert release.wait(3)
+        else:
+            seal_finished.set()
+        return {'data': {'commitResult': commit()}}
+
     monkeypatch.setattr(dzt.Client, 'submit_file', submit_file)
-    monkeypatch.setattr(dzt.Client, 'get_result', lambda *a, **kw: {'data': {'commitResult': commit()}})
+    monkeypatch.setattr(dzt.Client, 'get_result', get_result)
     monkeypatch.setattr(dzt.time, 'sleep', lambda _: None)
-    first, second = dzt.Client(settings()), dzt.Client(settings())
+    page, seal = dzt.Client(settings()), dzt.Client(settings(model_id='stamp-scene'))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        one = pool.submit(first.recognize, 'first')
+        one = pool.submit(page.recognize, 'page')
         assert entered.wait(2)
-
-        def start_second():
-            second_started.set()
-            return second.recognize('second')
-
-        two = pool.submit(start_second)
+        two = pool.submit(seal.recognize, 'seal')
         try:
-            assert second_started.wait(2)
-            assert calls == ['first']
+            assert seal_finished.wait(2)
+            assert two.result(1)[1]['status'] == 'completed'
         finally:
             release.set()
         assert one.result(2)[1]['status'] == 'completed'
-        assert two.result(2)[1]['status'] == 'completed'
-    assert calls == ['first', 'second']
+
+
+def test_actual_http_requests_are_still_serialized_across_clients():
+    entered, release, second_started, second_entered = (threading.Event() for _ in range(4))
+
+    def request(method, url, **kwargs):
+        if url.endswith('/first'):
+            entered.set()
+            assert release.wait(3)
+        else:
+            second_entered.set()
+        return response({'ok': True})
+
+    transport = SimpleNamespace(request=request)
+    first, second = dzt.Client(settings(), transport), dzt.Client(settings(), transport)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(first._transport_request, 'GET', 'https://example.com/first')
+        assert entered.wait(2)
+
+        def next_request():
+            second_started.set()
+            return second._transport_request('GET', 'https://example.com/second')
+
+        two = pool.submit(next_request)
+        try:
+            assert second_started.wait(2)
+            assert not second_entered.wait(.05)
+        finally:
+            release.set()
+        assert one.result(2).json() == two.result(2).json() == {'ok': True}
+        assert second_entered.is_set()

@@ -7,7 +7,7 @@ import pytest
 from receipt_ocr.application.document_service import DocumentRecognitionService
 from receipt_ocr.jobs.worker import JobWorker
 from receipt_ocr.runtime.calls import recognition_call
-from receipt_ocr.web.samples import SampleCenter
+from sample_support import SampleCenter
 from test_job_queue import store, web_queue, queued, result, wait_until
 from test_sample_center import samples
 

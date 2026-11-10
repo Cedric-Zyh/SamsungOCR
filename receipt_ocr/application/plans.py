@@ -2,9 +2,10 @@
 
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import copy_context
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import time
 
 from ..providers.catalog import backend_catalog, backend_route, backend_label
@@ -13,16 +14,20 @@ from ..providers.selection import validate_stage_provider
 from ..providers.text import text_recognizer_scope
 from ..domain.stages import STAGES, STAGE_LABELS as LABELS
 from ..domain.issues import issue
-from ..domain.printed_field_selection import canonical_printed_field, select_printed_fields
+from ..domain.printed_field_selection import canonical_printed_field
+from ..domain.results import StageOutcome
+from .document_evidence import selected_document_fields
+from .snapshots import DocumentSnapshot
 
 SEAL_PROVIDERS = frozenset(item.id for item in PROVIDERS.of_kind("local_seal"))
 from ..runtime.scope import provider_scope
 from receipt_ocr.recognition.seal.reading_policy import secondary_read_providers_for_plan
 from ..application.context import DocumentContext
 from ..application.requests import StageRequest
+from .qingtong_dispatch import qingtong_dispatch
 from ..runtime.execution import measure, recognition_run
 
-from ..runtime.progress import model_stage, progress_context, report_plan, report_model_progress
+from ..runtime.progress import model_stage, report_plan
 from receipt_ocr.recognition.seal.orientation import (
     DEFAULT_SEAL_ORIENTATION_MODE,
     DOC_ORIENTATION_PROVIDER,
@@ -96,41 +101,44 @@ def validate_config(config, *, api_enabled=True):
 
 
 @contextmanager
-def _overlap_seal_request(analyzer, source, config):
-    """Upload once while local stages run; comparison still waits for fields."""
-    recognize = getattr(analyzer.seal_api, "recognize", None)
-    has_local_work = any(
-        method != "qingtong" for stage in STAGES for method in config.get(stage, [])
-    )
-    if (
-        "qingtong" not in config["seal"]
-        or not has_local_work
-        or not callable(recognize)
-    ):
-        yield None
+def _overlap_danzhengtong_requests(context, config, kwargs):
+    """Fetch scene evidence concurrently; mutate/compare fields only on main."""
+    needs_page = any('danzhengtong' in config[stage] for stage in ('fields', 'handwriting', 'date'))
+    needs_seal = 'danzhengtong' in config['seal']
+    if not needs_page and not needs_seal:
+        yield {}
         return
+    source, filename = context.source, getattr(context, 'filename', Path(context.source).name)
 
-    def request_seal():
-        with progress_context(method='qingtong', method_label='清瞳', target='客户印章',
-                              target_id='seal', channel='parallel'):
-            report_model_progress('seal', 'started', message='并行上传与印章识别')
-            started = time.perf_counter()
-            try:
-                with provider_scope({"qingtong"}):
-                    result = recognize(source)
-            except Exception:
-                report_model_progress('seal', 'failed',
-                                      elapsed_seconds=round(time.perf_counter() - started, 2))
-                raise
-            report_model_progress('seal', 'completed',
-                                  elapsed_seconds=round(time.perf_counter() - started, 2))
-            return result
+    def fetch_page():
+        from ..danzhengtong import Client
+        with model_stage('routing', 'danzhengtong', channel='parallel', message='并行上传与整页单证识别'), \
+                provider_scope({'danzhengtong'}):
+            fixture, trace = Client().recognize(source, file_name=filename)
+            return {'fixture': fixture, 'trace': trace}
 
-    # Only network I/O runs here. Paddle stays on its existing serialized path.
-    # Joining the worker also prevents a completed/failed run leaking work into
-    # the next receipt. The API client's existing timeout still applies.
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="receipt-seal") as pool:
-        yield pool.submit(copy_context().run, request_seal)
+    def fetch_seals(directory, prefix):
+        from ..danzhengtong_seal import fetch_requests
+        with model_stage('seal', 'danzhengtong', channel='parallel', message='并行上传与印章专用场景识别'), \
+                provider_scope({'danzhengtong'}):
+            return fetch_requests(source, artifact_dir=directory, artifact_url_prefix=prefix)
+
+    with ExitStack() as resources:
+        directory, prefix = kwargs.get('artifact_dir'), kwargs.get('artifact_url_prefix', '')
+        if needs_seal:
+            if directory:
+                directory = Path(directory) / 'seal-danzhengtong'
+                prefix = prefix.rstrip('/') + '/seal-danzhengtong'
+            else:
+                directory = Path(resources.enter_context(TemporaryDirectory(prefix='dzt-seals-')))
+        # The pool shuts down before a temporary input directory disappears.
+        pool = resources.enter_context(ThreadPoolExecutor(max_workers=2, thread_name_prefix='receipt-dzt'))
+        futures = {'seal_artifact_dir': directory, 'seal_artifact_url_prefix': prefix}
+        if needs_page:
+            futures['page'] = pool.submit(copy_context().run, fetch_page)
+        if needs_seal:
+            futures['seal'] = pool.submit(copy_context().run, fetch_seals, directory, prefix)
+        yield futures
 
 
 def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
@@ -139,11 +147,14 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
     errors = []
     output = None
     danzhengtong_cache = {}
+    danzhengtong_seal_cache = {}
     # An optional additional OCR read is authorized here.  The seal stage
     # itself remains provider-neutral and never knows how the reader runs.
     seal_secondary_readers = secondary_read_providers_for_plan(config)
-    # Route the document before any optional remote request. A failed provider
-    # cannot prevent another selected provider from supplying page evidence.
+    # The remote image request needs no printed fields. Start its network I/O
+    # before page OCR; routing and field comparison stay on the main thread.
+    # A failed provider cannot prevent another selected reader supplying page
+    # evidence, and a later routing rejection still prevents using its result.
     methods = list(
         dict.fromkeys(
             method
@@ -152,16 +163,17 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
             if method not in {"qingtong", "danzhengtong"} and method not in SEAL_PROVIDERS
         )
     )
-    for method in methods:
-        try:
-            with model_stage('routing', method), provider_scope({method}):
-                context.page(method)
-            if context.document_type["reliable"]:
-                break
-        except Exception:
-            continue  # The selected stage records its own failure below.
     remote_config = config if context.allows_remote_seal else {**config, "seal": []}
-    with _overlap_seal_request(analyzer, context.source, remote_config) as seal_future:
+    with qingtong_dispatch(analyzer.seal_api, context.source, remote_config) as qingtong, \
+            _overlap_danzhengtong_requests(context, config, kwargs) as dzt_futures:
+        for method in methods:
+            try:
+                with model_stage('routing', method), provider_scope({method}):
+                    context.page(method)
+                if context.document_type["reliable"]:
+                    break
+            except Exception:
+                continue  # The selected stage records its own failure below.
         for stage in STAGES:
             for method in config[stage]:
                 dedicated_seal = stage == "seal" and method in SEAL_PROVIDERS
@@ -193,11 +205,7 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                     directory,
                     prefix,
                     "qingtong_only" if method == "qingtong" else "local",
-                    # A local seal run reuses the request QingTong already made
-                    # so it can read inside the API's own stamp box.
-                    seal_future
-                    if method == "qingtong" or (stage == "seal" and method != "danzhengtong")
-                    else None,
+                    None,
                     config.get("acceptance") or {},
                     seal_orientation_mode=config.get(
                         "seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE
@@ -215,29 +223,45 @@ def _recognize_stages(analyzer, context, config, previous_fields, kwargs):
                         # provider it never uses.
                         if config.get("seal_orientation", DEFAULT_SEAL_ORIENTATION_MODE) == "doc_ori":
                             stage_scope.add(DOC_ORIENTATION_PROVIDER)
-                    reused = method == 'danzhengtong' and 'fixture' in danzhengtong_cache
+                    reused = method == 'danzhengtong' and stage != 'seal' and 'fixture' in danzhengtong_cache
                     with model_stage(stage, method, message='复用本张已返回结果' if reused else ''), \
                             measure(f"stage.{stage}.{method}"), provider_scope(stage_scope):
                         if method == "danzhengtong":
-                            from ..danzhengtong import stage_result
-                            result = stage_result(context, stage, danzhengtong_cache, request_fields)
+                            if stage == 'seal':
+                                from ..danzhengtong_seal import build_stage_result
+                                if not danzhengtong_seal_cache:
+                                    danzhengtong_seal_cache.update(dzt_futures['seal'].result())
+                                result = build_stage_result(context, request_fields,
+                                    danzhengtong_seal_cache['requests'], danzhengtong_seal_cache['trace'],
+                                    artifact_dir=dzt_futures['seal_artifact_dir'],
+                                    artifact_url_prefix=dzt_futures['seal_artifact_url_prefix'])
+                            else:
+                                from ..danzhengtong import stage_result
+                                if not danzhengtong_cache:
+                                    try:
+                                        danzhengtong_cache.update(dzt_futures['page'].result())
+                                    except Exception as exc:
+                                        danzhengtong_cache['error'] = str(exc)
+                                result = stage_result(context, stage, danzhengtong_cache, request_fields)
                         else:
+                            if stage == "seal":
+                                request = qingtong.bind(context, request)
                             result = analyzer.run_stage(context, stage, request)
-                    results[stage].append({"method": method, "result": result})
+                    results[stage].append(StageOutcome.completed(stage, method, result))
                     if output is None:
                         output = deepcopy(result)
                     if (
                         stage == "fields"
-                        and sum("result" in v for v in results[stage]) == 1
+                        and sum(v.has_result for v in results[stage]) == 1
                     ):
                         previous_fields = deepcopy(result.get("fields", {}))
                 except Exception as exc:
                     errors.append(issue("provider_failure", stage, f"{LABELS[stage]} / {method}：{exc}", provider=method))
-                    results[stage].append({"method": method, "error": str(exc)})
-            if stage == "fields" and any("result" in variant for variant in results[stage]):
+                    results[stage].append(StageOutcome.failed(stage, method, str(exc)))
+            if stage == "fields" and any(variant.has_result for variant in results[stage]):
                 # All downstream readers must compare against the same chosen
                 # fields that the review panel will display.
-                previous_fields.update(select_printed_fields(results[stage])["fields"])
+                previous_fields = selected_document_fields(results[stage], previous_fields)
     return results, errors, output, previous_fields
 
 
@@ -261,7 +285,14 @@ def run_configured(analyzer, source, preview_path=None, *, config=None, previous
         )
         if output is None:
             raise RuntimeError("；".join(error["message"] for error in errors))
+        snapshot = None
+        if kwargs.get('capture_assembly'):
+            snapshot = DocumentSnapshot.capture(
+                context, config, results, errors, previous_fields,
+            ).to_json()
         output = assemble_result(context, config, results, errors, output, previous_fields,
                                  source, preview_path, kwargs)
+        if snapshot is not None:
+            output['_assembly_snapshot'] = snapshot
     output["processing_seconds"] = round(time.perf_counter() - started, 2)
     return output

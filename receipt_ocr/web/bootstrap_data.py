@@ -3,17 +3,19 @@ from io import BytesIO
 import json
 from pathlib import Path
 import tempfile
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 import warnings
 import zlib
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image
-from .sample_library import sample_number
+from receipt_ocr.samples.library import sample_number
 from flask import jsonify, request, send_file
 
 from receipt_ocr.domain.seal_standards import requirement_key
 from receipt_ocr.persistence.database import now_iso
+from receipt_ocr.persistence.seal_standard_images import reserve_standard_image
 
 FORMAT = 'samsung-receipt-bootstrap'
 MAX_TOTAL = 450 * 1024 * 1024
@@ -71,7 +73,9 @@ def export_package(ctx, service, *, scope='all'):
                 manifest['samples'].append({'filename': name, 'entry': entry, 'image': member})
             directory = ctx.database.path.parent / 'seal-standards'
             for index, standard in enumerate(standards):
-                name = standard['image_url'].rsplit('/', 1)[-1]
+                name = unquote(urlsplit(standard['image_url']).path.rsplit('/', 1)[-1])
+                if not name or Path(name).name != name or '\\' in name:
+                    raise ValueError('标准章图片名称无效，请检查标准章')
                 member = f'standards/{index}.png'
                 add(directory / name, member)
                 manifest['standards'].append({key: standard[key] for key in
@@ -193,8 +197,9 @@ def import_package(ctx, service, stream, *, scope='all'):
                 if ctx.database.get_seal_standard(item['requirement'], _connection=con):
                     counts['standards_skipped'] += 1
                     continue
-                name = uuid4().hex + '.png'
-                target = directory / name
+                target = reserve_standard_image(directory, item['requirement'], revision=1,
+                    reserved_names=ctx.database.seal_standard_image_alias_names(_connection=con))
+                name = target.name
                 created.append(target)
                 target.write_bytes(item['_data'])
                 ctx.database.save_seal_standard({
@@ -209,12 +214,12 @@ def import_package(ctx, service, stream, *, scope='all'):
         raise
 
 
-def register_bootstrap_routes(bp, ctx, center):
+def register_bootstrap_routes(bp, get_dependencies, center):
     @bp.get('/api/bootstrap/export')
     def export_data():
         scope = request.args.get('scope', 'all')
         try:
-            stream = export_package(ctx, center(), scope=scope)
+            stream = export_package(get_dependencies(), center(), scope=scope)
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         suffix = {'all': 'bootstrap', 'samples': 'samples', 'standards': 'standards'}[scope]
@@ -229,6 +234,6 @@ def register_bootstrap_routes(bp, ctx, center):
         if upload is None:
             return jsonify(error='请选择初始化数据包 ZIP 文件'), 400
         try:
-            return jsonify(import_package(ctx, center(), upload.stream, scope=request.form.get('scope', 'all')))
+            return jsonify(import_package(get_dependencies(), center(), upload.stream, scope=request.form.get('scope', 'all')))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400

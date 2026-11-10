@@ -46,7 +46,7 @@ def test_standard_seal_selection_registration_replacement_and_review_guards():
 
 
 def test_process_history_grouping_and_request_lifecycle():
-    run_node("--test", "tests/process_history_ui.cjs", "tests/review_run_history.cjs")
+    run_node("--test", "tests/process_history_ui.cjs", "tests/review_run_history.cjs", "tests/review_run_timeline.cjs")
 
 
 def test_record_column_resize_lock_and_persistence():
@@ -73,7 +73,7 @@ def test_qingtong_selected_stamp_preview_sources():
 
 def test_sample_result_filter_scope_folding_and_batch_actions():
     run_node("--test", "tests/sample_center.cjs", "tests/sample_result_filters.cjs",
-             "tests/sample_thumbnails.cjs")
+             "tests/sample_thumbnails.cjs", "tests/sample_run_controls.cjs")
 
 
 def test_rendered_attributes_preserve_quotes_without_creating_event_handlers():

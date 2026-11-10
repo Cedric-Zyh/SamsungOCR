@@ -4,7 +4,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 import pytest
 
-from receipt_ocr.web import sample_statistics_export as exports
+from receipt_ocr.samples import statistics_export as exports
 from test_sample_center import samples
 
 

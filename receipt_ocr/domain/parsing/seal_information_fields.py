@@ -10,8 +10,11 @@ from .seal_station_fields import compare_station_fields
 
 # OCR may read the address-label colon as a comma. Treat only that explicit
 # label boundary as equivalent; punctuation inside names/codes stays literal.
-_LABEL = re.compile(r"授权代码:?|地址[:,，]|电话:")
+_LABEL = re.compile(r"授权代码:?|地址[:,，]|电话:|\*?维修热线:?")
 _CONTACT = {"地址", "电话"}
+# This alias is admitted only with a complete eight-digit local landline,
+# optionally preceded by an explicit area code. Do not guess missing digits.
+_REPAIR_HOTLINE_NUMBER = re.compile(r"(?:0[0-9]{2,3}-)?[1-9][0-9]{7}")
 _LEADING_PHONE = re.compile(
     r"(?:电话:)?(?P<phone>0[0-9]{2,3}-[0-9]{7,8})"
     r"(?P<identity>[\u4e00-\u9fff].*)"
@@ -67,12 +70,25 @@ def _fields(text):
     if not name:
         return None
     fields = {"名称": name}
+    has_hotline = any(marker.group().lstrip('*').rstrip(':') == '维修热线' for marker in markers)
     for index, marker in enumerate(markers):
-        key = marker.group().rstrip(":,，")
+        label = marker.group()
+        hotline = label.lstrip('*').rstrip(':') == '维修热线'
+        key = '电话' if hotline else label.rstrip(":,，")
         end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
         value = text[marker.end():end]
+        if hotline and label.startswith('*'):
+            # A single balanced decoration belongs to this contact field only.
+            # Stars elsewhere remain literal identity or malformed phone text.
+            if not value.endswith('*'):
+                return None
+            value = value[:-1]
         if not value or key in fields:
             return None
+        if hotline and not _REPAIR_HOTLINE_NUMBER.fullmatch(value):
+            return None
+        if has_hotline and key == '地址' and _IDENTITY_IN_CONTACT.search(value):
+            return None  # The new contact alias cannot hide another identity in an address.
         # Do not trim trailing characters: they may be a conflicting identity.
         if key == "授权代码" and not re.fullmatch(r"[0-9]+", value):
             return None
@@ -80,6 +96,28 @@ def _fields(text):
             return None
         fields[key] = value
     return fields
+
+
+def repair_hotline_field_match(requirement, recognized):
+    """Gate a saved-rule repair to the repair-hotline alias alone.
+
+    Accept raw strings, and require every non-phone identity field to remain
+    identical. A required phone is never optional or numerically normalized.
+    """
+    from .parsing_seals import normalize_seal_text_strict
+    expected, actual = map(normalize_seal_text_strict, (requirement, recognized))
+    if not any(marker.group().lstrip('*').rstrip(':') == '维修热线'
+               for text in (expected, actual) for marker in _LABEL.finditer(text)):
+        return None
+    required, observed = _fields(expected), _fields(actual)
+    if not required or not observed or not observed.get('电话'):
+        return None
+    if ({key: value for key, value in required.items() if key != '电话'}
+            != {key: value for key, value in observed.items() if key != '电话'}):
+        return None
+    if '电话' in required and required['电话'] != observed['电话']:
+        return None
+    return compare_information_fields(expected, actual)
 
 
 def compare_information_fields(expected, actual):

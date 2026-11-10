@@ -7,16 +7,17 @@ import {confirmInline} from '../core/inline_confirm.mjs';
 import {createWorkFilterState} from './filters.mjs';
 import {renderTaskCard, renderTaskEmpty} from './task_cards.mjs';
 import {createTaskDrawer} from './task_drawer.mjs';
+import {createDanzhengtongControls} from './danzhengtong.mjs';
 
 const WORK_PAGE_SIZE = 50;
 const START_BATCH_SIZE = 5000;
 import {WORK_FILTERS, matchesOverview, workFilterValues, selectionKey, overviewStatus, orderedQueue} from './overview.mjs';
 
 export function createProgress({
-  environment, ui, importsState, progressState, recordsState, reportState, resultsState,
+  environment, ui, importsState, progressState, recordsState,
   api, services = createApiClients(api), ReceiptWorkbench, ReceiptQueue, retryOne, startReviewScope,
   openProcessHistory = () => {}, openResultPreview = () => {}, flushSettings = async () => {},
-  onQueueChanged = () => {}, openManagedRecords = () => {}
+  onResultsChanged = () => {}, onQueueChanged = () => {}, openManagedRecords = () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, localStorage, FormData} = environment;
@@ -32,12 +33,13 @@ export function createProgress({
 
   const {renderTask, renderOverview} = createWorkbenchSummary({environment, ui, progressState, ReceiptWorkbench});
   const {loadDailyResults} = createDailyQuery({
-    environment, ui, progressState, importsState, recordsState, reportState, resultsState,
+    environment, ui, progressState, importsState,
     services, calendar, selected, viewState, pageSize: WORK_PAGE_SIZE,
     ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
-    renderQueueControl, renderTask, renderWorkbenchRows, onQueueChanged
+    renderQueueControl, renderTask, renderWorkbenchRows, onResultsChanged, onQueueChanged
   });
   const drawer = createTaskDrawer({environment, ui, progressState, renderWorkbenchRows, openManagedRecords});
+  const dzt = createDanzhengtongControls({environment, ui, services, progressState, recordsState, refresh: () => loadDailyResults()});
 
   async function showQueuedRetry(task) {
     $('#progress-date').value = (task.created_at || '').slice(0, 10) || localToday();
@@ -106,8 +108,7 @@ export function createProgress({
     } catch (error) { toast(`删除未全部完成：${error.message}，请刷新后重试。`, 'danger'); }
     finally {
       queueActionSaving = false;
-      recordsState.recordsStale = reportState.reportStale = true;
-      resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
+      onResultsChanged();
       // Force a fresh record query; a cached result would reappear without its job.
       await loadDailyResults().catch(error => toast(error.message, 'danger'));
       renderWorkbenchRows();
@@ -139,12 +140,11 @@ export function createProgress({
       setWorkFilter('all');
     }
     const filters = activeWorkFilters();
-    const allItems = progressState.workItems || [];
-    drawer.syncBatches(allItems);
-    const items = allItems.filter(item => !progressState.taskBatch || item.job?.task_id === progressState.taskBatch);
+    const items = (progressState.workItems || []).filter(item => item.status !== 'cancelled');
     const visible = orderedQueue(items, ReceiptWorkbench).filter(item =>
       matchesOverview(item, filters, ReceiptWorkbench, '', progressState.workSearch || '')
-      && overviewStatus(item, ReceiptWorkbench) !== 'completed');
+      && (overviewStatus(item, ReceiptWorkbench) !== 'completed'
+        || (filters.includes('waiting_remote') && item.job?.danzhengtong?.pending)));
     if ($('#workbench-needs-review')) $('#workbench-needs-review').checked = !!progressState.workNeedsReview;
     if (filters.length === 2 && filters.includes('queued') && filters.includes('running')) {
       visible.sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running'));
@@ -162,7 +162,7 @@ export function createProgress({
     const existing = new Set(shown.filter(selectable).map(selectionKey));
     for (const key of selected) if (!existing.has(key)) selected.delete(key);
     renderOverview(items);
-    drawer.renderSummary(allItems, items);
+    drawer.renderSummary(items);
     const label = progressState.workNeedsReview ? '待复核' : filters.length ? (filters.length === 3 && ['ready', 'queued', 'running'].every(value => filters.includes(value))
       ? WORK_FILTERS.processing : filters.map(value => WORK_FILTERS[value]).join('、')) : WORK_FILTERS.all;
     $('#workbench-visible-count').textContent = `${label} ${visible.length} 张`;
@@ -187,33 +187,44 @@ export function createProgress({
     syncSelection();
   }
 
-  function readyJobs() {
+  function readyJobs({respectRecordScope = true} = {}) {
     const day = $('#progress-date').value;
+    const batch = respectRecordScope && document.body.dataset.activePage === 'records' ? recordsState.batchFilter : '';
     if (!progressState.dailyReady || progressState.queueDay !== day) return [];
     return [...(progressState.queueJobs?.values() || [])].filter(job => job.status === 'ready'
       && job.start_requested !== true && job.id
-      && (job.import_date || job.created_at?.slice(0, 10) || progressState.queueDay) === day);
+      && (job.import_date || job.created_at?.slice(0, 10) || progressState.queueDay) === day
+      && (!batch || job.task_id === batch));
+  }
+
+  function startSelection(selectedOnly = false) {
+    const keys = selectedOnly || document.body.dataset.activePage !== 'records' ? selected : recordsState.selected;
+    const scoped = selectedOnly || !!keys?.size;
+    return {scoped, jobs: readyJobs({respectRecordScope: !selectedOnly}).filter(job => !scoped || keys?.has(`job:${job.id}`))};
   }
 
   function syncStartRecognition() {
+    dzt.render();
     const button = $('#queue-start');
     if (!button) return;
-    const jobs = readyJobs(), uploading = importsState.batchRunning || importsState.importScanning || importsState.uploadingJobs?.size;
-    button.textContent = progressState.queueStartSaving ? '正在开始' : '开始识别';
+    const {jobs, scoped} = startSelection(), uploading = importsState.batchRunning || importsState.importScanning || importsState.uploadingJobs?.size;
+    button.hidden = !jobs.length && !progressState.queueStartSaving;
+    button.textContent = progressState.queueStartSaving ? '正在开始' : scoped ? `运行所选（${jobs.length}）` : '开始运行';
     button.disabled = !jobs.length || !!uploading || !!progressState.queueStartSaving || !!progressState.queueControlSaving || queueActionSaving;
     button.setAttribute('aria-busy', String(!!progressState.queueStartSaving));
-    button.title = uploading ? '请等待当前图片读取和上传完成' : jobs.length ? `开始识别 ${$('#progress-date').value} 的 ${jobs.length} 张待开始回单` : '当天暂无已上传且待开始的回单';
-    button.setAttribute('aria-label', `开始识别，${button.title}`);
+    button.title = uploading ? '请等待当前图片读取和上传完成' : jobs.length ? `按设置运行${scoped ? '所选' : '当前范围'} ${jobs.length} 张待开始回单，本地与清瞳完成后即可查看，单证通独立查询` : scoped ? '所选回单中没有待开始的回单' : '当前范围暂无已上传且待开始的回单';
+    button.setAttribute('aria-label', `开始运行，${button.title}`);
     const note = $('#queue-start-note');
     if (note) note.textContent = uploading ? '正在读取或上传图片，完成后可开始识别。'
-      : jobs.length ? `当天 ${jobs.length} 张回单已上传，等待你点击开始识别。` : '导入的回单先保存在本地，上传完成后点击开始识别。';
+      : jobs.length ? `当前范围 ${jobs.length} 张回单已上传，点击“开始运行”启动已启用的识别来源。` : '导入的回单先保存在本地，上传完成后点击“开始运行”。';
     $('#queue-start-remote-note')?.classList.toggle('hidden', !jobs.some(job => job.uses_remote));
   }
 
-  async function startRecognition(selectedOnly = false) {
+  async function startRecognition(selectedOnly = false, mode = 'all') {
     syncStartRecognition();
-    if ($('#queue-start')?.disabled) return;
-    const day = $('#progress-date').value, ids = readyJobs().filter(job => selectedOnly !== true || selected.has(`job:${job.id}`)).map(job => job.id);
+    if (importsState.batchRunning || importsState.importScanning || importsState.uploadingJobs?.size
+      || progressState.queueStartSaving || progressState.queueControlSaving || queueActionSaving) return;
+    const day = $('#progress-date').value, ids = startSelection(selectedOnly).jobs.map(job => job.id);
     if (!ids.length) return;
     let started = 0, released = 0;
     progressState.queueStartSaving = true;
@@ -223,7 +234,7 @@ export function createProgress({
       await flushSettings();
       for (let offset = 0; offset < ids.length; offset += START_BATCH_SIZE) {
         const group = ids.slice(offset, offset + START_BATCH_SIZE);
-      const result = await (services.queue.start(group));
+        const result = await services.queue.start(group, mode);
         started += Number(result.started) || 0; released += group.length;
         // A day change during the request must keep its own list and controls.
         if (progressState.queueDay === day && $('#progress-date').value === day) {
@@ -248,14 +259,14 @@ export function createProgress({
     const pausing = control.status === 'pausing';
     $('#queue-control-label').textContent = control.paused ? (pausing ? '后台识别暂停中' : '后台识别已暂停') : '后台识别已开启';
     $('#queue-control-label').classList.toggle('paused', control.paused);
-    $('#queue-toggle').textContent = control.paused ? '继续识别' : '暂停识别';
-    if ($('#task-pause-scope')) $('#task-pause-scope').textContent = `${control.paused ? '继续' : '暂停'}作用于所有日期和批次`;
+    $('#queue-toggle').textContent = control.paused ? '继续常规识别' : '暂停常规识别';
+    if ($('#task-pause-scope')) $('#task-pause-scope').textContent = `${control.paused ? '继续' : '暂停'}作用于所有日期的任务`;
     $('#queue-toggle').disabled = !!progressState.queueControlSaving || !!progressState.queueStartSaving;
     $('#queue-toggle').classList.toggle('resume-queue', control.paused);
-    $('#queue-toggle').title = control.paused ? '继续查询及所有日期中已点击开始的回单；待开始回单仍保持等待' : '暂停单证通后续查询及后续回单；已发出的请求结束后暂停';
+    $('#queue-toggle').title = control.paused ? '继续所有日期中已开始的常规识别；单证通独立运行' : '暂停后续常规识别；单证通提交和查询独立运行';
     const notice = $('#queue-pause-notice');
     notice.classList.toggle('hidden', !control.paused);
-    notice.textContent = pausing ? `所有日期：已请求暂停查询，已发出的请求结束后不再续查；${control.queued} 张等待继续。`
+    notice.textContent = pausing ? `所有日期：常规识别暂停中，当前图片保存后停止；${control.queued} 张等待继续。单证通独立运行。`
       : `所有日期共 ${control.queued} 张等待继续。暂停期间可照常复核和导入。`;
     syncStartRecognition();
     syncSelection();
@@ -311,7 +322,8 @@ export function createProgress({
       progressState.workSearch = event.target.value; selected.clear();
       progressState.workVisibleLimit = WORK_PAGE_SIZE; renderWorkbenchRows();
     });
-    $('#queue-start')?.addEventListener('click', startRecognition);
+    dzt.initialize();
+    $('#queue-start')?.addEventListener('click', () => startRecognition());
     $$('[data-work-filter]').forEach(button => button.addEventListener('click', () => {
       selected.clear();
       const filter = button.dataset.workFilter;

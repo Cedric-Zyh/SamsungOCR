@@ -26,19 +26,22 @@ export function createRecordRow({ReceiptWorkbench, recordsState}) {
       || (verdict === '需人工复核' && item.review_status === '待复核')
       || (verdict === '通过' && item.review_status === '确认通过')
       || (verdict === '不通过' && item.review_status === '确认不通过');
-    const reviewDetail = item.review_status && !redundantReview ? `<small>${escapeHtml(item.review_status)}</small>` : '';
+    const remotePending = item.danzhengtong_task?.pending;
+    const reviewDetail = item.review_status && !redundantReview && !remotePending ? `<small>${escapeHtml(item.review_status)}</small>` : '';
     const verdictTitle = providerFailed ? verdict : [verdict, item.review_status].filter(Boolean).join(' · ');
     const errors = [...new Set([item.error_message, ...providerErrors(item)].filter(Boolean))];
     const primaryAction = providerFailed
       ? `<button type="button" class="mini-button row-review row-primary" data-retry-row="${item.id}">重试</button>`
       : `<button type="button" class="mini-button row-review row-secondary" data-open-review="${item.id}" data-review-mode="view">查看</button>`;
+    const remoteNoteText = remotePending ? `单证通${item.danzhengtong_task.status === 'waiting' ? '待返回' : item.danzhengtong_task.label || '处理中'}` : '';
+    const remoteNote = remotePending ? `<small class="record-remote-status" title="${escapeHtml(remoteNoteText)}">${escapeHtml(remoteNoteText)}</small>` : '';
     return `<tr class="${providerFailed ? 'failed-row' : item.review_status === '待复核' ? 'pending-row' : ''}">
       <td><input class="record-select" type="checkbox" value="${item.id}" ${recordsState.selected.has(Number(item.id)) ? 'checked' : ''} aria-label="选择订单 ${escapeHtml(orderLabel)}"></td>
       <td class="file-cell" title="${escapeHtml(orderLabel)}"><button type="button" class="record-file-link" data-open-review="${item.id}" data-review-mode="view" aria-label="查看订单 ${escapeHtml(orderLabel)}"><strong>${escapeHtml(orderLabel)}</strong></button><small class="record-customer" title="${escapeHtml(fields['客户名称'] || '')}">${escapeHtml(fields['客户名称'] || '—')}</small>${pageInfo ? `<small class="record-file-meta">${escapeHtml(pageInfo)}</small>` : ''}</td>
       <td><div class="date-cell"><div><span><em>要求</em>${escapeHtml(expected || '—')}</span><small class="date-actual${dateDifferent ? ' date-difference' : ''}"><span><em>签收</em>${escapeHtml(date.actual || '未识别')}</span>${!date.actual && ReceiptWorkbench.checkStatus(item, 'date') === '未识别' ? '' : checkLabel(ReceiptWorkbench.checkStatus(item, 'date'))}</small></div></div></td>
       <td>${checkLabel(ReceiptWorkbench.checkStatus(item, 'seal'))}</td>
       <td class="signature-cell" title="仓库联系人：${escapeHtml(warehouseContact)}；仓库接收人：${escapeHtml(warehouseReceiver)}"><div><span><em>仓库联系人</em>${escapeHtml(warehouseContact || '—')}</span><small><span><em>仓库接收人</em>${escapeHtml(warehouseReceiver || '未识别')}</span>${!warehouseReceiver && signatureStatus === '未识别' ? '' : checkLabel(signatureStatus)}</small></div></td>
-      <td class="verdict-cell" title="${escapeHtml(verdictTitle)}"><span class="pill ${statusClass(verdict)}">${escapeHtml(verdictLabel)}</span>${reviewDetail}${errors.map(message => `<small class="error-text" title="${escapeHtml(message)}">${escapeHtml(message)}</small>`).join('')}</td>
+      <td class="verdict-cell" title="${escapeHtml(verdictTitle)}"><span class="pill ${statusClass(verdict)}">${escapeHtml(verdictLabel)}</span>${reviewDetail}${remoteNote}${errors.map(message => `<small class="error-text" title="${escapeHtml(message)}">${escapeHtml(message)}</small>`).join('')}</td>
       <td><div class="row-actions">${primaryAction}<button type="button" class="mini-button row-more row-icon-action" data-more-record="${item.id}" data-more-filename="${escapeHtml(item.filename)}" aria-label="订单 ${escapeHtml(orderLabel)} 更多操作" aria-expanded="false" aria-controls="record-more-menu" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></svg></button></div></td></tr>`;
   }
 

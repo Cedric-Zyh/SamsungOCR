@@ -66,3 +66,24 @@ def load_selected_receipts(connection, selected, decode, merge):
         physical.extend(decode(row) for row in rows)
     projected = {item["id"]: item for item in merge(sorted(physical, key=lambda item: item["id"], reverse=True))}
     return [projected[item["id"]] for item in selected]
+
+
+def attach_danzhengtong_tasks(connection, items):
+    """Attach only operational status, never copy it into saved recognition evidence."""
+    if not items or not connection.execute("SELECT 1 FROM sqlite_master WHERE name='danzhengtong_jobs'").fetchone():
+        return items
+    from .job_views import remote_public, PUBLIC_COLUMNS
+    by_id = {item['id']: item for item in items}
+    ids = list(by_id)
+    for offset in range(0, len(ids), 500):
+        chunk = ids[offset:offset + 500]
+        placeholders = ','.join('?' for _ in chunk)
+        columns = ','.join('d.' + key for key in PUBLIC_COLUMNS.split(','))
+        rows = connection.execute(f'''SELECT j.id local_job_id,COALESCE(j.result_id,j.target_result_id) receipt_id,{columns}
+            FROM recognition_jobs j LEFT JOIN danzhengtong_jobs d ON d.job_id=j.id AND d.active=1
+            WHERE COALESCE(j.result_id,j.target_result_id) IN ({placeholders}) ORDER BY j.rowid''', chunk)
+        for row in rows:
+            item = by_id[row['receipt_id']]
+            item['danzhengtong_job_id'] = row['local_job_id']
+            item['danzhengtong_task'] = remote_public(row) if row['id'] else None
+    return items

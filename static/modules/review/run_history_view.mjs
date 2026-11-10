@@ -1,4 +1,5 @@
 import {escapeHtml, filenameParts} from '../core/ui.mjs';
+import {hasAsyncTiming, renderRunTimeline, timelineSummary} from './run_timeline.mjs';
 
 const STAGES = {routing:'整页文字与版式', fields:'印刷字段', products:'商品明细',
   handwriting:'手写签名', date:'签收日期', seal:'客户印章', other:'其他识别'};
@@ -79,7 +80,46 @@ function imageProcessingDetails(processing, open) {
     ${steps.length ? `<div class="review-call-table-wrap"><table class="review-image-processing-table"><thead><tr><th>处理项目</th><th>所属环节</th><th>次数</th><th>耗时</th></tr></thead><tbody>${steps.map(step => `<tr><td>${escapeHtml(step.label || step.operation || '图像处理')}${count(step.failed) ? `<small class="review-image-processing-failed">失败 ${count(step.failed)} 次</small>` : ''}</td><td>${escapeHtml(STAGES[step.stage] || step.stage_label || '其他处理')}</td><td>${count(step.calls)}</td><td>${escapeHtml(runDuration(step.seconds))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="review-call-note review-image-processing-empty">本次没有发生已计时的图像处理。</p>'}</details>`;
 }
 
-export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, processingOpen = false, loading = false, error = '', timingContext} = {}) {
+function remoteTimingDetails(values) {
+  const timings = Array.isArray(values) ? values.filter(value => value && typeof value === 'object') : [];
+  if (!timings.length) return '';
+  const states = {...STATUS,queued:'待提交',submitting:'提交中',waiting:'等待结果',
+    received:'已返回',applied:'已完成',conflict:'结果已返回',cancelled:'已停止'};
+  const requestLabels = {submit_query:'提交与查询',legacy_call:'历史调用耗时',partial:'已记录请求耗时'};
+  const elapsedLabels = {upload_to_result:'上传至结果',submission_to_result:'受理至结果',request:'请求总历时'};
+  const metric = (label, seconds, {approximate = false, title = ''} = {}) => {
+    const duration = runDuration(seconds);
+    return `<div class="review-remote-timing-metric"${title ? ` title="${escapeHtml(title)}"` : ''}><span>${escapeHtml(label)}</span><strong>${approximate && validSeconds(seconds) != null ? '约 ' : ''}${escapeHtml(duration)}</strong></div>`;
+  };
+  return `<section class="review-remote-timings" aria-label="远程接口耗时"><h4>远程接口耗时</h4>${timings.map(timing => {
+    const remote = timing.method === 'danzhengtong';
+    const label = timing.label || (remote ? '单证通' : timing.method === 'qingtong' ? '清瞳' : '远程服务');
+    const requestLabel = requestLabels[timing.request_scope] || (remote ? '请求累计' : '请求耗时');
+    const requestTitle = timing.request_scope === 'legacy_call' ? '历史逐次调用记录的耗时，未单独采集各请求分项'
+      : timing.request_scope === 'partial' ? '仅合计已采集请求的耗时，未记录阶段不计入'
+      : remote ? '请求累计耗时，不含查询等待间隔' : '本机发起请求到收到响应的端到端耗时';
+    const hint = timing.request_scope === 'legacy_call' ? '历史调用耗时沿用当时记录；未采集的分项显示未记录。'
+      : timing.request_scope === 'partial' ? '已记录耗时仅包含已采集请求；到结果历时含等待。'
+      : timing.request_scope === 'submit_query' ? '提交与查询耗时不含上传或等待间隔；到结果历时含等待。'
+      : '到结果历时含等待；请求累计不含等待间隔。';
+    const callCount = validSeconds(timing.calls) == null ? '' : `${count(timing.calls)} 次识别`;
+    const queryCount = validSeconds(timing.query_count) == null ? '' : ` ${count(timing.query_count)} 次`;
+    const requestSeconds = validSeconds(timing.request_seconds), elapsedSeconds = validSeconds(timing.elapsed_seconds);
+    const outsideRequests = remote && timing.request_scope === 'full' && timing.elapsed_scope === 'upload_to_result'
+      && requestSeconds != null && elapsedSeconds != null && elapsedSeconds >= requestSeconds - .02
+      ? Math.max(0,elapsedSeconds-requestSeconds) : null;
+    return `<article class="review-remote-timing" data-remote-timing="${escapeHtml(timing.method || '')}">
+      <div class="review-remote-timing-heading"><strong>${escapeHtml(label)}</strong>${callCount ? `<small>${escapeHtml(callCount)}</small>` : ''}<span class="review-calls-status" data-state="${escapeHtml(timing.status || 'unknown')}">${escapeHtml(states[timing.status] || '未记录')}</span></div>
+      <div class="review-remote-timing-metrics">${metric(requestLabel,timing.request_seconds,{title:requestTitle})}${remote
+        ? metric(elapsedLabels[timing.elapsed_scope] || '到结果总历时',timing.elapsed_seconds,{approximate:timing.elapsed_approximate === true,title:'包含上传或提交后等待、查询间隔及请求耗时'})
+        : metric('服务端处理',timing.server_seconds,{title:'服务端返回的处理时间，与本机请求端到端耗时分别记录'})}</div>
+      ${remote ? `<dl class="review-remote-timing-steps"><div><dt>上传</dt><dd>${escapeHtml(runDuration(timing.upload_seconds))}</dd></div><div><dt>提交</dt><dd>${escapeHtml(runDuration(timing.submit_seconds))}</dd></div><div><dt>查询${escapeHtml(queryCount)}</dt><dd>${escapeHtml(runDuration(timing.query_seconds))}</dd></div>${outsideRequests != null ? `<div><dt>等待/调度间隔</dt><dd>${timing.elapsed_approximate ? '约 ' : ''}${escapeHtml(runDuration(outsideRequests))}</dd></div>` : ''}</dl><p class="review-remote-timing-hint">${escapeHtml(hint)}</p>` : ''}
+      ${timing.note ? `<p class="review-remote-timing-note">${escapeHtml(timing.note)}</p>` : ''}</article>`;
+  }).join('')}</section>`;
+}
+
+export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explanationOpen = false, processingOpen = false,
+  expandedLanes = new Set(), selectedSpan = '', detailsOpen = false, loading = false, error = '', timingContext} = {}) {
   const available = data.available === true;
   const summary = data.summary || {}, calls = Array.isArray(data.calls) ? data.calls : [];
   const groups = new Map();
@@ -92,16 +132,22 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
     const rank = key => ORDER.includes(key) ? ORDER.indexOf(key) : ORDER.length;
     return rank(a.key) - rank(b.key);
   });
-  const selected = openKeys || new Set([groups.has('seal') ? 'seal' : sorted[0]?.key]);
+  const selected = openKeys || new Set();
   const displayCount = name => available ? count(summary[name]) : '—';
   const status = STATUS[data.status] || (available ? '已记录' : '未记录');
   const heading = `<div class="review-runs-summary"><div class="review-runs-stat"><span>实际调用</span><strong>${displayCount('total')}</strong><span>次</span></div><div class="review-runs-stat"><span>成功</span><strong>${displayCount('succeeded')}</strong><span>次</span></div><div class="review-runs-stat" data-state="${available && count(summary.failed) ? 'failed' : 'zero'}"><span>失败</span><strong>${displayCount('failed')}</strong><span>次</span></div></div>
-    <div class="review-runs-toolbar"><div class="review-runs-toolbar-label"><span>仅最近一次处理</span><span class="review-calls-status" data-state="${escapeHtml(data.status || 'unknown')}">${status}</span></div><button type="button" class="text-button" data-runs-refresh${loading ? ' disabled' : ''}>${loading ? '正在读取…' : '刷新'}</button></div>
+    <div class="review-runs-toolbar"><div class="review-runs-toolbar-label"><span>${data.incremental ? '当前结果采用的识别调用' : '仅最近一次处理'}</span><span class="review-calls-status" data-state="${escapeHtml(data.status || 'unknown')}">${status}</span></div><button type="button" class="text-button" data-runs-refresh${loading ? ' disabled' : ''}>${loading ? '正在读取…' : '刷新'}</button></div>
     ${error ? `<p class="review-call-error" role="alert">${escapeHtml(error)}</p>` : ''}`;
-  if (!available) return `${heading}<div class="review-calls-empty" role="status"><strong>本次识别调用明细未记录</strong><p>${escapeHtml(data.note || '此记录尚未采集逐次识别信息，重新识别后可查看。')}</p></div>`;
+  const remoteTimings = remoteTimingDetails(data.remote_timings);
+  const flow = timelineSummary(data);
+  const total = `<div class="review-flow-summary"><div><span>${escapeHtml(flow.label)}</span><strong>${flow.approximate && flow.seconds != null ? '约 ' : ''}${escapeHtml(runDuration(flow.seconds))}</strong></div><span>开始 <time>${escapeHtml(runTime(flow.started_at))}</time></span></div>`;
+  const timeline = renderRunTimeline(data,{expandedLanes,selectedSpan});
+  const detailStart = `<details class="review-run-details" data-run-details="all"${detailsOpen ? ' open' : ''}><summary>接口耗时与逐次调用 <span>展开查看</span></summary><div class="review-run-details-content">`;
+  if (!available) return `${heading}${total}${timeline}${detailStart}${remoteTimings}<div class="review-calls-empty" role="status"><strong>本次识别调用明细未记录</strong><p>${escapeHtml(data.note || '此记录尚未采集逐次识别信息，重新识别后可查看。')}</p></div></div></details>`;
   const timing = runTiming(data, timingContext);
-  return `${heading}<div class="review-call-times"><span>开始 <time>${escapeHtml(runTime(data.started_at))}</time></span><span title="包含图像处理，不含模型初始化">处理用时 <strong>${escapeHtml(runDuration(timing.recognition))}</strong></span></div>
-    <div class="review-model-initialization"><span>模型初始化</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : '单独计时，不计入处理用时'}</small></div>
+  return `${heading}${total}${timeline}${detailStart}<div class="review-call-times"><span title="本机处理记录，异步流程不使用相加值代替全流程历时">处理用时 <strong>${escapeHtml(runDuration(hasAsyncTiming(data) ? null : timing.recognition))}</strong></span></div>
+    <div class="review-model-initialization"><span>${data.incremental ? '保留记录的模型初始化' : '模型初始化'}</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : data.incremental ? '归属此前保留的识别流程' : '单独展示，已计入全流程历时'}</small></div>
+    ${remoteTimings}
     ${data.note ? `<p class="review-call-note">${escapeHtml(data.note)}</p>` : ''}
     <div class="review-call-groups">${sorted.length ? sorted.map(group => {
       const timings = group.calls.map(({call}) => validSeconds(call.seconds));
@@ -113,5 +159,5 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
     ${imageProcessingDetails(data.image_processing, processingOpen)}</div>
     <details class="review-call-explanation" data-call-explanation="count"${explanationOpen ? ' open' : ''}><summary>计数说明</summary>
       ${count(summary.cache_hits) ? `<p class="review-call-note">复用已有识别结果 ${count(summary.cache_hits)} 次，未计入实际调用。</p>` : ''}
-      <p class="review-call-note">处理用时已包含图像处理。实际调用只计图片识别，旋转、裁剪等处理与缓存复用不增加识别次数。并行识别时，各次耗时相加可能超过处理用时。</p></details>`;
+      <p class="review-call-note">处理用时已包含图像处理。实际调用只计图片识别，旋转、裁剪等处理与缓存复用不增加识别次数。并行识别时，各次耗时相加可能超过全流程历时；时间轴按实际起止时间定位。</p></details></div></details>`;
 }

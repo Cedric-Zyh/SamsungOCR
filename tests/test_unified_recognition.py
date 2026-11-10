@@ -44,7 +44,7 @@ def unified(tmp_path, monkeypatch):
     analyzer = ReceiptAnalyzer(SimpleNamespace(enabled=False), text_recognizer=reader)
     decoded, caches = [], []
     monkeypatch.setattr(plans, "backend_catalog", lambda: [{"id": "paddle_v6", "available": True}])
-    monkeypatch.setattr(io, "_decode_image", lambda p: decoded.append(p) or np.zeros((2, 2)))
+    monkeypatch.setattr(io, "_decode_pixels", lambda p: decoded.append(p) or np.zeros((2, 2)))
 
     def stage(context, name, request):
         caches.append(context.image_cache)

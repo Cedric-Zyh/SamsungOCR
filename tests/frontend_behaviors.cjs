@@ -7,7 +7,7 @@ const workbench = require(path.join(root, 'static/modules/core/workbench.mjs')).
 const modulePaths = {records:'records/records', imports:'imports/imports', recognition_plan:'imports/recognition_plan', review:'review/review', review_evidence:'review/review_evidence', review_queue:'review/review_queue', progress:'workbench/workbench', report:'report/report', navigation:'shell/navigation'};
 const modules = Object.fromEntries(Object.entries(modulePaths).map(([name, modulePath]) => [name, require(path.join(root, `static/modules/${modulePath}.mjs`))]));
 const helpers = require(path.join(root, 'static/modules/core/ui.mjs'));
-const {createState} = require(path.join(root, 'static/modules/core/state.mjs'));
+const {createState, createResultChanges} = require(path.join(root, 'static/modules/core/state.mjs'));
 const {createApplication, browserEnvironment} = require(path.join(root, 'static/modules/shell/application.mjs'));
 const {createApi} = require(path.join(root, 'static/modules/core/api.mjs'));
 
@@ -61,7 +61,8 @@ function harness(names = []) {
     renderProductTable:()=>{},setupDateConfirmation:()=>{},setupSealConfirmation:()=>{},setReviewImage:()=>{},focusReviewImage:()=>{},renderArtifacts:()=>{},
     renderHistory:async()=>{},renderGroundTruth:async()=>{},loadReviewQueue:async()=>{},continueReview:async()=>{},refreshVisibleResults:async()=>{},
     startReviewScope:async()=>{},getReviewScope:()=>({kind:'day',filters:{}}),
-    ensureReviewScope:()=>{},onQueueChanged:()=>{},onDateChanged:()=>{},openManagedRecords:()=>{},
+    ensureReviewScope:()=>{},onQueueChanged:()=>{},onDateChanged:()=>{},onSelectionChanged:()=>{},openManagedRecords:()=>{},
+    onResultsChanged:createResultChanges(bags).resultsChanged,
     markReviewSaved:(id,status)=>{if(status==='待复核')bags.review.reviewDeferred.add(id);else bags.review.reviewDeferred.delete(id);},
     showPage:page=>{context.document.body.dataset.activePage=page;},
   };

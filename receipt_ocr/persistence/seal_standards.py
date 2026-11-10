@@ -1,5 +1,6 @@
 """One explicit standard per requirement, independent of receipt retention."""
 from contextlib import nullcontext
+from urllib.parse import quote
 
 from .database_clock import now_iso
 from ..domain.seal_standards import requirement_key
@@ -13,6 +14,9 @@ def _validate_horizontal_text(value, shape):
 
 
 def initialize_seal_standards(connection):
+    connection.execute('''CREATE TABLE IF NOT EXISTS seal_standard_image_aliases (
+        old_name TEXT PRIMARY KEY, image_name TEXT NOT NULL
+    )''')
     connection.execute("""CREATE TABLE IF NOT EXISTS seal_standards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         requirement_key TEXT NOT NULL UNIQUE,
@@ -44,11 +48,19 @@ def standard_record(row):
     if row is None:
         return None
     item = dict(row)
-    item["image_url"] = f"/files/seal-standards/{item.pop('image_name')}"
+    item["image_url"] = '/files/seal-standards/' + quote(item.pop('image_name'), safe='')
     return item
 
 
 class SealStandardOperationsMixin:
+    def seal_standard_image_name(self, name):
+        with self.connect() as connection:
+            row = connection.execute('SELECT image_name FROM seal_standard_image_aliases WHERE old_name=?', (name,)).fetchone()
+            return row[0] if row else name
+
+    def seal_standard_image_alias_names(self, *, _connection):
+        return [row[0] for row in _connection.execute('SELECT old_name FROM seal_standard_image_aliases')]
+
     def get_seal_standard(self, requirement, *, _connection=None):
         with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
             return standard_record(connection.execute(

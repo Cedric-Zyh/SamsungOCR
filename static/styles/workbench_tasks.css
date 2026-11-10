@@ -135,3 +135,56 @@ body[data-active-page="progress"] .app-sidebar {background:#f2f1ed}
 
 .workbench-page .mini-button.queue-delete {color:#a65f4e}
 .workbench-page .mini-button.queue-delete:hover:not(:disabled) {background:#f5e9e1}
+/* Independent remote requests share the workbench without blocking OCR. */
+.hero .recognition-start-group {display:none;align-items:center;gap:0}
+body[data-active-page="records"] .hero .recognition-start-group {display:flex}
+.recognition-start-menu,.dzt-more {position:relative;margin:0;padding:0;border:0;background:transparent}
+.recognition-start-menu>summary,.dzt-more>summary {padding:0;list-style:none;cursor:pointer;font:inherit}
+.recognition-start-menu>summary::-webkit-details-marker,.dzt-more>summary::-webkit-details-marker {display:none}
+.recognition-start-menu>div,.dzt-more>div {position:absolute;right:0;top:calc(100% + 7px);z-index:40;min-width:180px;padding:5px;background:#fcfbf8;border:1px solid var(--archive-line);border-radius:6px;box-shadow:0 6px 20px #272b1f12;font-size:12px;line-height:1.5;color:var(--archive-text)}
+.recognition-start-menu>div>button,.dzt-more>div>button {display:block;width:100%;height:auto;padding:8px 10px;text-align:left;border:0;background:transparent;border-radius:3px;font:inherit;white-space:nowrap;cursor:pointer;color:inherit}
+.recognition-start-menu>div>button:hover,.dzt-more>div>button:hover {background:#eeeee6}
+body[data-active-page="records"] .hero .recognition-start-group #queue-start {border-radius:3px 0 0 3px;border-right:0}
+:root body .hero .recognition-start-menu>summary {display:flex;align-items:center;justify-content:center;width:29px;height:38px;padding:0;border-radius:0 3px 3px 0;box-sizing:border-box}
+.recognition-start-menu>summary svg {width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.5}
+.dzt-task-strip {display:flex;align-items:center;justify-content:space-between;gap:10px 18px;margin:0 18px;padding:8px 0;border-top:1px solid #dde1d5;color:var(--archive-muted);font-size:12px;line-height:1.6}
+.dzt-status-copy {display:flex;align-items:center;flex-wrap:wrap;min-width:0;gap:4px 14px}
+.dzt-provider-label {font-weight:550;color:#59664f}
+#dzt-summary {font-variant-numeric:tabular-nums}
+.dzt-task-strip #dzt-auto-note {display:inline-flex;align-items:center;gap:5px;color:#7d8375;font-size:11px}
+#dzt-auto-note:empty {display:none}
+#dzt-auto-note:not(:empty)::before {content:"";width:5px;height:5px;border-radius:50%;background:#a7aa9f;flex:none}
+#dzt-auto-note[data-enabled="true"]::before {background:#7d8f6b}
+.dzt-strip-actions {display:flex;align-items:center;gap:7px;flex:none}
+.dzt-query-button {display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:3px 7px;border:1px solid transparent;border-radius:3px;background:transparent;color:#566849;font:inherit;font-size:12px;line-height:1.5;cursor:pointer;white-space:nowrap}
+.dzt-query-button[hidden] {display:none}
+.dzt-query-button svg {width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.dzt-query-button:hover:not(:disabled) {border-color:#d2d9c8;background:#e9ede2}
+.dzt-query-button:disabled {opacity:.5;cursor:wait}
+.dzt-menu-trigger {display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1px solid transparent;border-radius:3px;color:#777e6d;background:transparent;box-sizing:border-box;line-height:1}
+.dzt-menu-trigger svg {width:17px;height:17px;fill:currentColor;stroke:none}
+.dzt-menu-trigger:hover,.dzt-control-menu[open]>.dzt-menu-trigger {background:#e9ede2;border-color:#d2d9c8;color:#4f6043}
+.dzt-control-menu>.dzt-settings-panel {width:238px;min-width:0;padding:7px;box-sizing:border-box}
+.dzt-settings-title {margin:1px 8px 6px;color:var(--archive-muted);font-size:11px;font-weight:500}
+.dzt-control-menu .dzt-settings-panel .dzt-preference {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:36px;margin:0;padding:8px;border:0;border-radius:3px;background:transparent;color:var(--archive-text);font:inherit;font-size:12px;line-height:1.5;text-align:left;cursor:pointer}
+.dzt-control-menu .dzt-preference:hover:not(:disabled) {background:#f0f1e9}
+.dzt-control-menu .dzt-preference:disabled {opacity:.45;cursor:wait}
+.dzt-switch {position:relative;width:28px;height:16px;border-radius:10px;background:#cccfc5;flex:none;transition:background .15s}
+.dzt-switch::after {content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:#fcfbf8;box-shadow:0 1px 2px #0001;transition:transform .15s}
+.dzt-preference[aria-checked="true"] .dzt-switch {background:#778665}
+.dzt-preference[aria-checked="true"] .dzt-switch::after {transform:translateX(12px)}
+.dzt-settings-hint {margin:6px 8px 2px;padding-top:8px;border-top:1px solid var(--archive-soft-line);font-size:11px;line-height:1.65;color:var(--archive-muted)}
+.dzt-task-strip :is(button,summary):focus-visible,.recognition-start-menu>summary:focus-visible {outline:2px solid #947343;outline-offset:2px}
+.dzt-row-status,.dzt-request-id {color:var(--archive-muted);font-size:11px}
+.dzt-result-dialog {width:min(600px,calc(100vw - 32px));max-height:85vh;padding:24px;border:1px solid var(--archive-line);border-radius:8px;background:#fcfbf8;color:var(--archive-text);font-family:inherit;font-size:13px}
+.dzt-result-dialog::backdrop {background:#252e2938}
+.dzt-result-dialog header {display:flex;align-items:center;justify-content:space-between;gap:16px}
+.dzt-result-dialog h2 {margin:0;font-size:18px;color:var(--archive-ink)}
+.dzt-result-fields {display:grid;grid-template-columns:100px 1fr;gap:12px 20px;margin:24px 0}
+.dzt-result-fields dt {color:var(--archive-muted)}
+.dzt-result-fields dd {margin:0;overflow-wrap:anywhere}
+.dzt-resubmit {border-top:1px solid var(--archive-soft-line);margin-top:24px;padding-top:16px}
+.dzt-resubmit summary {cursor:pointer}
+.dzt-resubmit p {font-size:12px;color:var(--archive-muted)}
+@media(max-width:720px) {.dzt-task-strip {margin:0 12px;gap:10px}.dzt-status-copy {gap:3px 10px}.dzt-task-strip #dzt-auto-note {display:none}.dzt-result-fields {grid-template-columns:80px 1fr}}
+@media(prefers-reduced-motion:reduce) {.dzt-switch,.dzt-switch::after {transition:none}}

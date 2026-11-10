@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from math import isfinite
 from pathlib import Path
+from time import perf_counter
 
 import requests
 from receipt_ocr.runtime.execution import timed
@@ -70,21 +72,30 @@ class SealApiClient:
                     ),
                 }
             path = Path(image_path)
+            request_seconds = None
             try:
                 with path.open("rb") as handle, recognition_call(
                         "qingtong", "印章识别", path) as invocation:
-                    response = requests.post(
-                        f"{self.base_url}/api/v1/recognize",
-                        headers={"X-API-Key": self.api_key},
-                        files={"files": (path.name, handle, _mime(path))},
-                        timeout=self.timeout,
-                    )
+                    started = perf_counter()
+                    try:
+                        response = requests.post(
+                            f"{self.base_url}/api/v1/recognize",
+                            headers={"X-API-Key": self.api_key},
+                            files={"files": (path.name, handle, _mime(path))},
+                            timeout=self.timeout,
+                        )
+                    finally:
+                        # requests.post includes multipart upload and reads the
+                        # response body before returning (stream=False).
+                        request_seconds = round(max(0, perf_counter() - started), 4)
             except (OSError, requests.RequestException) as exc:
                 return {
                     "enabled": True,
                     "requested": True,
                     "ok": False,
                     "message": f"清瞳印章 API 调用失败，已保留本地识别：{exc}",
+                    **({"timing": {"request_seconds": request_seconds, "server_seconds": None}}
+                       if request_seconds is not None else {}),
                 }
             try:
                 payload = response.json()
@@ -99,6 +110,7 @@ class SealApiClient:
                 "http_status": response.status_code,
                 "business_code": business_code,
                 "response": payload,
+                "timing": {"request_seconds": request_seconds, "server_seconds": _server_seconds(payload)},
             }
             if not ok:
                 invocation.fail()
@@ -126,3 +138,13 @@ def _mime(path: Path) -> str:
         ".bmp": "image/bmp",
         ".webp": "image/webp",
     }.get(path.suffix.lower(), "image/jpeg")
+
+
+def _server_seconds(payload):
+    value = payload.get('processing_time') if isinstance(payload, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    try:
+        return value if isfinite(value) else None
+    except OverflowError:
+        return None

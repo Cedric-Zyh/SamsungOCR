@@ -2,7 +2,7 @@
 from copy import deepcopy
 import hashlib
 
-from .decision import decide_overall
+from .decision import decide_overall, finalize_result, pending_danzhengtong_stages, apply_pending_verdict
 from .issues import issue, active_issues
 from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict, seal_text_comparison_rank
 from .seal_serial import serial_matching_texts
@@ -48,6 +48,10 @@ def seal_candidates(result):
         original = str(artifact.get("original_url") or "")
         clean = str(artifact.get('receiving_selected_image_url') or artifact.get("color_isolated_oriented_url")
                     or artifact.get("color_isolated_url") or "")
+        if artifact.get('provider') == 'danzhengtong':
+            # The enhanced upload is deliberately unrotated. Only the server
+            # return may be registered as this provider's processed evidence.
+            clean = str(artifact.get('returned_image_url') or '')
         identity = original or clean
         if not identity or identity in seen:
             continue
@@ -100,7 +104,8 @@ def seal_candidates(result):
         comparison = compare_seal_text_strict(requirement, texts, mismatch_over_partial=True)
         candidates.append({
             "id": hashlib.sha256(identity.encode()).hexdigest()[:24],
-            "source": "qingtong" if artifact.get("source") == "清瞳印章区域" else "local",
+            "source": ('danzhengtong' if artifact.get('provider') == 'danzhengtong' else
+                       "qingtong" if artifact.get("source") == "清瞳印章区域" else "local"),
             "index": artifact.get("index", len(candidates)),
             "image_url": clean, "original_url": original,
             "shape": shape if shape in SHAPES else "", "shape_label": SHAPES.get(shape, "未知形状"),
@@ -131,7 +136,7 @@ def standard_comparison(result, standard):
     }
 
 
-def apply_standard_check(result, standard, *, preserve_confirmed=True):
+def _apply_standard_check(result, standard, *, preserve_confirmed=True):
     """Apply automatic checks; explicit human conclusions remain authoritative."""
     result = deepcopy(result)
     comparison = standard_comparison(result, standard)
@@ -180,3 +185,20 @@ def apply_standard_check(result, standard, *, preserve_confirmed=True):
         result["review_reasons"], acceptance, result.get("signature_check"), review_issues=result["review_issues"])
     result["final_result"] = result["overall"]
     return result
+
+
+def apply_standard_check(result, standard, *, preserve_confirmed=True):
+    # Re-evaluate available evidence before applying the standard. A pending
+    # provider is a dependency, not a permanent machine warning: a complete
+    # match from an already-returned provider can satisfy an "any" policy.
+    if pending_danzhengtong_stages(result) and result.get('review_status') not in {'确认通过', '确认不通过'}:
+        result = deepcopy(result)
+        issues = result.get('review_issues', [issue('review_required', 'document', reason)
+                                             for reason in result.get('review_reasons', []) if reason != '等待单证通结果'])
+        result['review_issues'] = [item for item in issues
+                                   if not (item.get('code') == 'provider_pending' and item.get('provider') == 'danzhengtong')]
+        result['review_reasons'] = [reason for reason in result.get('review_reasons', [])
+                                    if reason != '等待单证通结果']
+        finalize_result(result)
+    result = _apply_standard_check(result, standard, preserve_confirmed=preserve_confirmed)
+    return apply_pending_verdict(result)

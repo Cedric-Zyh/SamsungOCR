@@ -38,7 +38,7 @@ class ProcessLock:
 
 
 class JobWorker:
-    def __init__(self, store, execute, *, logger=None):
+    def __init__(self, store, execute, *, logger=None, dzt_service=None, dzt_transform=None):
         self.store = store
         self.execute = execute
         self.logger = logger or logging.getLogger(__name__)
@@ -46,8 +46,15 @@ class JobWorker:
         self._wake = threading.Event()
         self._start_lock = threading.Lock()
         self._thread = None
+        service = dzt_service or (execute if hasattr(execute, 'source_for') else None)
+        self.remote = None
+        if service:
+            from .danzhengtong_worker import DanzhengtongWorker
+            self.remote = DanzhengtongWorker(store, service, logger=logger, transform=dzt_transform)
 
     def start(self):
+        if self.remote:
+            self.remote.start()
         with self._start_lock:
             if self._thread is not None and self._thread.is_alive():
                 self._wake.set()
@@ -58,12 +65,16 @@ class JobWorker:
 
     def wake(self):
         self._wake.set()
+        if self.remote:
+            self.remote.wake()
 
     def stop(self, timeout=5):
         self._stop.set()
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
+        if self.remote:
+            self.remote.stop(timeout)
 
     def _run(self):
         lock = ProcessLock(self.store.database.path.with_suffix('.worker.lock'))

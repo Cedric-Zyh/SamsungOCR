@@ -237,7 +237,6 @@ def test_date_and_seal_receive_original_color_source_after_page_cleaning(tmp_pat
 
     monkeypatch.setattr(seal, 'detect_seal_regions', lambda path: check_original(path) or [])
     date.recognize(context, downstream_request, date_reader)
-    seal.recognize(context, downstream_request, seal_reader,
-                   SimpleNamespace(skipped=lambda: {'enabled': False}))
+    seal.recognize(context, downstream_request, seal_reader)
     assert seen == ['date', 'seal']
     assert len(reader.inputs) == 1

@@ -165,7 +165,7 @@ export function createReview({
   function focusReviewImage(group) {
     if (group === 'date' || group === 'requirement') {
       const detail = group === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
-      if (detail.original || detail.processed) { previewRegion({...detail, location: null, evidenceLabel: detail.original ? `${detail.label}原图` : '处理后'}); return; }
+      if (detail.original || detail.processed) { previewRegion({...detail, url: detail.preferred || detail.original || detail.processed, location: null, evidenceLabel: detail.preferredLabel || (detail.original ? `${detail.label}原图` : '处理后')}); return; }
     }
     if (group === 'seal') {
       const item = reviewState.current;

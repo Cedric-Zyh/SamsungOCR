@@ -50,6 +50,7 @@ from receipt_ocr.runtime import build_runtime_paths
 from receipt_ocr.storage import ReceiptFileStore
 from receipt_ocr.web.maintenance import StorageMaintenance
 from .dependencies import QueueDependencies, RecognitionDependencies, ResultDependencies, ReviewDependencies
+from receipt_ocr.samples.dependencies import SampleDependencies, SamplePaths
 from receipt_ocr.web import queue as queue_handlers
 from receipt_ocr.web import recognition as recognition_handlers
 from receipt_ocr.web import results as result_handlers
@@ -134,6 +135,17 @@ def _queue_dependencies():
     )
 
 
+def _sample_dependencies():
+    return SampleDependencies(
+        database=database,
+        paths=SamplePaths(DATA_DIR, GROUND_TRUTH_PATH, frozenset(ALLOWED_EXTENSIONS)),
+        analyze=_configured_analyze,
+        project_result=_project_paginated_result,
+        seal_api_enabled=analyzer.seal_api.enabled,
+        logger=app.logger,
+    )
+
+
 def _recognition_dependencies():
     return RecognitionDependencies(
         allowed_extensions=ALLOWED_EXTENSIONS,
@@ -213,6 +225,9 @@ def initialize(*, start_worker: bool = True) -> None:
     for directory in (UPLOAD_DIR, PREVIEW_DIR, ARTIFACT_DIR, EXPORT_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     database.initialize()
+    from receipt_ocr.persistence.seal_standard_images import migrate_standard_images
+    migrate_standard_images(database,
+        history_databases=(database.path.parent / 'sample-center' / 'results.db',))
     remote_settings.restore(database)
     saved_qingtong = database.get_json_setting('qingtong_credentials', None)
     if isinstance(saved_qingtong, dict):
@@ -755,6 +770,8 @@ def files(kind: str, name: str):
                  "seal-standards": database.path.parent / "seal-standards"}.get(kind)
     if directory is None:
         abort(404)
+    if kind == 'seal-standards':
+        name = database.seal_standard_image_name(name)
     if kind == "artifacts" and request.args.get("preview") == "rgb":
         from .artifact_preview import send_rgb_artifact_preview
 
@@ -817,7 +834,10 @@ def _source_for_record(item: dict) -> Path | None:
 
 
 from .samples import register_sample_routes
-register_sample_routes(app, sys.modules[__name__])
+register_sample_routes(app, _sample_dependencies)
+
+from .danzhengtong_jobs import register_danzhengtong_routes
+register_danzhengtong_routes(app, lambda: job_store, _wake_jobs)
 
 from .routes import register_routes
 
@@ -878,11 +898,16 @@ def run() -> None:
     if os.getenv("FLASK_DEBUG", "0") == "1" and os.getenv("WERKZEUG_RUN_MAIN") != "true":
         app.config["BACKGROUND_WORKER"] = False
     initialize()
-    app.run(
-        host=os.getenv("APP_HOST", "127.0.0.1"),
-        port=int(os.getenv("APP_PORT", "5002")),
-        debug=os.getenv("FLASK_DEBUG", "0") == "1",
-    )
+    try:
+        app.run(
+            host=os.getenv("APP_HOST", "127.0.0.1"),
+            port=int(os.getenv("APP_PORT", "5002")),
+            debug=os.getenv("FLASK_DEBUG", "0") == "1",
+        )
+    finally:
+        app.extensions['sample_runtime'].close()
+        if job_worker is not None:
+            job_worker.stop()
 
 
 if __name__ == "__main__":

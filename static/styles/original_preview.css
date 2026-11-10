@@ -15,5 +15,8 @@
 .original-preview-dialog [data-preview] { display:block; width:100%; max-width:none; max-height:none; height:auto; background:#fff; border:1px solid var(--archive-line); }
 .original-preview-dialog .image-caption { flex:none; margin:0; padding:10px 16px; background:var(--archive-paper); color:var(--archive-muted); font-size:12px; }
 .original-preview-dialog .image-interaction-hint { display:none; }
-[data-page="records"] .processing-row-actions { flex-wrap:wrap; gap:2px 4px; }
+[data-page="records"] .processing-row-actions { display:inline-grid; grid-template-columns:auto auto; align-items:center; gap:0 4px; vertical-align:middle; }
+[data-page="records"] .processing-row-actions .row-primary { grid-column:2; grid-row:1 / span 2; }
+[data-page="records"] .processing-row-actions .row-secondary { grid-column:1; min-height:0; padding:1px 7px; }
+[data-page="records"] .has-narrow-actions .processing-row-actions { display:inline-flex; flex-wrap:wrap; max-width:100%; }
 [data-page="records"] .records-table:not(.has-custom-column-widths) col.action-col { width:140px; }

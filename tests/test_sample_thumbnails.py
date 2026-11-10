@@ -8,9 +8,9 @@ import threading
 from PIL import Image
 import pytest
 
-from receipt_ocr.web.sample_library import SampleLibrary
-from receipt_ocr.web.sample_thumbnails import SampleThumbnails
-from receipt_ocr.web.samples import SampleCenter
+from receipt_ocr.samples.library import SampleLibrary
+from receipt_ocr.samples.thumbnails import SampleThumbnails
+from sample_support import SampleCenter
 from test_sample_center import samples
 
 

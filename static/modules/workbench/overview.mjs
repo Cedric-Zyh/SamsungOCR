@@ -1,7 +1,7 @@
-export const WORK_FILTERS = {all: '全部', ready: '待开始', queued: '排队中', running: '识别中', completed: '已完成', failed: '失败', processing: '待处理'};
+export const WORK_FILTERS = {all: '全部', ready: '待开始', queued: '排队中', running: '识别中', waiting_remote: '单证通待返回', completed: '已完成', failed: '失败', processing: '待处理'};
 export function workFilterValues(filter) {
   const values = Array.isArray(filter) ? filter : filter ? [filter] : [];
-  const order = ['ready', 'queued', 'running', 'completed', 'failed'];
+  const order = ['ready', 'queued', 'running', 'waiting_remote', 'completed', 'failed'];
   return [...new Set(values.flatMap(value => value === 'processing' ? ['ready', 'queued', 'running'] : value === 'all' ? [] : [value]))]
     .filter(value => order.includes(value)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
@@ -12,16 +12,18 @@ export function overviewStatus(item, workbench) {
 }
 export function matchesOverview(item, filter, workbench, type = '', query = '') {
   const status = overviewStatus(item, workbench), filters = workFilterValues(filter);
-  if (status === 'cancelled' || (filters.length && !filters.includes(status))) return false;
+  if (status === 'cancelled' || (filters.length && !filters.includes(status)
+    && !(filters.includes('waiting_remote') && item.job?.danzhengtong?.pending))) return false;
   query = query.trim().toLocaleLowerCase();
   return !query || [item.filename, item.record?.fields?.['客户订单号']].some(value => String(value || '').toLocaleLowerCase().includes(query));
 }
 export function overviewCounts(items, workbench) {
-  const counts = {total: 0, completed: 0, ready: 0, queued: 0, running: 0, failed: 0, processed: 0};
+  const counts = {total: 0, completed: 0, ready: 0, queued: 0, running: 0, waiting_remote: 0, failed: 0, processed: 0};
   for (const item of items) {
     const status = overviewStatus(item, workbench);
     if (status === 'cancelled') continue;
     counts.total++; counts[status]++;
+    if (item.job?.danzhengtong?.pending) counts.waiting_remote++;
     if (['completed', 'failed'].includes(status)) counts.processed++;
   }
   return counts;

@@ -14,6 +14,8 @@ from receipt_ocr.domain.ocr import TextObservation
 from receipt_ocr.domain.seal_serial import serial_matching_texts
 from receipt_ocr.domain.seal_ring import normalize_ring_candidates
 from .preprocess.inputs import prepare_inputs
+from .contracts import PreparedSeal
+from .input_evidence import SealEvidence
 from .preprocess.number import merge_number_read
 from .ocr.interface import OcrReader
 from .postprocess.ring_text import reorder_ring_text
@@ -203,63 +205,39 @@ def _recognize_local_seals(source, rows, regions, artifact_dir, artifact_url_pre
                 with seal_requirement_layout(requirement):
                     artifact, jobs = prepare_inputs(Path(source), region, index, directory, prefix,
                                                    ocr_backend, orientation_mode)
+                    prepared = PreparedSeal.from_inputs(artifact, jobs, index=index)
             except Exception as exc:
                 artifacts.append({"schema_version": 2, "index": index, "region_id": f"seal-{index}",
                                   "color": region.color, "inputs": [], "reads": [],
                                   "errors": [{"step": "prepare", "message": str(exc)}]})
                 continue
+            evidence = SealEvidence(prepared)
+            artifact = evidence.artifact
             body_observations = []
             body_path = None
-            for input_image, path in jobs:
+            for task in prepared.tasks:
                 try:
                     # A ring is one revolution, not three alternative rows.
-                    if "detected_rows" in input_image:
-                        observations = [
-                            TextObservation(row["text"], row["confidence"], row["x"], row["y"],
-                                            row["width"], row["height"])
-                            for row in input_image["detected_rows"]
-                        ]
-                    elif input_image["channel"] == "body" and input_image.get("read_mode") != "line":
-                        observations = reader.read(path, provider=ocr_backend)
+                    if task.observations is not None:
+                        observations = list(task.observations)
+                    elif task.channel == "body" and task.read_mode != "line":
+                        observations = reader.read(task.path, provider=ocr_backend)
                     else:
-                        observations = reader.read_line(path, provider=ocr_backend)
-                    if input_image["channel"] == "center":
-                        observations = prefer_complete_type_read(observations, input_image, artifact)
-                    if artifact.get("shape_code") == "rectangle" and input_image["channel"] == "body":
+                        observations = reader.read_line(task.path, provider=ocr_backend)
+                    selection = {"image_url": task.image_url,
+                                 "verified_type_read": (task.verified_type_read.to_dict()
+                                                        if task.verified_type_read else None)}
+                    if task.channel == "center":
+                        observations = prefer_complete_type_read(observations, selection, artifact)
+                    if prepared.shape == "rectangle" and task.channel == "body":
                         body_observations.extend(observations)
-                        body_path = path
-                    input_image["status"] = "completed" if observations else "empty"
-                    for position, row in enumerate(observations):
-                        if not row.text:
-                            continue
-                        read = {"id": f"{input_image['id']}:{position}", "input_id": input_image["id"],
-                                "region_id": artifact["region_id"], "channel": input_image["channel"],
-                                "provider": ocr_backend, "text": row.text, "confidence": row.confidence,
-                                "image_url": input_image.get("selected_read_image_url", input_image["image_url"])}
-                        if artifact.get("rectangular_layout") in {"single_detection", "frame_rows", "frame_columns"}:
-                            read["rectangle_row_index"] = (
-                                position if "detected_rows" in input_image
-                                else input_image["rectangle_row_index"]
-                            )
-                        artifact["reads"].append(read)
-                        if input_image["channel"] not in {"layout_inner", "layout_lower"}:
-                            texts.append(row.text)
-                        channel_texts = [
-                            item["text"] for item in artifact["reads"]
-                            if item.get("channel") == input_image["channel"]
-                        ]
-                        if input_image["channel"] == "ring":
-                            artifact["unwrap_texts"] = channel_texts
-                            artifact["unwrapped_text"] = " | ".join(channel_texts)
-                        elif input_image["channel"] == "center":
-                            artifact["round_type_band_texts"] = channel_texts
-                            artifact["round_type_band_text"] = " | ".join(channel_texts)
-                        elif input_image["channel"] == "body":
-                            artifact["color_isolated_texts"] = channel_texts
-                            artifact["color_isolated_text"] = " | ".join(channel_texts)
+                        body_path = task.path
+                    evidence.complete(task, observations, ocr_backend,
+                                      selected_image_url=selection.get("selected_read_image_url"))
+                    if task.channel not in {"layout_inner", "layout_lower"}:
+                        texts.extend(row.text for row in observations if row.text)
                 except Exception as exc:
-                    input_image.update(status="failed", error=str(exc))
-                    artifact["errors"].append({"step": input_image["channel"], "message": str(exc)})
+                    evidence.fail(task, exc)
             try:
                 if read_double_border(artifact, directory, index, prefix,
                                       reader=reader, provider=ocr_backend):

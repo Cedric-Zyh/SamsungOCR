@@ -13,6 +13,8 @@ import warnings
 from PIL import Image, UnidentifiedImageError
 
 from receipt_ocr.evaluation import load_ground_truth
+from receipt_ocr.jobs.activity import active_job_filenames
+from .dependencies import SamplePaths
 
 
 class LibraryConflict(ValueError):
@@ -28,8 +30,8 @@ def sample_number(name):
 class SampleLibrary:
     MAX_FILE_BYTES = 20 * 1024 * 1024
 
-    def __init__(self, ctx, database):
-        self.ctx, self.database = ctx, database
+    def __init__(self, paths: SamplePaths, database):
+        self.paths, self.database = paths, database
         self.directory = database.path.parent / 'originals'
         self.directory.mkdir(exist_ok=True)
         self._truth_lock = threading.Lock()
@@ -42,12 +44,12 @@ class SampleLibrary:
             )''')
 
     def catalog(self, *, include_deleted=False, connection=None):
-        entries = load_ground_truth(self.ctx.GROUND_TRUTH_PATH)
+        entries = load_ground_truth(self.paths.ground_truth_path)
         entries = {name: entry for name, entry in entries.items()
                    if isinstance(name, str) and Path(name).name == name
-                   and (self.ctx.DATA_DIR / name).is_file()
-                   and (self.ctx.DATA_DIR / name).resolve().parent == self.ctx.DATA_DIR.resolve()
-                   and Path(name).suffix.lower() in self.ctx.ALLOWED_EXTENSIONS}
+                   and (self.paths.data_dir / name).is_file()
+                   and (self.paths.data_dir / name).resolve().parent == self.paths.data_dir.resolve()
+                   and Path(name).suffix.lower() in self.paths.allowed_extensions}
         with (nullcontext(connection) if connection is not None else self.database.connect()) as con:
             for row in con.execute('SELECT * FROM sample_library'):
                 if ((row['storage_name'] and (self.directory / row['storage_name']).is_file())
@@ -57,17 +59,17 @@ class SampleLibrary:
                     entries.pop(row['filename'], None)
         return entries
 
-    def source(self, name, *, include_deleted=False):
+    def source(self, name, *, include_deleted=False, connection=None):
         if not isinstance(name, str) or Path(name).name != name:
             raise KeyError(name)
-        with self.database.connect() as con:
+        with (nullcontext(connection) if connection is not None else self.database.connect()) as con:
             row = con.execute('SELECT storage_name,deleted_at FROM sample_library WHERE filename=?', (name,)).fetchone()
         if row and row['deleted_at'] and not include_deleted:
             raise KeyError(name)
         if not (row and row['storage_name']):
-            if name not in self._builtin_names() or Path(name).suffix.lower() not in self.ctx.ALLOWED_EXTENSIONS:
+            if name not in self._builtin_names() or Path(name).suffix.lower() not in self.paths.allowed_extensions:
                 raise KeyError(name)
-        root = self.directory if row and row['storage_name'] else self.ctx.DATA_DIR
+        root = self.directory if row and row['storage_name'] else self.paths.data_dir
         source = (root / (row['storage_name'] if row and row['storage_name'] else name)).resolve()
         if source.parent != root.resolve() or not source.is_file():
             raise KeyError(name)
@@ -75,7 +77,7 @@ class SampleLibrary:
 
     def _builtin_names(self):
         """Reload the built-in allowlist only when its source file changes."""
-        path = Path(self.ctx.GROUND_TRUTH_PATH)
+        path = Path(self.paths.ground_truth_path)
         with self._truth_lock:
             try:
                 stat = path.stat()
@@ -96,7 +98,7 @@ class SampleLibrary:
         for upload in files:
             name = str(upload.filename or '').replace('\\', '/').rsplit('/', 1)[-1].strip()
             if (not name or len(name) > 200 or any(ord(char) < 32 for char in name)
-                    or Path(name).suffix.lower() not in self.ctx.ALLOWED_EXTENSIONS):
+                    or Path(name).suffix.lower() not in self.paths.allowed_extensions):
                 raise ValueError('请选择 JPG、PNG、BMP 或 WebP 图片，文件名最多 200 字')
             data = upload.stream.read(self.MAX_FILE_BYTES + 1)
             if not data or len(data) > self.MAX_FILE_BYTES:
@@ -147,7 +149,7 @@ class SampleLibrary:
         return {'imported': imported, 'skipped': skipped, 'company': company.strip() or '未分类'}
 
     def classify(self, *, company='未分类', requirement=None, filenames=None):
-        from .sample_requirement_groups import classify_sample_groups
+        from .requirement_groups import classify_sample_groups
         return classify_sample_groups(self, company=company, requirement=requirement, filenames=filenames)
 
     def remove(self, names):
@@ -166,8 +168,7 @@ class SampleLibrary:
                     library = {row['filename']: row for row in con.execute('SELECT * FROM sample_library')}
                     if any(name not in catalog and name not in library for name in names):
                         raise LibraryConflict('部分样单已被删除，请刷新列表')
-                    busy = {row[0] for row in con.execute(
-                        "SELECT filename FROM recognition_jobs WHERE status IN ('awaiting_upload','queued','running')")}
+                    busy = active_job_filenames(con, names)
                     if busy.intersection(names):
                         raise LibraryConflict('所选样单中有正在测试的图片，请等待测试结束后再删除')
                     targets, tasks = set(), set()
@@ -185,12 +186,15 @@ class SampleLibrary:
                         # Legacy samples are files in the sample dataset, not
                         # production uploads. Remove their source as well so
                         # ground-truth labels cannot republish them on restart.
-                        own_path(self.ctx.DATA_DIR, name)
+                        own_path(self.paths.data_dir, name)
                         for result in con.execute('SELECT preview_name FROM results WHERE filename=?', (name,)):
                             preview = result['preview_name']
                             if preview:
                                 own_path(self.database.path.parent / 'previews', preview)
                                 own_path(self.database.path.parent / 'artifacts', Path(preview).stem)
+                        for remote in con.execute('''SELECT d.id FROM danzhengtong_jobs d
+                                JOIN recognition_jobs j ON j.id=d.job_id WHERE j.filename=?''', (name,)):
+                            own_path(self.database.path.parent / 'artifacts', 'dzt-' + remote['id'])
                         tasks.update(row[0] for row in con.execute(
                             'SELECT DISTINCT task_id FROM recognition_jobs WHERE filename=?', (name,)))
                     for target in sorted(targets):

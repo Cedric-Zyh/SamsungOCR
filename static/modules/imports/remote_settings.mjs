@@ -41,6 +41,7 @@ export function createRemoteSettings({environment, ui, api}) {
       event.preventDefault();
       const payload = Object.fromEntries(new environment.window.FormData(form));
       payload.poll_timeout_seconds = Number(payload.poll_timeout_seconds);
+      payload.download_seal_images = form.elements.namedItem('download_seal_images').checked;
       run(() => api('/api/settings/danzhengtong', {method:'PATCH', json:payload}));
     });
     $('#dzt-clear').addEventListener('click', () => run(() => api('/api/settings/danzhengtong', {method:'PATCH', json:{clear:true}})));

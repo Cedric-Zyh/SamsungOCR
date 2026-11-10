@@ -1,37 +1,55 @@
 import {escapeHtml} from '../core/ui.mjs';
 import {renderRunHistory} from './run_history_view.mjs';
 
-/** A read-only panel beside the original image; the existing edit form stays intact. */
+/** A wide read-only dialog; the review form remains intact behind it. */
 export function createReviewRunHistory({environment, ui, services}) {
   const {$} = ui;
   const panel = () => $('#review-runs-panel');
   const body = () => $('#review-runs-body');
   const button = () => $('#review-runs-open');
-  let context = null, data = null, request = 0, opened = false, loading = false, formState = null;
+  let context = null, data = null, request = 0, opened = false, loading = false;
+  let dialog = null, origin = null, selectedSpan = '';
   const boundPanels = new WeakSet();
 
-  function restoreForm() {
-    if (!formState) return;
-    formState.form.hidden = formState.hidden;
-    formState.form.inert = formState.inert;
-    formState.form.scrollTop = formState.scrollTop;
-    formState.form.scrollLeft = formState.scrollLeft;
-    formState = null;
+  function restorePanel() {
+    if (!origin) return;
+    const {node,parent,next} = origin;
+    node.hidden = true;
+    if (parent?.isConnected !== false) {
+      if (parent?.insertBefore) parent.insertBefore(node,next?.parentNode === parent ? next : null);
+      else parent?.appendChild?.(node);
+    } else node.remove?.();
+    origin = null;
+  }
+
+  function ensureDialog() {
+    if (dialog?.isConnected !== false && dialog) return dialog;
+    dialog = environment.document?.createElement?.('dialog');
+    if (!dialog) return null;
+    dialog.id = 'review-runs-dialog';
+    dialog.className = 'review-timeline-dialog';
+    dialog.setAttribute('aria-labelledby','review-runs-title');
+    environment.document.body?.appendChild?.(dialog);
+    dialog.addEventListener('cancel',event => {
+      event.preventDefault(); event.stopImmediatePropagation?.(); event.stopPropagation?.(); close();
+    });
+    dialog.addEventListener('close',() => { if (!dialog.open && opened) close(); });
+    return dialog;
   }
 
   function close({restoreFocus = true} = {}) {
     const wasOpen = opened;
     opened = false; loading = false; ++request;
+    if (dialog?.open) dialog.close();
+    restorePanel();
     if (panel()) panel().hidden = true;
-    $('.review-layout')?.classList?.remove('run-history-open');
     button()?.setAttribute?.('aria-expanded', 'false');
-    restoreForm();
     if (wasOpen && restoreFocus) button()?.focus?.({preventScroll:true});
   }
 
   function clear() {
     close({restoreFocus:false});
-    context = null; data = null;
+    context = null; data = null; selectedSpan = '';
     if (button()) button().hidden = true;
     const count = $('[data-run-count]');
     if (count) { count.textContent = ''; count.hidden = true; }
@@ -45,6 +63,7 @@ export function createReviewRunHistory({environment, ui, services}) {
     context = {id, sample, filename:item.filename || '', timing:item};
     button().hidden = false;
     button().disabled = false;
+    button().setAttribute('aria-controls','review-runs-dialog');
     if ($('#review-runs-title')) $('#review-runs-title').textContent = '本次识别明细';
     if (!boundPanels.has(panel())) {
       panel().addEventListener?.('click', handlePanelClick);
@@ -60,10 +79,13 @@ export function createReviewRunHistory({environment, ui, services}) {
     if (!body() || !data) return;
     const top = body().scrollTop || 0;
     const openKeys = preserve ? expanded('[data-call-group]', 'data-call-group') : undefined;
-    const imageKeys = expanded('[data-call-image]', 'data-call-image');
-    const explanationOpen = expanded('[data-call-explanation]', 'data-call-explanation').has('count');
-    const processingOpen = expanded('[data-image-processing]', 'data-image-processing').has('steps');
-    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, processingOpen, loading, error, timingContext:context?.timing});
+    const imageKeys = preserve ? expanded('[data-call-image]', 'data-call-image') : new Set();
+    const explanationOpen = preserve && expanded('[data-call-explanation]', 'data-call-explanation').has('count');
+    const processingOpen = preserve && expanded('[data-image-processing]', 'data-image-processing').has('steps');
+    const expandedLanes = preserve ? expanded('[data-timeline-lane]','data-timeline-lane') : new Set();
+    const detailsOpen = preserve && expanded('[data-run-details]','data-run-details').has('all');
+    body().innerHTML = renderRunHistory(data, {openKeys, imageKeys, explanationOpen, processingOpen,
+      expandedLanes,selectedSpan,detailsOpen,loading,error,timingContext:context?.timing});
     body().scrollTop = top;
     const count = $('[data-run-count]');
     if (count) { count.textContent = data.available === true ? `${data.summary?.total || 0} 次` : '—'; count.hidden = false; }
@@ -81,7 +103,7 @@ export function createReviewRunHistory({environment, ui, services}) {
       if (!service?.recognitionCalls) throw new Error('暂时无法读取识别调用明细');
       const result = await service.recognitionCalls(entry.id);
       if (!current()) return;
-      const hadGroups = data?.available === true && Array.isArray(data.calls) && data.calls.length > 0;
+      const hadGroups = data != null;
       data = {...result, calls:result.calls || []};
       loading = false;
       render({preserve:hadGroups});
@@ -96,22 +118,36 @@ export function createReviewRunHistory({environment, ui, services}) {
   async function open() {
     if (!context || !panel() || !body()) return;
     if (opened) { close(); return; }
-    const form = $('#review-form');
-    if (form) formState = {form, hidden:form.hidden, inert:form.inert,
-      scrollTop:form.scrollTop || 0, scrollLeft:form.scrollLeft || 0};
+    const popup = ensureDialog();
+    if (!popup) return;
+    origin = {node:panel(),parent:panel().parentNode,next:panel().nextSibling};
+    popup.appendChild?.(panel());
     opened = true;
     panel().hidden = false;
-    $('.review-layout')?.classList?.add('run-history-open');
-    if (form) { form.hidden = true; form.inert = true; }
+    selectedSpan = '';
+    popup.showModal();
     button()?.setAttribute?.('aria-expanded', 'true');
+    const closing = $('[data-runs-close]',panel());
+    if (closing) { closing.textContent = '关闭'; closing.setAttribute('aria-label','关闭本次识别明细'); }
+    if ($('#review-runs-title')) $('#review-runs-title').textContent = `本次识别明细 · ${context.filename || ''}`;
     $('[data-runs-close]', panel())?.focus?.({preventScroll:true});
-    if (data) render();
+    if (data) render({preserve:false});
     else await load();
   }
 
   async function handlePanelClick(event) {
     if (event.target.closest?.('[data-runs-close]')) { close(); return; }
     if (event.target.closest?.('[data-runs-refresh]')) { await load(); return; }
+    const span = event.target.closest?.('[data-timeline-span]');
+    if (span) {
+      event.preventDefault?.(); event.stopPropagation?.();
+      selectedSpan = span.getAttribute('data-timeline-span');
+      const occurrence = span.getAttribute('data-timeline-occurrence');
+      render();
+      [...(body()?.querySelectorAll?.('[data-timeline-span]') || [])].find(node =>
+        node.getAttribute('data-timeline-span') === selectedSpan
+        && node.getAttribute('data-timeline-occurrence') === occurrence)?.focus?.({preventScroll:true});
+    }
   }
 
   function initialize() {

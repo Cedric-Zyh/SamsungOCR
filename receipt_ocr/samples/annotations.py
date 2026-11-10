@@ -11,8 +11,8 @@ from receipt_ocr.domain.sample_problems import (
 )
 from receipt_ocr.domain.problem_suggestions import suggest_problems
 from receipt_ocr.providers.registry import PROVIDERS
-from .sample_library import LibraryConflict
-from .sample_result_filters import project_sample_seal_result
+from .library import LibraryConflict
+from .result_filters import project_sample_seal_result
 
 
 def annotation_revision(entry):

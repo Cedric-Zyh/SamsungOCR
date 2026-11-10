@@ -4,7 +4,7 @@ import json
 from PIL import Image
 import pytest
 
-from receipt_ocr.web.samples import SampleCenter
+from sample_support import SampleCenter
 from test_sample_center import samples
 from test_sample_library import upload
 

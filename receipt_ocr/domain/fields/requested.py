@@ -8,7 +8,7 @@ from ..parsing.parsing_constants import LOW_CONFIDENCE_THRESHOLD, PRODUCT_COLUMN
 _CONTACT_LABELS = ("仓库联系人", "联系人")
 _CONTACT_NOISE = {
     "座机", "电话", "手机", "传真", "发货单位", "收货单位", "仓库联系人",
-    "联系人", "收货人", "仓库", "地址", "广东", "电话号",
+    "联系人", "收货人", "仓库", "地址", "广东", "电话号", "仓库电话", "联系电话",
 }
 
 
@@ -18,15 +18,15 @@ def contact_candidates_from_text(text):
     Contact rows often contain a label, a landline/mobile number, and one or
     more names in the same line.  The old rule stopped at the first digit and
     therefore returned the label ``座机`` as a person's name.  Prefer Chinese
-    runs immediately before a phone-like number; fall back to an explicit
-    contact label when no number is present.
+    runs before a phone-like number, allowing a separating Chinese/ASCII
+    colon; fall back to an explicit contact label when no number is present.
     """
     text = str(text or "").strip()
     if not text:
         return []
     has_contact_label = any(label in text for label in _CONTACT_LABELS)
     phone_pattern = r"(?:1\d{10}|0\d{2,3}[- ]?\d{7,8}|\d{5,})"
-    numbered = re.findall(rf"([\u4e00-\u9fff]{{1,4}})\s*(?={phone_pattern})", text)
+    numbered = re.findall(rf"([\u4e00-\u9fff]{{1,4}})\s*[:：]?\s*(?={phone_pattern})", text)
     candidates = numbered
     if not candidates and has_contact_label:
         remainder = text

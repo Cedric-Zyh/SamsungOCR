@@ -193,3 +193,48 @@ test('processing presents compact image links and keeps the original audit neste
   assert.doesNotMatch(beforeAudit, /<img|<details[^>]* open/);
   assert.match(html, /完整旧读数/);
 });
+
+test('remote seal results use the returned oriented image and preserve provider attributes', () => {
+  const item = {provider: 'danzhengtong', provider_text: '北京恒远恒信科技发展有限公司 收发货专用章',
+    provider_color: '蓝色', provider_seal_type: '椭圆章', original_url: '/files/raw.png',
+    input_url: '/files/input.png', returned_image_url: '/files/returned.png', returned_image_status: 'downloaded',
+    // Stale local fields must never add a synthetic purpose or company reading.
+    unwrapped_text: '旧公司', round_type_band_text: '旧用途', ring_input_url: '/files/local-ring.png'};
+  const before = structuredClone(item), model = sealWorkspaceModel(item);
+  assert.equal(model.text, item.provider_text);
+  assert.equal(model.original, '/files/input.png');
+  assert.equal(model.processed, '/files/returned.png');
+  assert.equal(model.preferred, '/files/returned.png');
+  assert.deepEqual(model.fields.map(field => [field.label, field.value, field.url]), [
+    ['印章颜色', '蓝色', '/files/returned.png'], ['印章类型', '椭圆章', '/files/returned.png']]);
+  const html = renderSealWorkspace(item);
+  assert.match(html, /单证通返回的旋正图/);
+  assert.match(html, /data-seal-evidence-url="\/files\/returned.png"/);
+  assert.doesNotMatch(html, /旧公司|旧用途|方向校正|环形文字展开|local-ring/);
+  assert.deepEqual(item, before);
+});
+
+test('a failed returned image is never replaced with the uploaded colour image as oriented evidence', () => {
+  const item = {ocr_backend: '单证通', provider_text: '测试公司', provider_color: '红色',
+    provider_seal_type: '圆章', input_url: '/files/upload.png', color_isolated_url: '/files/upload.png',
+    returned_image_status: 'unavailable', body_url: '/files/stale-local.png',
+    color_isolated_oriented_url: '/files/stale-local.png'};
+  const model = sealWorkspaceModel(item), html = renderSealWorkspace(item);
+  assert.equal(model.original, '/files/upload.png');
+  assert.equal(model.processed, '');
+  assert.equal(model.preferred, '/files/upload.png');
+  assert.match(html, /单证通旋正图未能取回/);
+  assert.doesNotMatch(html, /stale-local/);
+  assert.deepEqual(model.fields.map(row => row.url), ['', '']);
+});
+
+test('remote image urls stay local and provider text is escaped', () => {
+  const item = {provider: 'danzhengtong', provider_text: '<img src=x onerror=alert(1)>',
+    provider_color: '<script>x</script>', provider_seal_type: '椭圆章',
+    returned_image_status: 'missing', returned_image_url: 'http://10.0.0.1/private.png'};
+  const html = renderSealWorkspace(item);
+  assert.equal(sealWorkspaceModel(item).processed, '');
+  assert.match(html, /单证通未返回旋正图/);
+  assert.match(html, /&lt;img/);
+  assert.doesNotMatch(html, /<img|<script|10\.0\.0\.1/);
+});

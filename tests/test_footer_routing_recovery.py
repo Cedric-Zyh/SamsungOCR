@@ -131,8 +131,7 @@ def test_date_and_seal_use_confirmed_footer_anchor(tmp_path, monkeypatch, recove
 
     monkeypatch.setattr(seal, "detect_seal_regions", lambda *a: [])
     date_result = date.recognize(context, request(), recognize_date)
-    seal_result = seal.recognize(context, request(), recognize_seals,
-                                 SimpleNamespace(skipped=lambda: {"enabled": False}))
+    seal_result = seal.recognize(context, request(), recognize_seals)
     assert calls == [("date", context.footer_anchor.y), ("seal", context.footer_anchor.y)]
     assert date_result.check["actual"] == "2025-02-09"
     assert seal_result.check["recognized"] == "太原市伊加壹电子服务总汇"
@@ -146,7 +145,7 @@ def test_genuine_missing_footer_skips_both_stages_and_reports_it(tmp_path):
 
     api = SimpleNamespace(skipped=lambda: {"enabled": False}, recognize=forbidden)
     checks = {"date": date.recognize(context, request(), forbidden).check,
-              "seal": seal.recognize(context, request(), forbidden, api).check}
+              "seal": seal.recognize(context, request(), forbidden).check}
     for stage, check in checks.items():
         assert check["execution_status"] == "skipped"
         assert not check.get("actual") and not check.get("recognized")

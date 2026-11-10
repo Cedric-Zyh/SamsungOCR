@@ -38,7 +38,9 @@ class Settings:
     sys_code: str = 'LOGISTICS_SAMSUNG'
     org_id: str = '101517'
     model_id: str = 'logistics_samsung_deliverynote_1503'
+    seal_model_id: str = 'logistics_samsung_outseal_1503'
     poll_timeout_seconds: int = 60
+    download_seal_images: bool = True
 
     @classmethod
     def load(cls):
@@ -48,18 +50,33 @@ class Settings:
         local = json.loads(path.read_text()) if path.exists() else {}
         if os.getenv('DZT_MODE', local.get('mode', 'real')) != 'real':
             raise ValueError('单证通已移除模拟模式，请移除旧的 mode 或 DZT_MODE 配置')
-        return cls(**{key: os.getenv('DZT_' + key.upper(), local.get(key, field.default))
-                      for key, field in cls.__dataclass_fields__.items()})
+        values = {key: os.getenv('DZT_' + key.upper(), local.get(key, field.default))
+                  for key, field in cls.__dataclass_fields__.items()}
+        flag = values['download_seal_images']
+        if isinstance(flag, str) and flag.lower() in {'true', '1', 'yes', 'on', 'false', '0', 'no', 'off'}:
+            flag = flag.lower() in {'true', '1', 'yes', 'on'}
+        if not isinstance(flag, bool):
+            raise ValueError('单证通旋正图下载设置必须为 true 或 false')
+        values['download_seal_images'] = flag
+        return cls(**values)
 
 
 class Client:
-    def __init__(self, settings=None, transport=None):
+    def __init__(self, settings=None, transport=None, *, action='整页单证识别'):
         self.settings = settings or Settings.load()
+        self.action = action
         self.transport = transport
         self.jobs = {}
         self.poll_timeout = min(60, int(self.settings.poll_timeout_seconds))
         if self.poll_timeout <= 0:
             raise ValueError('单证通查询超时必须大于 0 秒')
+
+    def _transport_request(self, method, url, **kwargs):
+        # Serialize physical HTTP requests, never a provider's processing wait.
+        # Page and seal scenes can both hold accepted UUIDs and be polled
+        # independently while another caller waits between its queries.
+        with _SINGLE_DOCUMENT:
+            return self.transport.request(method, url, **kwargs)
 
     def upload_file(self, source, *, file_name=None):
         """POST multipart to the file server; OCR credentials are never sent here."""
@@ -84,7 +101,7 @@ class Client:
         try:
             with path.open('rb') as stream:
                 # requests generates the multipart boundary. Do not set JSON headers.
-                response = self.transport.request(
+                response = self._transport_request(
                     'POST', s.upload_url, data=form,
                     files={'file': (name, stream, mimetypes.guess_type(path.name)[0] or 'application/octet-stream')},
                     timeout=60)
@@ -105,7 +122,7 @@ class Client:
     def submit_file(self, source, *, file_name=None):
         self._validate_credentials()  # Fail before uploading if submission cannot run.
         uploaded = self.upload_file(source, file_name=file_name)
-        with recognition_call('danzhengtong', '整页单证识别', source) as invocation:
+        with recognition_call('danzhengtong', self.action, source) as invocation:
             body = self.submit(uploaded['fileName'], uploaded['fileId'])
         handoff = _call_handoff.get()
         if handoff is not None:
@@ -141,7 +158,7 @@ class Client:
         response = None
         # Keep the actual error while redacting credentials and signed URLs.
         try:
-            response = self.transport.request(method, s.base_url.rstrip('/') + path,
+            response = self._transport_request(method, s.base_url.rstrip('/') + path,
                                               headers={'keyId': s.key_id, 'Content-Type': 'application/json'},
                                               timeout=kwargs.pop('timeout', 30), **kwargs)
             response.raise_for_status()
@@ -156,7 +173,7 @@ class Client:
         self._validate_credentials()
         report_dzt_progress('submitting', simulated=False)
         payload = self.build_request(file_name, file_id)
-        with recognition_call('danzhengtong', '整页单证识别', file_name):
+        with recognition_call('danzhengtong', self.action, file_name):
             body = self._request('POST', '/ocr/general-async/v1/extractGeneralDataAsync', json=payload)
             data = body.get('data') or {}
             if body.get('status') is not True or not isinstance(data, dict) or not data.get('reqUuid'):
@@ -181,86 +198,86 @@ class Client:
         return self._request('GET', '/ocr/async/v1/getResultByReqUuid',
                              params={'reqUuid': req_uuid}, timeout=timeout)
 
-    def recognize(self, source, *, file_name=None):
-        # The existing queue is serial; also serialize direct/retry callers here.
-        with _SINGLE_DOCUMENT:
-            handoff = []
-            handoff_token = _call_handoff.set(handoff)
-            try:
-                submitted = self.submit_file(source, file_name=file_name)
-            finally:
-                _call_handoff.reset(handoff_token)
-            req_uuid = submitted['data']['reqUuid']
-            job = self.jobs[req_uuid]
-            invocation = handoff[-1] if handoff else None
+    def recognize(self, source, *, file_name=None, normalizer=None):
+        # Keep the lifecycle local to this call; only physical HTTP holds the shared lock.
+        handoff = []
+        handoff_token = _call_handoff.set(handoff)
+        try:
+            submitted = self.submit_file(source, file_name=file_name)
+        finally:
+            _call_handoff.reset(handoff_token)
+        req_uuid = submitted['data']['reqUuid']
+        job = self.jobs[req_uuid]
+        invocation = handoff[-1] if handoff else None
+        if invocation is not None:
+            invocation.resume()
+        deadline = time.monotonic() + self.poll_timeout
+        job['query'] = {'strategy': 'poll', 'interval_seconds': 2, 'attempts': 0, 'status': 'waiting'}
+        report_dzt_progress('waiting', simulated=False, poll_count=0, timeout_seconds=self.poll_timeout)
+        paused = False
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f'单证通等待识别结果超时（{self.poll_timeout} 秒），已停止查询')
+                if recognition_paused():
+                    if not paused:
+                        job['query']['status'] = 'paused'
+                        report_dzt_progress('paused', simulated=False, poll_count=job['query']['attempts'],
+                                            timeout_seconds=self.poll_timeout)
+                    paused = True
+                    time.sleep(min(.2, remaining))
+                    continue
+                if paused:
+                    paused = False
+                    job['query']['status'] = 'waiting'
+                    report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
+                                        timeout_seconds=self.poll_timeout)
+                time.sleep(min(2, remaining))
+                if recognition_paused():
+                    continue  # A pause during the delay must prevent the next GET.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    continue
+                from urllib3.util import Timeout
+                timeout = Timeout(total=remaining, connect=min(5, remaining), read=min(30, remaining))
+                job['query']['attempts'] += 1
+                response = self.get_result(req_uuid, timeout=timeout)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f'单证通等待识别结果超时（{self.poll_timeout} 秒），已停止查询')
+                data = response.get('data')
+                if not isinstance(data, dict):
+                    raise provider_error('查询结果', self.settings, body=response, detail='data 格式错误')
+                commit = data.get('commitResult')
+                if commit is None:
+                    report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
+                                        timeout_seconds=self.poll_timeout)
+                    continue
+                if not isinstance(commit, dict):
+                    raise provider_error('查询结果', self.settings, body=response, detail='commitResult 格式错误')
+                # Empty objects provide no evidence that recognition is complete.
+                if not commit:
+                    report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
+                                        timeout_seconds=self.poll_timeout)
+                    continue
+                normalized = (normalizer or normalize_result)(commit)
+                job['query']['status'] = 'completed'
+                job['status'] = 'completed'
+                job['result'] = {'recordId': data.get('recordId'), 'templateId': data.get('templateId'),
+                                 'templateName': data.get('templateName'), 'commitResult': deepcopy(commit),
+                                 'imgUrls': deepcopy(data.get('imgUrls') or [])}
+                report_dzt_progress('completed', simulated=False)
+                return normalized, {'mode': 'real', 'simulated': False, 'reqUuid': req_uuid, **deepcopy(job)}
+        except Exception as exc:
             if invocation is not None:
-                invocation.resume()
-            deadline = time.monotonic() + self.poll_timeout
-            job['query'] = {'strategy': 'poll', 'interval_seconds': 2, 'attempts': 0, 'status': 'waiting'}
-            report_dzt_progress('waiting', simulated=False, poll_count=0, timeout_seconds=self.poll_timeout)
-            paused = False
-            try:
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError(f'单证通等待识别结果超时（{self.poll_timeout} 秒），已停止查询')
-                    if recognition_paused():
-                        if not paused:
-                            job['query']['status'] = 'paused'
-                            report_dzt_progress('paused', simulated=False, poll_count=job['query']['attempts'],
-                                                timeout_seconds=self.poll_timeout)
-                        paused = True
-                        time.sleep(min(.2, remaining))
-                        continue
-                    if paused:
-                        paused = False
-                        job['query']['status'] = 'waiting'
-                        report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
-                                            timeout_seconds=self.poll_timeout)
-                    time.sleep(min(2, remaining))
-                    if recognition_paused():
-                        continue  # A pause during the delay must prevent the next GET.
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        continue
-                    from urllib3.util import Timeout
-                    timeout = Timeout(total=remaining, connect=min(5, remaining), read=min(30, remaining))
-                    job['query']['attempts'] += 1
-                    response = self.get_result(req_uuid, timeout=timeout)
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f'单证通等待识别结果超时（{self.poll_timeout} 秒），已停止查询')
-                    data = response.get('data')
-                    if not isinstance(data, dict):
-                        raise provider_error('查询结果', self.settings, body=response, detail='data 格式错误')
-                    commit = data.get('commitResult')
-                    if commit is None:
-                        report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
-                                            timeout_seconds=self.poll_timeout)
-                        continue
-                    if not isinstance(commit, dict):
-                        raise provider_error('查询结果', self.settings, body=response, detail='commitResult 格式错误')
-                    # Empty objects provide no evidence that recognition is complete.
-                    if not commit:
-                        report_dzt_progress('waiting', simulated=False, poll_count=job['query']['attempts'],
-                                            timeout_seconds=self.poll_timeout)
-                        continue
-                    normalized = normalize_result(commit)
-                    job['query']['status'] = 'completed'
-                    job['status'] = 'completed'
-                    job['result'] = {'recordId': data.get('recordId'), 'templateId': data.get('templateId'),
-                                     'templateName': data.get('templateName'), 'commitResult': deepcopy(commit)}
-                    report_dzt_progress('completed', simulated=False)
-                    return normalized, {'mode': 'real', 'simulated': False, 'reqUuid': req_uuid, **deepcopy(job)}
-            except Exception as exc:
-                if invocation is not None:
-                    invocation.fail(exc)
-                job['status'] = 'failed'
-                job['query']['status'] = 'failed'
-                # Keep the accepted UUID available for manual queries; never resubmit here.
-                raise RuntimeError(f'{exc}；reqUuid={req_uuid}') from None
-            finally:
-                if invocation is not None:
-                    invocation.finish()
+                invocation.fail(exc)
+            job['status'] = 'failed'
+            job['query']['status'] = 'failed'
+            # Keep the accepted UUID available for manual queries; never resubmit here.
+            raise RuntimeError(f'{exc}；reqUuid={req_uuid}') from None
+        finally:
+            if invocation is not None:
+                invocation.finish()
 
 
 def normalize_result(commit):

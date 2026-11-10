@@ -40,7 +40,7 @@ export function createSealPreview({environment, ui, showSource}) {
     toolbar = environment.document.createElement('div');
     toolbar.className = 'seal-preview-toolbar';
     toolbar.innerHTML = `<strong>${escapeHtml(detail.label)}</strong><div role="group" aria-label="${escapeHtml(detail.label)}图片显示方式">${[
-      ['original', '原图', original], ['processed', '处理后', processed],
+      ['original', detail.originalLabel || '原图', original], ['processed', detail.processedLabel || '处理后', processed],
     ].filter(([, , available]) => available).map(([key, label]) => `<button type="button" class="mini-button" data-seal-preview-mode="${key}" aria-pressed="false">${label}</button>`).join('')}</div><span data-seal-preview-label></span>`;
     viewport.before(toolbar);
     const display = (url, label, mode, location = null, preserveSelection = false) => {
@@ -55,7 +55,8 @@ export function createSealPreview({environment, ui, showSource}) {
       const mode = button.dataset.sealPreviewMode;
       display(mode === 'processed' ? processed : original, button.textContent, mode);
     }));
-    display(source, detail.evidenceLabel || (original ? '原图' : '处理后'), source === original ? 'original' : source === processed ? 'processed' : 'evidence', detail.location, detail.evidenceSelected);
+    display(source, detail.evidenceLabel || (source === processed
+      ? detail.processedLabel || '处理后' : detail.originalLabel || '原图'), source === original ? 'original' : source === processed ? 'processed' : 'evidence', detail.location, detail.evidenceSelected);
   }
   return {show, clear};
 }

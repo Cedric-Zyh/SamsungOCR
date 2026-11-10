@@ -33,7 +33,9 @@ class ImageCache:
     """Cache decoded source images for one recognition run.
 
     Callers receive a copy so a preprocessing step cannot mutate the cached
-    source frame for a later stage.
+    source frame for a later stage. When a working-image workspace is active,
+    it owns both the pixels and their memory budget; do not retain a second
+    decoded copy here.
     """
 
     max_bytes: int = 128 * 1024 * 1024
@@ -42,6 +44,16 @@ class ImageCache:
     _lock: RLock = field(default_factory=RLock)
 
     def read(self, path: str | Path) -> np.ndarray:
+        from .working_images import current_workspace
+
+        workspace = current_workspace()
+        if workspace is not None:
+            # A cache may have been used before entering this workspace.
+            # Release those standalone copies rather than carrying both stores.
+            self.clear()
+            # cv_read returns an independent array on both hits and misses,
+            # and checks file versions before reusing its immutable pixels.
+            return workspace.cv_read(path, decoder=_decode_pixels)
         source = Path(path).resolve()
         stat = source.stat()
         key = (str(source), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)

@@ -10,8 +10,10 @@ from ..runtime.safety import _ocr_model_config
 from ..imaging.contracts import SealRegion
 from ..imaging.page import annotate_image
 from ..recognition.seal.orientation import DEFAULT_SEAL_ORIENTATION_MODE
-from ..recognition.seal.postprocess.providers import combine_seal_provider_checks
+from ..domain.seal_provider_selection import combine_seal_provider_checks
 from .pipeline import attach_product_fields, complete_result, normalize_result_contract
+from ..domain.results import StageOutcome
+from .document_evidence import evaluate_document_evidence, variant_payloads, selected_date_outcome
 
 def _value(stage, result):
     if stage == "fields":
@@ -30,7 +32,7 @@ def _value(stage, result):
     )
 
 
-def select_variants(stage, successful, acceptance):
+def select_variants(stage, successful, acceptance, *, required_date=None):
     provider_seal = (combine_seal_provider_checks(
                         [v['result'].get('seal_check', {}) for v in successful],
                         acceptance.get('seal_pass_standard', 'any_exact'),
@@ -43,10 +45,12 @@ def select_variants(stage, successful, acceptance):
                                                                      else {'qingtong', 'danzhengtong'})
                           or v['result'].get('seal_check', {}).get('dual_check')]
                          if provider_seal is not None else successful)
-    if stage == 'date' and acceptance.get('date_match_mode') in {'any', 'all'} and successful:
+    if stage == 'date' and successful:
         matching = [v for v in successful if (v['result'].get('date_check') or {}).get('status') == '匹配'
                     and (v['result'].get('date_check') or {}).get('reliable') is True]
-        decision_variants = matching or successful
+        selected = selected_date_outcome(successful, required_date=required_date)
+        decisions = matching if matching and acceptance.get('date_match_mode') in {'any', 'all'} else successful
+        decision_variants = [selected, *(variant for variant in decisions if variant is not selected)]
     if stage == 'seal' and provider_seal is None and acceptance.get('seal_match_mode') in {'any', 'all'} and successful:
         matching = [v for v in successful if (v['result'].get('seal_check') or {}).get('status') == '匹配'
                     and (v['result'].get('seal_check') or {}).get('reliable') is True]
@@ -55,7 +59,7 @@ def select_variants(stage, successful, acceptance):
         decision_variants = successful
     primary = decision_variants[0]["result"]
     if stage == "fields":
-        selection = select_printed_fields(successful)
+        selection = select_printed_fields(variant_payloads(successful))
         primary = deepcopy(primary)
         primary.setdefault("fields", {}).update(selection["fields"])
         for key, selected_key in (("field_metadata", "metadata"), ("field_fallbacks", "field_fallbacks")):
@@ -66,7 +70,7 @@ def select_variants(stage, successful, acceptance):
             "fields": selection["selections"], "conflicts": selection["conflicts"],
         }
     if stage == "handwriting":
-        selection = select_handwriting(successful)
+        selection = select_handwriting(variant_payloads(successful))
         selected = next((v for v in successful if v["method"] == selection["selected_method"]), None)
         primary = deepcopy(selected["result"] if selected else primary)
         primary["handwriting_fields"] = selection["fields"]
@@ -149,6 +153,8 @@ def merge_primary(output, stage, primary, successful, variants, provider_seal, a
 
 
 def _variant_skipped(stage, variant):
+    if isinstance(variant, StageOutcome):
+        return variant.state == "skipped"
     return (variant.get("result", {}).get(f"{stage}_check", {})
             .get("execution_status") == "skipped")
 
@@ -156,7 +162,8 @@ def _variant_skipped(stage, variant):
 def _recognition_status(stage, selected, variants):
     if not selected:
         return "未执行"
-    successful = [variant for variant in variants if "result" in variant]
+    successful = [variant for variant in variants
+                  if (variant.has_result if isinstance(variant, StageOutcome) else "result" in variant)]
     if not successful:
         return "识别失败"
     if all(_variant_skipped(stage, variant) for variant in successful):
@@ -183,6 +190,11 @@ def finish_result(output, context, config, results, reasons, issues, stage_reaso
              if "result" in variant and not _variant_skipped(stage, variant)),
             "skipped",
         )
+    dates = [variant for variant in results['date']
+             if 'result' in variant and not _variant_skipped('date', variant)]
+    if dates:
+        primary_backends['date'] = selected_date_outcome(
+            dates, required_date=output['fields'].get('要求到货'))['method']
     if (
         context.document_type["type"] not in {"receipt", "unclassified"}
         and not context.has_footer
@@ -230,6 +242,11 @@ def finish_result(output, context, config, results, reasons, issues, stage_reaso
 
 
 def assemble_result(context, config, results, errors, output, previous_fields, source, preview_path, kwargs):
+    results, previous_fields = evaluate_document_evidence(
+        results, previous_fields, config,
+        recompare=kwargs.get("recompare_saved_checks", False),
+        preserve_provider_checks=kwargs.get("preserve_provider_checks", False),
+    )
     output = deepcopy(output)
     output.update(context.evidence())
     output["field_fallbacks"] = {}
@@ -249,7 +266,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
     preview_regions = []
     preview_date_box = None
     for stage, variants in results.items():
-        successful = [v for v in variants if "result" in v]
+        successful = [v for v in variants if v.has_result]
         output["recognition_variants"][stage] = deepcopy([
             {
                 "method": v["method"],
@@ -269,7 +286,8 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
                             "seal_check",
                             "processing_artifacts",
                             "danzhengtong",
-                        )
+                            "danzhengtong_seal",
+                        ) + (('date_ocr_texts', 'preview_date_box') if stage == 'date' else ())
                     }
                     if "result" in v
                     else None
@@ -284,7 +302,8 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
                 output["product_table"]["status"] = "识别失败"
             continue
         acceptance = config.get('acceptance') or {}
-        provider_seal, decision_variants, primary = select_variants(stage, successful, acceptance)
+        provider_seal, decision_variants, primary = select_variants(stage, successful, acceptance,
+            required_date=output['fields'].get('要求到货') if stage == 'date' else None)
         rejected_field_warnings = False
         for variant in decision_variants:
             if provider_seal is None or not provider_seal.get('reliable'):
@@ -321,12 +340,13 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
         else:
             conflicting = any(_value(stage, v["result"]) != _value(stage, primary)
                               for v in decision_variants[1:])
-        if provider_seal is None and stage_match_mode != 'any' and conflicting:
+        skip_date_comparison = stage == 'date' and stage_match_mode == 'none'
+        if provider_seal is None and stage_match_mode != 'any' and not skip_date_comparison and conflicting:
             conflicts.append(f"{LABELS[stage]}：多种识别方式结果不一致")
             conflicts_issues.append(issue("provider_conflict", stage, conflicts[-1]))
             if stage in ("date", "seal"):
                 output[f"{stage}_check"].update(status="需人工复核", reliable=False)
-        if provider_seal is None and stage in ("date", "seal") and stage_match_mode != 'any' and any(
+        if provider_seal is None and stage in ("date", "seal") and stage_match_mode != 'any' and not skip_date_comparison and any(
             not v["result"].get(f"{stage}_check", {}).get("reliable")
             for v in decision_variants
         ):
@@ -354,8 +374,9 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
             issues.append(issue("evidence_unreliable", stage, reasons[-1]))
     for variants in results.values():
         for variant in variants:
-            trace = variant.get("result", {}).get("danzhengtong")
-            if trace:
-                output["danzhengtong"] = deepcopy(trace)
+            for key in ('danzhengtong', 'danzhengtong_seal'):
+                trace = variant.get("result", {}).get(key)
+                if trace:
+                    output[key] = deepcopy(trace)
     return finish_result(output, context, config, results, reasons, issues, stage_reasons,
                          preview_regions, preview_date_box, source, preview_path, kwargs)

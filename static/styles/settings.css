@@ -268,6 +268,9 @@
 .service-dialog input::placeholder { color:#929487; }
 .service-dialog input:focus { border-color:#8b967b; outline:2px solid #626f4f20; outline-offset:1px; }
 .dzt-config-grid small { color:var(--archive-muted); font-size:11px; font-weight:400; line-height:1.5; }
+.service-download-setting { display:flex; align-items:flex-start; gap:9px; margin-top:20px; color:var(--archive-text); font-size:12px; cursor:pointer; }
+.service-dialog .service-download-setting input { width:16px; height:16px; margin:1px 0 0; padding:0; flex:none; accent-color:var(--archive-ink); }
+.service-download-setting small { display:block; margin-top:6px; color:var(--archive-muted); font-size:11px; line-height:1.5; }
 .service-advanced { margin-top:20px; border-top:1px solid var(--archive-soft-line); }
 .service-advanced>summary { padding:15px 0; font-size:12px; color:var(--archive-text); }
 .service-advanced>summary span { margin-left:12px; font-size:11px; }

@@ -21,6 +21,7 @@ RULES = {
         "receipt_ocr.recognition",
         "receipt_ocr.runtime",
         "receipt_ocr.jobs",
+        "receipt_ocr.samples",
         "PIL",
         "cv2",
         "numpy",
@@ -31,9 +32,11 @@ RULES = {
     "providers": {"receipt_ocr.web", "receipt_ocr.application", "receipt_ocr.stages"},
     "imaging": {"receipt_ocr.web", "receipt_ocr.providers", "receipt_ocr.application", "receipt_ocr.stages"},
     "web": {"receipt_ocr.imaging", "receipt_ocr.providers.paddle_runtime"},
-    "application": {"receipt_ocr.web", "receipt_ocr.persistence"},
+    "application": {"receipt_ocr.web", "receipt_ocr.persistence", "receipt_ocr.samples"},
     "stages": {"receipt_ocr.web", "receipt_ocr.persistence", "receipt_ocr.jobs"},
-    "persistence": {"receipt_ocr.web", "receipt_ocr.application", "receipt_ocr.stages", "receipt_ocr.providers", "receipt_ocr.imaging", "receipt_ocr.recognition"},
+    "persistence": {"receipt_ocr.web", "receipt_ocr.application", "receipt_ocr.stages", "receipt_ocr.providers", "receipt_ocr.imaging", "receipt_ocr.recognition", "receipt_ocr.jobs", "receipt_ocr.samples"},
+    "jobs": {"receipt_ocr.web", "receipt_ocr.samples"},
+    "samples": {"receipt_ocr.web", "flask", "werkzeug"},
 }
 
 

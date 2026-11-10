@@ -25,10 +25,11 @@ def _contact_names(value):
 def derive_signature_check(fields, previous=None):
     """Compare the printed warehouse contact with the handwritten receiver.
 
-    Signature evidence is deliberately separate from the date/seal verdict:
-    it is useful for review and audit, but it is not an acceptance gate.
-    Preserve an explicit human choice while the two source fields are
-    unchanged so reopening a review does not silently discard it.
+    The final verdict policy decides whether and how to aggregate signature
+    evidence; this helper only compares one pair of recognized fields.
+    Preserve an explicit human choice or saved policy aggregation while the
+    two source fields are unchanged. Reading a result must not replace a
+    skipped or multi-provider check with this single pair's comparison.
     """
     fields = fields or {}
     contact = str(fields.get("仓库联系人") or "").strip()
@@ -38,6 +39,13 @@ def derive_signature_check(fields, previous=None):
             and prior.get("contact") == contact
             and prior.get("receiver") == receiver
             and isinstance(prior.get("human_confirmed_match"), bool)):
+        return {**prior, "contact": contact, "receiver": receiver}
+    mode, status = prior.get("match_mode"), prior.get("status")
+    if (prior.get("contact") == contact
+            and prior.get("receiver") == receiver
+            and isinstance(prior.get("reliable"), bool)
+            and ((mode == "none" and status == "未核对")
+                 or (mode in ("any", "all") and status in ("匹配", "不匹配", "需人工复核")))):
         return {**prior, "contact": contact, "receiver": receiver}
     normalized = lambda value: "".join(str(value).split())
     if contact and receiver:

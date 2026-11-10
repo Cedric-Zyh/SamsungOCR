@@ -1,6 +1,7 @@
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 import pytest
 from PIL import Image
@@ -119,7 +120,7 @@ def test_register_uses_clean_oriented_png_and_survives_receipt_artifact_removal(
     saved=response.get_json()['standard']
     assert saved['recognized']==REQUIREMENT
     image=client.get(saved['image_url']);assert image.status_code==200
-    with Image.open(db.path.parent/'seal-standards'/Path(saved['image_url']).name) as im:
+    with Image.open(db.path.parent/'seal-standards'/unquote(Path(saved['image_url']).name)) as im:
         assert im.getpixel((0,0))==(255,0,0)
     for p in folder.iterdir():p.unlink()
     db.delete_results([result_id])
@@ -190,7 +191,7 @@ def test_replacement_updates_one_row_and_all_metadata_atomically(app_store):
     assert saved['image_url']!=first['image_url']
     assert (saved['recognized'],saved['shape'],saved['color'])==('实际识别文字','rectangle','blue')
     assert len(db.list_seal_standards())==1
-    with Image.open(db.path.parent/'seal-standards'/Path(saved['image_url']).name) as im:
+    with Image.open(db.path.parent/'seal-standards'/unquote(Path(saved['image_url']).name)) as im:
         assert im.size==(24,40)
     assert register(client,next_id,revision=0).status_code==409
     assert len(db.list_seal_standards())==1
@@ -319,7 +320,8 @@ def test_reference_changes_refresh_pending_list_summaries_but_preserve_confirmed
 
 
 def sample_standard_source():
-    from receipt_ocr.web.samples import SampleCenter, sample_urls
+    from sample_support import SampleCenter
+    from receipt_ocr.samples.urls import sample_urls
     service = SampleCenter(web)
     folder = service.artifact_dir / "test"
     folder.mkdir(parents=True, exist_ok=True)

@@ -28,10 +28,12 @@ test('domain API clients keep endpoint construction out of feature views', async
 });
 
 
-test('workbench and review coordinators delegate row and editor presentation', () => {
+test('workbench and review coordinators delegate task-card and editor presentation', () => {
   const workbench = fs.readFileSync('static/modules/workbench/workbench.mjs', 'utf8');
   const review = fs.readFileSync('static/modules/review/controller.mjs', 'utf8');
-  assert.match(workbench, /row_renderer\.mjs/);
+  assert.match(workbench, /import \{renderTaskCard, renderTaskEmpty\} from '\.\/task_cards\.mjs'/);
+  assert.match(workbench, /shown\.map\(item => renderTaskCard\(item,/);
+  assert.doesNotMatch(workbench, /function renderTaskCard\(/);
   assert.doesNotMatch(workbench, /const badge = \(label, value, status\)/);
   assert.match(review, /editors\.mjs/);
   assert.doesNotMatch(review, /function setupDateConfirmation\(/);

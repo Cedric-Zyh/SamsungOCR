@@ -1,5 +1,5 @@
 import {createSampleCenter} from '../samples/center.mjs';
-import {createState} from '../core/state.mjs';
+import {createState, createResultChanges} from '../core/state.mjs';
 import {createUi} from '../core/ui.mjs';
 import {createApi, createApiClients} from '../core/api.mjs';
 import {createRecords} from '../records/records.mjs';
@@ -24,6 +24,7 @@ import {createLocalModelSettings} from '../settings/local_models.mjs';
 export function createApplication(environment, options = {}) {
   const {document, window, setTimeout, clearTimeout} = environment;
   const state = options.state || createState();
+  const resultChanges = createResultChanges(state);
   const ui = options.ui || createUi(environment);
   const {$, toast} = ui;
   const {records: recordsState, review: reviewState, imports: importsState,
@@ -56,9 +57,9 @@ export function createApplication(environment, options = {}) {
     retryOne: (...args) => imports.retryOne(...args),
     openProcessHistory: (...args) => process_history.open(...args),
     refreshVisibleResults,
+    onSelectionChanged: () => progress.syncStartRecognition(),
     onDateChanged: day => {
       $('#progress-date').value = day;
-      progressState.taskBatch = '';
       progress.loadDailyResults().catch(error => ui.toast(error.message, 'danger'));
     },
     setBatchStep: (...args) => imports.setBatchStep(...args)
@@ -147,17 +148,15 @@ export function createApplication(environment, options = {}) {
     importsState,
     progressState,
     recordsState,
-    reportState,
-    resultsState,
-    reviewState,
     api,
     services,
     ReceiptWorkbench,
     ReceiptQueue,
     openResultPreview: (...args) => result_preview.open(...args),
     openManagedRecords,
+    onResultsChanged: resultChanges.resultsChanged,
     onQueueChanged: () => {
-      recordsState.recordsStale = true;
+      resultChanges.queueChanged();
       if (document.body.dataset.activePage === 'records') records.loadRecords({background: true}).catch(error => ui.toast(error.message, 'danger'));
     },
     flushSettings: () => recognition_plan.flushSettings(),
@@ -197,28 +196,13 @@ export function createApplication(environment, options = {}) {
     loadSealCenter: (...args) => seal_center.load(...args)
   });
 
-  function openManagedRecords(day, taskId = '', batchLabel = '当前导入批次') {
+  function openManagedRecords(day) {
     records.openDayRecords(day);
-    recordsState.batchFilter = taskId;
-    recordsState.batchLabel = batchLabel;
-    if (taskId) {
-      $('#batch-scope').classList.remove('hidden');
-      $('#batch-scope span').textContent = batchLabel;
-    }
     records.loadRecords().catch(error => ui.toast(error.message, 'danger'));
   }
 
   function invalidateResultViews() {
-    if (state.store) {
-      state.store.patch('progress', slice => ({...slice, progressRecordCache: null}));
-      state.store.patch('records', slice => ({...slice, recordsStale: true}));
-      state.store.patch('report', slice => ({...slice, reportStale: true}));
-      state.store.patch('results', slice => ({...slice, resultRevision: (slice.resultRevision || 0) + 1}));
-      return;
-    }
-    progressState.progressRecordCache = null;
-    recordsState.recordsStale = reportState.reportStale = true;
-    resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
+    resultChanges.resultsChanged();
   }
   async function refreshVisibleResults() {
     if (document.hidden) return;

@@ -8,9 +8,7 @@ from contextlib import nullcontext
 
 from ..domain.documents.pagination import merge_paginated_results, page_group_candidates, page_identity
 from ..domain.fields.schema import derive_signature_check
-from .database_clock import now_iso
-from .read_model import SUMMARY_COLUMNS, load_selected_receipts
-from .recognition_calls import take_recognition_calls
+from .read_model import SUMMARY_COLUMNS, load_selected_receipts, attach_danzhengtong_tasks
 
 
 class ResultOperationsMixin:
@@ -27,34 +25,11 @@ class ResultOperationsMixin:
         error_message: str = "",
         _connection: sqlite3.Connection | None = None,
     ) -> int:
-        result = dict(result)
-        timestamp = result.get("created_at") or now_iso()
-        trace, trace_key = take_recognition_calls(result)
-        result["created_at"] = timestamp
-        review_status = result.get("review_status", "待复核")
-        payload = json.dumps(result, ensure_ascii=False)
-        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO results(
-                    created_at,updated_at,filename,stored_name,preview_name,overall,result_json,
-                    task_id,original_result_json,review_status,final_result,human_note,error_type,error_message,attempt,page_key
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    timestamp, timestamp, filename, stored_name, preview_name,
-                    result.get("overall", "识别失败"), payload, task_id, payload,
-                    review_status, result.get("final_result", result.get("overall", "")), "",
-                    error_type, error_message, 1, page_identity(filename)[0],
-                ),
-            )
-            result_id = int(cursor.lastrowid)
-            self.save_recognition_calls(filename, trace, result_id=result_id, run_key=trace_key,
-                                        status="failed" if error_message else "succeeded",
-                                        _connection=connection)
-            if _connection is None:
-                self.reconcile_task_pages(task_id, filename=filename, _connection=connection)
-        return result_id
+        return self.result_writes.create_recognition(
+            filename=filename, stored_name=stored_name, preview_name=preview_name,
+            task_id=task_id, result=result, error_type=error_type,
+            error_message=error_message, connection=_connection,
+        )
 
     def reconcile_task_pages(self, task_id: str, *, filename: str | None = None,
                              _connection: sqlite3.Connection | None = None) -> int:
@@ -271,9 +246,9 @@ class ResultOperationsMixin:
                 )
                 filtered.sort(key=review_group)
             selected = filtered[offset:] if limit is None else filtered[offset:offset + limit]
-            return {"items": selected if summary_only else load_selected_receipts(
+            return {"items": attach_danzhengtong_tasks(connection, selected if summary_only else load_selected_receipts(
                         connection, selected, self._row_to_result, merge_paginated_results
-                    ), "total": len(filtered), **metadata}
+                    )), "total": len(filtered), **metadata}
 
     def delete_results(self, ids: list[int]) -> list[int]:
         """Delete selected daily records and their hidden repeats/linked pages."""

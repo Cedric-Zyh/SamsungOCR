@@ -3,7 +3,7 @@ import json
 import pytest
 
 from receipt_ocr.domain.seal_standards import requirement_key
-from receipt_ocr.web.samples import SampleCenter
+from sample_support import SampleCenter
 from test_sample_center import samples
 from test_sample_library import upload
 

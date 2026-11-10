@@ -1,10 +1,11 @@
 /** Daily queue query, response ordering and freshness tracking. */
 import {localToday} from '../core/ui.mjs';
 
-export function createDailyQuery({environment, ui, progressState, importsState, recordsState,
-  reportState, resultsState, services, calendar, selected, viewState, pageSize,
+export function createDailyQuery({environment, ui, progressState, importsState,
+  services, calendar, selected, viewState, pageSize,
   ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
-  renderQueueControl, renderTask, renderWorkbenchRows, onQueueChanged = () => {}}) {
+  renderQueueControl, renderTask, renderWorkbenchRows,
+  onResultsChanged = () => {}, onQueueChanged = () => {}}) {
   const {document} = environment;
   const {$, $$} = ui;
   async function loadDailyResults({refreshRecords = true} = {}) {
@@ -27,7 +28,6 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       progressState.workItems = [];
       progressState.queueJobs = new Map();
       progressState.queueMarkup = '';
-      if (previousDay) progressState.taskBatch = '';
       if ($('#task-strip-counts')) $('#task-strip-counts').textContent = '正在获取任务…';
       selected.clear(); viewState.shownItems = [];
       if ($('#overview-completed')) $('#overview-completed').textContent = '—';
@@ -59,13 +59,14 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
         services.queue.list(day),
         services.queue.control()
       ]);
-      const signature = jobs.filter(job => ['succeeded', 'failed', 'cancelled'].includes(job.status)).map(job => `${job.id}:${job.status}:${job.finished_at}`).join('|');
+      const signature = jobs.filter(job => ['succeeded', 'failed', 'cancelled'].includes(job.status)).map(job => `${job.id}:${job.status}:${job.finished_at}:${job.danzhengtong?.status || ''}:${job.danzhengtong?.updated_at || ''}`).join('|');
       const cached = progressState.progressRecordCache;
       const reuse = !refreshRecords && cached?.day === day && cached.signature === signature && Date.now() - cached.at < 30000;
       const records = reuse ? cached.records : await (services.records.daily(day));
       if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
       if (!reuse) progressState.progressRecordCache = {day, signature, records, at: Date.now()};
       progressState.queueControl = control;
+      if (control.danzhengtong) progressState.dztControl = control.danzhengtong;
       renderQueueControl();
       progressState.queueJobs = new Map(jobs.map(job => [job.id, job]));
       const items = ReceiptQueue.rows(records, jobs), counts = ReceiptQueue.counts(items);
@@ -77,12 +78,12 @@ export function createDailyQuery({environment, ui, progressState, importsState, 
       progressState.workItems = items;
       progressState.queueDay = day;
       progressState.dailyReady = true;
+      syncStartRecognition();
       renderWorkbenchRows();
       $('#progress-note').textContent = importsState.batchRunning || importsState.uploadingJobs?.size ? '正在上传，请保持页面打开。' : '';
       $('#refresh-progress').textContent = '刷新';
       if (previousDay === day && progressState.queueSignature !== undefined && progressState.queueSignature !== signature) {
-        recordsState.recordsStale = reportState.reportStale = true;
-        resultsState.resultRevision = (resultsState.resultRevision || 0) + 1;
+        onResultsChanged({keepProgressCache: true});
       }
       progressState.queueDay = day; progressState.queueSignature = signature;
       const viewSignature = jobs.map(job => `${job.id}:${job.status}:${job.result_id || ''}:${job.target_result_id || ''}`).join('|');

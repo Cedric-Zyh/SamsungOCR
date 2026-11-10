@@ -29,3 +29,19 @@ def test_relative_domain_import_and_nested_package_are_resolved(tmp_path):
     assert violations(root) == []
     path.write_text("from ...providers import catalog")
     assert violations(root)
+
+
+@pytest.mark.parametrize("layer, statement", [
+    ("samples", "from receipt_ocr.web import application"),
+    ("samples", "from flask import abort"),
+    ("samples", "from werkzeug.exceptions import NotFound"),
+    ("persistence", "from ..jobs.danzhengtong_store import DanzhengtongOperations"),
+    ("jobs", "from ..samples.jobs import SampleJobStore"),
+    ("application", "from receipt_ocr.samples.service import SampleCenter"),
+    ("domain", "from receipt_ocr.samples.service import SampleCenter"),
+])
+def test_business_and_storage_boundaries_reject_upward_imports(tmp_path, layer, statement):
+    root = tmp_path / "receipt_ocr"
+    (root / layer).mkdir(parents=True)
+    (root / layer / "example.py").write_text(statement)
+    assert violations(root)

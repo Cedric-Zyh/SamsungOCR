@@ -7,6 +7,16 @@ const number = '(?:[①-⑳]|\\([0-9０-９]{1,3}\\)|（[0-9０-９]{1,3}）|[0-
 const purpose = new RegExp(`^(.{1,18}(?:专用章|收货章|业务受理章))(${number})?$`, 'u');
 const numberOnly = new RegExp(`^${number}$`, 'u');
 
+export const isDanzhengtongSealArtifact = item => item?.provider === 'danzhengtong'
+  || item?.recognition_mode === 'danzhengtong' || item?.ocr_backend === '单证通';
+
+export function danzhengtongProcessedUrl(item) {
+  if (['unavailable', 'missing', 'failed', 'pending', 'disabled'].includes(item.returned_image_status)) return '';
+  // The uploaded colour image is useful evidence, but it is not a returned,
+  // remotely oriented result. Never fall back to it as the processed image.
+  return item.returned_image_url || item.color_isolated_oriented_url || item.body_url || '';
+}
+
 export function rgbSealPreview(url) {
   if (typeof url !== 'string' || !/^\/files\/(?:samples\/)?artifacts\//u.test(url)) return url || '';
   if (/[?&]preview=rgb(?:&|$)/u.test(url)) return url;
@@ -25,6 +35,7 @@ function activeReads(item) {
 }
 
 export function savedSealText(item) {
+  if (isDanzhengtongSealArtifact(item) && text(item.provider_text)) return text(item.provider_text);
   return ['combined_text', 'rectangular_text', 'same_region_reconstructed_text',
     'round_type_band_reconstructed_text', 'unwrapped_text', 'isolated_text',
     'color_isolated_oriented_text', 'color_isolated_text', 'secondary_read_text']
@@ -132,6 +143,14 @@ export function savedSealComponents(item) {
 }
 
 export function sealProcessingSteps(item) {
+  if (isDanzhengtongSealArtifact(item)) {
+    const seen = new Set();
+    return [
+      ['印章原始区域', item.original_url],
+      ['上传的增强图', item.input_url || item.color_isolated_url],
+      ['单证通返回的旋正图', danzhengtongProcessedUrl(item)],
+    ].filter(([, url]) => url && !seen.has(url) && seen.add(url)).map(([label, url]) => ({label, url}));
+  }
   const seen = new Set();
   return [
     ['提取印章颜色', item.color_isolated_url || item.isolated_url],

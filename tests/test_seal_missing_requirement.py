@@ -9,6 +9,7 @@ from receipt_ocr.api.serializers import stage_result_payload
 from receipt_ocr.application import plans
 from receipt_ocr.application.assembly import _recognition_status
 from receipt_ocr.application.requests import StageRequest
+from receipt_ocr.application.qingtong_dispatch import QingTongDispatch
 from receipt_ocr.domain.stages import STAGES
 from receipt_ocr.stages import seal
 
@@ -24,7 +25,7 @@ def test_blank_requirement_stops_before_all_local_work(fields, monkeypatch):
     detector = Mock(side_effect=AssertionError("must not detect seal"))
     monkeypatch.setattr(seal, "detect_seal_regions", detector)
 
-    result = seal.recognize(context, StageRequest({}, fields, seal_future=future), reader, api)
+    result = seal.recognize(context, StageRequest({}, fields, seal_evidence=future), reader)
 
     assert result.check["execution_status"] == "skipped"
     assert result.check["skip_reason"] == "missing_requirement"
@@ -45,7 +46,8 @@ def test_empty_requirement_does_not_stop_remote_only_provider(monkeypatch, tmp_p
     reader = Mock(side_effect=AssertionError("remote-only must not run local OCR"))
     route = dict.fromkeys(("page", "date", "seal"), "paddle_v6")
 
-    result = seal.recognize(context, StageRequest(route, seal_mode="qingtong_only"), reader, api)
+    request = QingTongDispatch(api, context.source).bind(context, StageRequest(route, seal_mode="qingtong_only"))
+    result = seal.recognize(context, request, reader)
 
     api.recognize.assert_called_once_with(context.source)
     reader.assert_not_called()
@@ -72,7 +74,7 @@ def test_latest_fields_control_seal_work_without_stopping_date(
             return {"fields": {"签章要求": requirement}}
         if stage == "date":
             return {"date_check": {"actual": "2026-02-25", "status": "匹配"}}
-        return stage_result_payload(seal.recognize(context, request, reader, api))
+        return stage_result_payload(seal.recognize(context, request, reader))
 
     api = SimpleNamespace(skipped=lambda: {"enabled": False})
     analyzer = SimpleNamespace(seal_api=api, run_stage=run_stage)

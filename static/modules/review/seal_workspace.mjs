@@ -1,6 +1,7 @@
 import {escapeHtml} from '../core/ui.mjs';
 import {receivingObservedComponents} from './receiving_components.mjs';
-import {savedSealText, savedSealComponents, sealProcessingSteps} from './seal_component_fields.mjs';
+import {savedSealText, savedSealComponents, sealProcessingSteps,
+  isDanzhengtongSealArtifact, danzhengtongProcessedUrl} from './seal_component_fields.mjs';
 
 const objects = value => Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : [];
 const compact = value => String(value || '').replace(/\s+/gu, '');
@@ -9,6 +10,26 @@ export const sealImageUrl = value => typeof value === 'string' && value.startsWi
 const purposePattern = /^(.*?)(收[^①-⑳()（）\d０-９]{1,4}专用章)([①-⑳]|\([0-9０-９]{1,3}\)|（[0-9０-９]{1,3}）|[0-9０-９]{1,3})?$/u;
 
 export function sealWorkspaceModel(item) {
+  if (isDanzhengtongSealArtifact(item)) {
+    const original = sealImageUrl(item.input_url || item.color_isolated_url || item.original_url);
+    const processed = sealImageUrl(danzhengtongProcessedUrl(item));
+    const resultText = savedSealText(item);
+    const fields = [
+      {label: '印章颜色', value: item.provider_color || '', url: processed},
+      {label: '印章类型', value: item.provider_seal_type || '', url: processed},
+    ];
+    const missing = item.returned_image_status === 'missing';
+    const imageMessage = item.returned_image_status === 'disabled' ? '已关闭单证通旋正图下载'
+      : item.returned_image_status === 'pending' ? '单证通旋正图正在后台下载'
+        : missing ? '单证通未返回旋正图' : '单证通旋正图未能取回';
+    return {adopted: false, managed: false, remote: true, selected: '', text: resultText,
+      emptyText: '单证通尚未返回印章文字', status: resultText ? '单证通返回' : '未返回文字',
+      original, processed, preferred: processed || original,
+      originalLabel: item.input_url || item.color_isolated_url ? '上传的增强图' : '印章原始区域', processedLabel: '单证通旋正图',
+      fields, formFields: [], otherCandidate: '',
+      warning: processed ? '' : `${imageMessage}，可查看上传的增强图核对。`,
+    };
+  }
   const form = item.receiving_form || {}, primary = form.primary || {};
   const adopted = form.managed === true && form.status === 'adopted' && typeof form.identity_text === 'string' && Boolean(form.identity_text);
   const selected = adopted ? form.identity_text : '';
@@ -86,7 +107,7 @@ export function renderSealWorkspace(item, {audit = ''} = {}) {
   return `<section class="seal-workspace"><header class="seal-result-heading"><h4>印章识别结果</h4><span class="seal-adoption${model.adopted ? ' is-adopted' : ''}">${model.status}</span></header>
     <div class="seal-final-text">${escapeHtml(model.text || model.emptyText)}</div>
     ${model.warning ? `<p class="seal-result-warning">${escapeHtml(model.warning)}</p>` : ''}
-    <div class="seal-image-entry">${button('印章原图', model.original || model.processed, '查看印章图片')}<small>在左侧查看原图与处理图</small></div>
+    <div class="seal-image-entry">${button(model.remote && model.processed ? '单证通旋正图' : model.originalLabel || '印章原图', model.preferred || model.original || model.processed, '查看印章图片')}<small>${model.remote ? '在左侧查看上传图与单证通返回图' : '在左侧查看原图与处理图'}</small></div>
     ${model.fields.length ? `<div class="seal-result-fields">${model.fields.map(row).join('')}</div>` : ''}
     ${model.otherCandidate ? `<details class="seal-other-candidate"><summary>${model.adopted ? '其他识别读数' : '待核对候选'}</summary><p>${escapeHtml(model.otherCandidate)}</p></details>` : ''}
     ${formFields}${process}</section>`;
@@ -105,7 +126,8 @@ export function bindSealWorkspaces(root, items, previewSeal) {
     root.querySelectorAll('[data-seal-workspace-select]').forEach(button => {
       button.setAttribute('aria-pressed', String(Number(button.dataset.sealWorkspaceSelect) === index));
     });
-    if (preview) show(selection().original || selection().processed, '印章原图');
+    if (preview) show(selection().preferred || selection().original || selection().processed,
+      selection().remote && selection().processed ? '单证通旋正图' : selection().originalLabel || '印章原图');
   };
   root.querySelectorAll('[data-seal-workspace-select]').forEach(button => {
     button.addEventListener('click', () => activate(Number(button.dataset.sealWorkspaceSelect), true));
@@ -117,5 +139,6 @@ export function bindSealWorkspaces(root, items, previewSeal) {
     });
   });
   activate(0, false);
-  return () => show(selection().original || selection().processed, '印章原图');
+  return () => show(selection().preferred || selection().original || selection().processed,
+    selection().remote && selection().processed ? '单证通旋正图' : selection().originalLabel || '印章原图');
 }

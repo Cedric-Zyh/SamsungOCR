@@ -28,6 +28,16 @@ export function dateAuditText(item) {
   const displayedActual = check.actual_display || check.actual || '';
   const source = check.source || (isDanzhengtong(check) ? providerLabel(check) : check.backend) || '日期识别';
   const lines = [`来源：${source}${displayedActual ? ` · ${displayedActual}` : ''}${check.confidence != null ? ` · 置信度 ${percent(check.confidence)}` : ''}`];
+  for (const variant of item.recognition_variants?.date || []) {
+    if (variant.method === 'danzhengtong') continue;
+    const provider = variant.details?.date_check;
+    if (!provider && !variant.error) continue;
+    const label = `本地 ${String(provider?.backend || '').replace(/^本地\s*/, '').trim()
+      || localMethodLabels[variant.method] || variant.method || '日期 OCR'}`;
+    const value = provider?.actual_display || provider?.actual || '';
+    const confidence = provider?.confidence == null ? '' : ` · 置信度 ${percent(provider.confidence)}`;
+    lines.push(`${label}：${value || '未识别'} · ${evidenceStatus(provider || {}, value, variant.error)}${confidence}`);
+  }
   for (const {check: provider, variant} of danzhengtongResults(item, 'date')) {
     const label = providerLabel(provider, variant);
     if (source === label && provider.actual === check.actual && !variant?.error) continue;
@@ -89,8 +99,10 @@ export function sealEvidenceMarkup(item) {
       ocr.text || '未返回文字结果', `独立对照本单签章要求${fieldNote(ocr.comparison)}`);
   }
   for (const {check, variant} of danzhengtongResults(item, 'seal')) {
+    const attributes = [check.provider_color && `颜色：${check.provider_color}`,
+      check.provider_seal_type && `类型：${check.provider_seal_type}`].filter(Boolean);
     addRow(`${providerLabel(check, variant)} · 印章文字 OCR`, evidenceStatus(check, check.recognized, variant?.error, item.sample_center),
-      check.recognized || '未返回文字结果', `独立对照本单签章要求${fieldNote(check)}`);
+      check.recognized || '未返回文字结果', `${attributes.length ? `${attributes.join(' · ')} · ` : ''}独立对照本单签章要求${fieldNote(check)}`);
   }
   for (const {check, variant} of localSealResults(item)) {
     // The comparison status belongs to its selected reading. Older records

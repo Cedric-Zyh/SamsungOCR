@@ -2,13 +2,13 @@
 from dataclasses import dataclass
 from pathlib import Path
 import math
-from uuid import uuid4
 
 from flask import abort, jsonify, request
 from PIL import Image
 
 from ..domain.seal_standards import seal_candidates, requirement_key
 from ..domain.seal_name_terms import seal_name_terms
+from ..persistence.seal_standard_images import reserve_standard_image
 from ..review import prepare_review_payload
 
 
@@ -119,7 +119,9 @@ def register_standard(ctx, result_id):
             recognized = override.strip() if override is not None else candidate["recognized"]
             directory = ctx.database.path.parent / "seal-standards"
             directory.mkdir(parents=True, exist_ok=True)
-            destination = directory / f"{uuid4().hex}.png"
+            destination = reserve_standard_image(directory, previous['requirement'] if previous else requirement,
+                revision=expected_revision + 1,
+                reserved_names=ctx.database.seal_standard_image_alias_names(_connection=connection))
             with Image.open(source) as image:
                 image = image.convert("RGB")
                 if rotation:

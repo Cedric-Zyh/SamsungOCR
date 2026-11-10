@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 
 from .parsing_text import normalize_text
 from .seal_information_fields import compare_information_fields
+from .seal_auxiliary_fields import compare_auxiliary_fields
 from .seal_numbers import normalize_stamp_number_letters
 from .seal_script import simplify_seal_text
 from ..seal_name_terms import seal_name_terms
@@ -178,7 +179,8 @@ def compare_seal_text_strict(
                 "message": '仓库代码前的多余分隔点已按签章要求剔除；其余文字一致',
             }
         else:
-            field_match = compare_information_fields(expected, actual) if actual != expected else None
+            field_match = (compare_auxiliary_fields(requirement, text, normalize_seal_text_strict)
+                           or compare_information_fields(expected, actual)) if actual != expected else None
         if actual != expected and not field_match:
             # A printed, parenthesized short number after the purpose is an
             # extra field when the requirement omits it. Preserve the full

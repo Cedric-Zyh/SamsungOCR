@@ -6,6 +6,8 @@ stacks, so their cumulative work can exceed elapsed wall time.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from threading import Lock, get_ident
 from time import perf_counter
@@ -27,11 +29,18 @@ def _covered(intervals, start, end):
 
 
 class ImageProcessingTimings:
-    def __init__(self):
+    def __init__(self, *, run_id=None, timestamp=None):
         self._steps = {}
+        self._spans = []
+        self.run_id = run_id
+        if timestamp is None:
+            anchor = perf_counter()
+            wall = datetime.now(timezone.utc)
+            timestamp = lambda instant: (wall + timedelta(seconds=instant - anchor)).isoformat(timespec='microseconds')
+        self._timestamp = timestamp
         self._lock = Lock()
 
-    def record(self, stage, stage_label, operation, label, seconds, failed):
+    def record(self, stage, stage_label, operation, label, seconds, failed, *, started=None, finished=None):
         with self._lock:
             row = self._steps.setdefault((stage, operation), dict(
                 stage=stage, stage_label=stage_label, operation=operation, label=label,
@@ -39,13 +48,22 @@ class ImageProcessingTimings:
             row['calls'] += 1
             row['seconds'] += max(0.0, seconds)
             row['failed'] += int(failed)
+            if started is not None and finished is not None:
+                # Spans show the whole operation, including nested work. The
+                # cumulative row above continues to use exclusive image time.
+                self._spans.append(dict(
+                    kind='image', timing_scope='inclusive', run_id=self.run_id,
+                    stage=stage, stage_label=stage_label, operation=operation, label=label,
+                    started_at=self._timestamp(started), finished_at=self._timestamp(finished),
+                    seconds=round(max(0.0, finished - started), 4),
+                    status='failed' if failed else 'succeeded'))
 
     def snapshot(self):
         with self._lock:
             rows = [{**row, 'seconds': round(row['seconds'], 4)}
                     for row in self._steps.values()]
             return dict(seconds=round(sum(row['seconds'] for row in self._steps.values()), 4),
-                        steps=rows)
+                        steps=rows, **({'spans': deepcopy(self._spans)} if self._spans else {}))
 
 
 @contextmanager
@@ -103,7 +121,7 @@ def image_operation(operation, label):
         _frames.reset(token)
         elapsed = max(0.0, finished - started)
         elapsed -= _covered(frame['excluded'], started, finished)
-        recorder.record(stage, stage_label, operation, label, elapsed, failed)
+        recorder.record(stage, stage_label, operation, label, elapsed, failed, started=started, finished=finished)
         if parent is not None:
             parent['excluded'].append((started, finished))
 

@@ -7,7 +7,7 @@ export function recordSelectionKey(record) {
   return record.id ? Number(record.id) : null;
 }
 
-export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBusy}) {
+export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBusy, onChange = () => {}}) {
   function toggleSelected(id, checked) {
     if (!recordsState.records.some(record => recordSelectionKey(record) === id)) return;
     checked ? recordsState.selected.add(id) : recordsState.selected.delete(id);
@@ -48,6 +48,7 @@ export function createRecordSelection({recordsState, $, $$, canBulkConfirm, isBu
     $('#select-all').disabled = busy || !eligible.length;
     $('#select-all').checked = !!eligible.length && eligible.every(key => recordsState.selected.has(key));
     $('#select-all').indeterminate = recordsState.selected.size > 0 && !$('#select-all').checked;
+    onChange();
   }
 
   return {toggleSelected, selectCurrentPage, updateSelectionToolbar};

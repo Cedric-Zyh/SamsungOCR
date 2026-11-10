@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.web.sample_statistics import evaluate_sample, summarize_problem_annotations
-from receipt_ocr.web.samples import SampleCenter
+from receipt_ocr.samples.statistics import evaluate_sample, summarize_problem_annotations
+from sample_support import SampleCenter
 from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
 from test_sample_center import samples
 

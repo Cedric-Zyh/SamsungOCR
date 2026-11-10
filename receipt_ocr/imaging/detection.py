@@ -4,11 +4,16 @@ from __future__ import annotations
 from receipt_ocr.runtime.image_processing import timed_image
 
 from pathlib import Path
+import logging
 import cv2
 import numpy as np
 from .contracts import SealRegion
 from .io import _read_image
-from .colors import _color_masks
+from .colors import _color_masks, detect_seal_color
+from .seal_detector import detect_seal_boxes
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _remove_page_spanning_vertical_scan_lines(mask: np.ndarray) -> np.ndarray:
@@ -38,10 +43,40 @@ def _remove_page_spanning_vertical_scan_lines(mask: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(mask, cv2.bitwise_not(long_vertical))
 
 
-@timed_image('detection', '图形定位')
+@timed_image('detection', '印章定位')
 def detect_seal_regions(path: str | Path) -> list[SealRegion]:
-    """Detect colored stamp regions without calling an external service."""
+    """Locate whole stamps locally, preserving the detector's original boxes.
+
+    A successful empty model result means no stamps were detected. Only a
+    failed/unavailable model uses the legacy color-contour fallback.
+    """
     image = _read_image(path)
+    try:
+        detections = detect_seal_boxes(image)
+    except Exception:
+        _logger.warning("本地印章模型不可用，回退颜色轮廓定位", exc_info=True)
+        return _detect_color_seal_regions(image)
+    height, width = image.shape[:2]
+    regions = []
+    for detection in detections:
+        x1, y1, x2, y2 = detection.xyxy
+        crop = image[y1:y2, x1:x2]
+        color = detect_seal_color(crop)
+        red, blue = _color_masks(crop)
+        mask = red if color == "red" else blue
+        pixel_ratio = float(cv2.countNonZero(mask)) / mask.size
+        regions.append(SealRegion(
+            x=x1 / width, y=y1 / height,
+            width=(x2 - x1) / width, height=(y2 - y1) / height,
+            color=color,
+            role=classify_seal_role((x1 + x2) / (2 * width), (y1 + y2) / (2 * height)),
+            pixel_ratio=round(pixel_ratio, 4),
+        ))
+    return sorted(regions, key=lambda region: (region.y, region.x))
+
+
+def _detect_color_seal_regions(image: np.ndarray) -> list[SealRegion]:
+    """Legacy contour rules, retained for model load/inference failures."""
     height, width = image.shape[:2]
     red, blue = _color_masks(image)
     red = _remove_page_spanning_vertical_scan_lines(red)

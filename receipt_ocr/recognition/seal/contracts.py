@@ -6,6 +6,7 @@ and candidate dictionaries retain their established formats for existing users.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,52 @@ class PreparedVariant:
 
 
 @dataclass(frozen=True)
+class VerifiedTypeRead:
+    text: str
+    confidence: float
+    image_url: str
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "confidence": self.confidence, "image_url": self.image_url}
+
+
+@dataclass(frozen=True)
+class SealInputTask:
+    """An OCR instruction independent from mutable presentation evidence.
+
+    ``observations=None`` requests OCR; an empty tuple reuses an empty detection.
+    This distinction prevents an unsuccessful detection being run a second time.
+    """
+
+    input_id: str
+    region_id: str
+    path: Path
+    channel: str
+    read_mode: str = ""
+    observations: tuple[TextObservation, ...] | None = None
+    image_url: str = ""
+    rectangle_row_index: int | None = None
+    verified_type_read: VerifiedTypeRead | None = None
+
+    @classmethod
+    def from_input(cls, region_id: str, entry: dict, path: Path) -> "SealInputTask":
+        verified = entry.get("verified_type_read")
+        return cls(
+            input_id=entry["id"], region_id=region_id, path=Path(path),
+            channel=entry["channel"], read_mode=entry.get("read_mode", ""),
+            observations=(tuple(TextObservation(
+                row["text"], row["confidence"], row["x"], row["y"], row["width"], row["height"],
+            ) for row in entry["detected_rows"]) if "detected_rows" in entry else None),
+            image_url=entry.get("image_url", ""),
+            rectangle_row_index=entry.get("rectangle_row_index"),
+            verified_type_read=(VerifiedTypeRead(
+                str(verified.get("text") or ""), float(verified.get("confidence") or 0),
+                str(verified.get("image_url") or ""),
+            ) if verified else None),
+        )
+
+
+@dataclass(frozen=True)
 class PreparedSeal:
     """Shape-independent handoff from preprocessing to OCR."""
 
@@ -30,6 +77,37 @@ class PreparedSeal:
     variants: tuple[PreparedVariant, ...] = ()
     orientation: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    tasks: tuple[SealInputTask, ...] = ()
+    artifact: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_inputs(cls, artifact: dict, jobs, *, index: int | None = None) -> "PreparedSeal":
+        """Freeze execution instructions before OCR updates the evidence.
+
+        Legacy shape preparers still produce input dictionaries. Only this
+        boundary translates them; the recognition loop never uses a display
+        dictionary to decide what image or channel to read.
+        """
+        jobs = tuple(jobs)
+        index = artifact.get("index", index)
+        if index is None:
+            raise ValueError("Prepared seal requires a region index")
+        evidence = deepcopy(artifact)
+        evidence.setdefault("region_id", f"seal-{index}")
+        registered = {entry["id"] for entry in evidence.setdefault("inputs", [])}
+        for entry, _ in jobs:
+            if entry["id"] not in registered:
+                evidence["inputs"].append(deepcopy(entry))
+                registered.add(entry["id"])
+        return cls(
+            index=index, shape=artifact.get("shape_code", ""),
+            variants=tuple(PreparedVariant(entry.get("name", entry["id"]), Path(path))
+                           for entry, path in jobs),
+            orientation=deepcopy(artifact.get("orientation", {})),
+            tasks=tuple(SealInputTask.from_input(evidence["region_id"], entry, path)
+                        for entry, path in jobs),
+            artifact=evidence,
+        )
 
 
 @dataclass(frozen=True)

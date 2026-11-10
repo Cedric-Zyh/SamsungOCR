@@ -66,6 +66,8 @@ def evaluate_sample(name, truth, job):
     payload = json.loads(job.get("payload_json") or "{}")
     options = payload.get("sample_options") or payload
     config = options.get("recognition_config")
+    if options.get('_preserve_provider_results') and isinstance(result.get('recognition_config'), dict):
+        config = result['recognition_config']
     if not isinstance(config, dict):
         config = result.get("recognition_config")
     config = config if isinstance(config, dict) else None

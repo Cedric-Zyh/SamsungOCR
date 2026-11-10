@@ -34,6 +34,7 @@ def management_jobs(ctx, day, rows=None):
                 raw = dict(raw)
                 jobs[raw['id']] = ctx.job_store.public(raw, settings)
                 order[raw['id']] = raw['task_order']
+        ctx.job_store.attach_remote(list(jobs.values()), connection)
     return sorted(jobs.values(), key=lambda job: (job['created_at'], order.get(job['id'], 0)), reverse=True)
 
 
@@ -80,8 +81,14 @@ def management_listing(ctx, filters, page, page_size, *, reviewable=False, selec
         if job:
             row["processing_job"] = job
             row["management_task_id"] = job["task_id"]
+            row['danzhengtong_job_id'] = job['id']
+            row['danzhengtong_task'] = job.get('danzhengtong')
+            row['remote_waiting'] = bool(job.get('danzhengtong', {}).get('pending')) if job.get('danzhengtong') else False
         status = job["status"] if job else ""
-        if status in ACTIVE or status == "failed":
+        if status == 'failed' and row.get('remote_waiting'):
+            row['overall'] = row['final_result'] = '待结果'
+            row['review_status'] = '待复核'
+        elif status in ACTIVE or status == "failed":
             row["processing_status"] = status
             row["overall"] = row["final_result"] = "识别失败" if status == "failed" else LABELS[status]
             row["review_status"] = ""
@@ -96,6 +103,8 @@ def management_listing(ctx, filters, page, page_size, *, reviewable=False, selec
         if overall == "处理中":
             if row.get("processing_status") not in ACTIVE:
                 return False
+        elif overall == '需人工复核' and (row.get('final_result') or row.get('overall')) == '待结果':
+            pass
         elif overall and overall != (row.get("final_result") or row.get("overall")):
             return False
         # The daily queue can include retries of an older imported receipt.
@@ -111,6 +120,8 @@ def management_listing(ctx, filters, page, page_size, *, reviewable=False, selec
     for row in scoped:
         counts[""] += 1
         status = "处理中" if row.get("processing_status") in ACTIVE else row.get("final_result") or row.get("overall")
+        if status == '待结果':
+            status = '需人工复核'
         if status in counts:
             counts[status] += 1
     filtered = [row for row in scoped if matches(row, filters)]
@@ -133,11 +144,14 @@ def management_listing(ctx, filters, page, page_size, *, reviewable=False, selec
     output = []
     for row in selected:
         hydrated = full.get(row.get("id"), row)
-        for key in ("processing_job", "processing_status", "management_task_id"):
+        for key in ("processing_job", "processing_status", "management_task_id", 'danzhengtong_job_id', 'danzhengtong_task', 'remote_waiting'):
             if key in row:
                 hydrated[key] = row[key]
         if row.get("processing_status"):
             for key in ("overall", "final_result", "review_status", "date_check", "seal_check", "signature_check"):
+                hydrated[key] = row[key]
+        elif row.get('remote_waiting') and (row.get('processing_job') or {}).get('status') == 'failed':
+            for key in ('overall', 'final_result', 'review_status'):
                 hydrated[key] = row[key]
         output.append(hydrated)
     return {"items": output, "total": len(filtered),

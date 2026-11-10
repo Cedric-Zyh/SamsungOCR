@@ -5,6 +5,43 @@ from .issues import issue, active_issues
 from .fields.schema import derive_signature_check
 
 
+def pending_danzhengtong_stages(result: dict) -> set[str]:
+    return {stage for stage, variants in (result.get('recognition_variants') or {}).items()
+            if any(variant.get('method') == 'danzhengtong' and variant.get('pending')
+                   for variant in variants or [])}
+
+
+def apply_pending_verdict(result: dict) -> dict:
+    """Keep execution completion separate from a verdict waiting on evidence."""
+    stages = pending_danzhengtong_stages(result)
+    if not stages or result.get('review_status') in {'确认通过', '确认不通过'}:
+        return result
+    acceptance = (result.get('recognition_config') or {}).get('acceptance') or {}
+    seal_enabled = acceptance.get('seal_match_mode') != 'none'
+    date_enabled = acceptance.get('date_match_mode') != 'none'
+    required = (
+        ('seal' in stages and seal_enabled and (
+            acceptance.get('seal_match_mode') == 'all'
+            or acceptance.get('seal_pass_standard') == 'danzhengtong_exact'))
+        or ('date' in stages and date_enabled and (
+            acceptance.get('date_match_mode') == 'all'
+            or (acceptance.get('date_source') == 'danzhengtong'
+                and acceptance.get('date_match_mode') not in {'any', 'all'})))
+        or (stages.intersection({'fields', 'handwriting'})
+            and acceptance.get('signature_match_mode') == 'all')
+    )
+    if result.get('overall') == '通过' and not required:
+        return result
+    result.update(overall='待结果', final_result='待结果', review_status='待复核')
+    existing_reasons = result.get('review_reasons', [])
+    issues = result.setdefault('review_issues', [issue('review_required', 'document', message)
+                                                for message in existing_reasons if message != '等待单证通结果'])
+    result['review_reasons'] = list(dict.fromkeys([*existing_reasons, '等待单证通结果']))
+    if not any(item.get('code') == 'provider_pending' and item.get('provider') == 'danzhengtong' for item in issues):
+        issues.append(issue('provider_pending', 'document', '等待单证通结果', provider='danzhengtong'))
+    return result
+
+
 def has_provider_failure(result: dict) -> bool:
     """Provider identity and failure codes decide failure, never UI text."""
     for variants in (result.get("recognition_variants") or {}).values():

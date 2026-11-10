@@ -13,7 +13,7 @@ const FIXED_RECORD_PAGE_SIZE = 25;
 
 export function createRecords({
   environment, ui, ReceiptWorkbench, recordsState, api, services = createApiClients(api), startReviewScope, retryOne,
-  refreshVisibleResults, setBatchStep, openProcessHistory = () => {}, onDateChanged = () => {}
+  refreshVisibleResults, setBatchStep, openProcessHistory = () => {}, onDateChanged = () => {}, onSelectionChanged = () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
   const {document, window, location, FormData, URLSearchParams, AbortController, setTimeout, clearTimeout} = environment;
@@ -26,7 +26,8 @@ export function createRecords({
   let bulkActionPending = false;
   const selection = createRecordSelection({
     recordsState, $, $$, canBulkConfirm: item => canBulkConfirm(item),
-    isBusy: () => !!recordsState.recordLoading || bulkActionPending || searchState.composing
+    isBusy: () => !!recordsState.recordLoading || bulkActionPending || searchState.composing,
+    onChange: onSelectionChanged
   });
   const {toggleSelected, selectCurrentPage, updateSelectionToolbar} = selection;
   const calendar = createImportCalendar({environment, ui, api, services, prefix: 'calendar', popup: '#import-calendar',
@@ -71,7 +72,10 @@ export function createRecords({
     catch (error) { toast(error.message, 'danger'); }
   }
   function renderFilterChips() {
-    const entries = activeFilterEntries(currentFilters()).map(entry => entry.key === 'task_id' ? {...entry, value: recordsState.batchLabel || '当前导入批次'} : entry);
+    // The status tabs already display the overall filter; chips describe only
+    // the additional conditions that are not visible in that row.
+    const entries = activeFilterEntries(currentFilters()).filter(entry => entry.key !== 'overall')
+      .map(entry => entry.key === 'task_id' ? {...entry, value: recordsState.batchLabel || '当前导入批次'} : entry);
     const container = $('#active-filters');
     container.innerHTML = entries.map(({key, label, value}) =>
       `<button type="button" class="filter-chip" data-remove-filter="${key}" aria-label="移除${escapeHtml(label)}：${escapeHtml(value)}"><span>${escapeHtml(label)}：${escapeHtml(value)}</span><span aria-hidden="true">×</span></button>`).join('');
@@ -348,8 +352,29 @@ export function createRecords({
       if (!button) return;
       $('#record-more-menu').dataset.recordId = button.dataset.moreRecord;
       $('#record-more-menu').dataset.filename = button.dataset.moreFilename || '';
+      const item = recordsState.records.find(record => Number(record.id) === Number(button.dataset.moreRecord));
+      const jobId = item?.danzhengtong_job_id || '';
+      const remote = item?.danzhengtong_task;
+      for (const [selector, kind] of [['[data-menu-dzt-view]', 'view'], ['[data-menu-dzt-query]', 'query'], ['[data-menu-dzt-submit]', remote ? 'resubmit' : 'submit']]) {
+        const action = $(selector);
+        if (action) {
+          action.hidden = !jobId || (kind === 'view' && !remote)
+            || (kind === 'query' && !['waiting', 'received'].includes(remote?.status))
+            || (kind === 'resubmit' && !['failed', 'unknown', 'conflict', 'cancelled'].includes(remote?.status));
+          action.disabled = kind === 'query' && !!remote?.querying;
+          action.dataset.dztJob = jobId; action.dataset.dztAction = kind;
+        }
+      }
+      if ($('[data-menu-dzt-submit]')) $('[data-menu-dzt-submit]').textContent = remote ? '重新提交单证通' : '提交单证通';
+      if ($('[data-menu-dzt-local]')) {
+        $('[data-menu-dzt-local]').hidden = !jobId;
+        $('[data-menu-dzt-local]').dataset.dztLocal = jobId;
+      }
       showTablePopover($('#record-more-menu'), button);
     });
+    for (const selector of ['[data-menu-dzt-view]', '[data-menu-dzt-query]', '[data-menu-dzt-submit]', '[data-menu-dzt-local]']) {
+      $(selector)?.addEventListener('click', closeTablePopover);
+    }
     $('[data-menu-process]').addEventListener('click', () => {
       const menu = $('#record-more-menu'), id = Number(menu.dataset.recordId);
       const item = recordsState.records.find(record => Number(record.id) === id);

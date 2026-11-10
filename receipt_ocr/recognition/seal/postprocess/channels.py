@@ -21,7 +21,7 @@ def record_local_channel(verdict: dict, local_check, match_mode: str = "any") ->
     """Rank independent readings uniformly, retaining both original checks."""
     if not isinstance(local_check, dict) or not local_check:
         return verdict
-    from .providers import combine_seal_provider_checks
+    from receipt_ocr.domain.seal_provider_selection import combine_seal_provider_checks
 
     result = combine_seal_provider_checks([verdict, local_check], match_mode=match_mode)
     if result is not None:

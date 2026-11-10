@@ -16,11 +16,16 @@ PLAN = {'fields':['paddle_v6'], 'date':['paddle_v6'], 'seal':['paddle_v6','qingt
 
 @pytest.fixture
 def manager(monkeypatch):
+    from receipt_ocr.imaging import seal_detector
+
     monkeypatch.setattr(paddle, '_PIPELINES', {})
     monkeypatch.setattr(paddle, '_LINE_RECOGNIZERS', {})
     monkeypatch.setattr(paddle, '_SEAL_DETECTORS', {})
     monkeypatch.setattr(orientation, '_classifier', None)
     monkeypatch.setattr(orientation, '_doc_classifier', None)
+    detector_state = {'loaded': False}
+    monkeypatch.setattr(seal_detector, 'seal_detector_loaded', lambda: detector_state['loaded'])
+    monkeypatch.setattr(seal_detector, 'release_seal_detector', lambda: detector_state.update(loaded=False))
     manager = models.LocalModelManager()
     monkeypatch.setattr(models, 'local_model_manager', manager)
     seen = []
@@ -28,6 +33,7 @@ def manager(monkeypatch):
         seen.append(key)
         if key == 'page_v6': paddle._PIPELINES['v6'] = object()
         elif key == 'line_v6': paddle._LINE_RECOGNIZERS['v6'] = object()
+        elif key == 'seal_detector': detector_state['loaded'] = True
         elif key == 'seal': paddle._SEAL_DETECTORS['seal'] = object()
         elif key == 'line_orientation': orientation._classifier = object()
         elif key == 'doc_orientation': orientation._doc_classifier = object()
@@ -42,10 +48,12 @@ def manager(monkeypatch):
 @pytest.mark.parametrize('plan,expected', [
     ({'fields':['paddle_v6']}, ['page_v6']),
     ({'seal':['qingtong'],'date':['danzhengtong']}, []),
-    ({'seal':['paddle_seal']}, ['page_v6','line_v6','seal','line_orientation']),
-    ({'seal':['paddle_v6'],'seal_orientation':'none'}, ['page_v6','line_v6']),
-    (PLAN, ['page_v6','line_v6','line_orientation']),
-    ({**PLAN,'seal_orientation':'doc_ori'}, ['page_v6','line_v6','line_orientation','doc_orientation']),
+    ({'seal':['danzhengtong']}, ['seal_detector']),
+    ({'seal':['danzhengtong'],'seal_orientation':'doc_ori'}, ['seal_detector']),
+    ({'seal':['paddle_seal']}, ['page_v6','line_v6','seal_detector','seal','line_orientation']),
+    ({'seal':['paddle_v6'],'seal_orientation':'none'}, ['page_v6','line_v6','seal_detector']),
+    (PLAN, ['page_v6','line_v6','seal_detector','line_orientation']),
+    ({**PLAN,'seal_orientation':'doc_ori'}, ['page_v6','line_v6','seal_detector','line_orientation','doc_orientation']),
 ])
 def test_only_current_local_routes_are_prepared(plan, expected):
     assert models.required_models(plan) == expected
@@ -53,7 +61,7 @@ def test_only_current_local_routes_are_prepared(plan, expected):
 
 def test_deliberately_enabled_local_audit_is_included_for_remote_seal_routes(monkeypatch):
     monkeypatch.setenv('SEAL_SECONDARY_READ_MODE', 'local')
-    assert models.required_models({'seal':['qingtong']}) == ['page_v6','line_v6','line_orientation']
+    assert models.required_models({'seal':['qingtong']}) == ['page_v6','line_v6','seal_detector','line_orientation']
     monkeypatch.setenv('SEAL_SECONDARY_READ_MODE', 'off')
     assert models.required_models({'seal':['qingtong']}) == []
 
@@ -64,11 +72,11 @@ def test_load_once_release_all_and_allow_lazy_loading_again(manager):
     assert manager.change(True, PLAN)['operation'] == 'loading'
     manager._thread.join(timeout=5)
     state = manager.status(PLAN)
-    assert state['ready'] and state['loaded_count'] == 3
+    assert state['ready'] and state['loaded_count'] == 4
     assert set(manager.seen) == set(models.required_models(PLAN))
     assert state['initialization_seconds'] >= 0
     manager.change(True, PLAN)
-    assert len(manager.seen) == 3
+    assert len(manager.seen) == 4
     # Also unload models retained from a previous plan.
     paddle._SEAL_DETECTORS['seal'] = object()
     orientation._doc_classifier = object()
@@ -81,6 +89,39 @@ def test_load_once_release_all_and_allow_lazy_loading_again(manager):
     assert manager.status(PLAN)['state'] == 'partial'
 
 
+def test_seal_detector_adapters_load_report_and_release_the_same_model(monkeypatch):
+    from receipt_ocr.imaging import seal_detector
+
+    loaded = {'value': False}
+    model = object()
+    calls = []
+
+    def load():
+        calls.append('load')
+        loaded['value'] = True
+        return model
+
+    def release():
+        calls.append('release')
+        loaded['value'] = False
+
+    monkeypatch.setattr(seal_detector, 'load_seal_detector', load)
+    monkeypatch.setattr(seal_detector, 'seal_detector_loaded', lambda: loaded['value'])
+    monkeypatch.setattr(seal_detector, 'release_seal_detector', release)
+    monkeypatch.setattr(paddle, '_PIPELINES', {})
+    monkeypatch.setattr(paddle, '_LINE_RECOGNIZERS', {})
+    monkeypatch.setattr(paddle, '_SEAL_DETECTORS', {})
+    monkeypatch.setattr(orientation, '_classifier', None)
+    monkeypatch.setattr(orientation, '_doc_classifier', None)
+
+    assert not models.loaded_models()['seal_detector']
+    assert models._load_model('seal_detector') is model
+    assert models.loaded_models()['seal_detector']
+    models._release_models()
+    assert not models.loaded_models()['seal_detector']
+    assert calls == ['load', 'release']
+
+
 def test_release_is_rejected_for_an_entire_receipt_and_for_direct_prediction(manager):
     def analyze(*args, **kwargs):
         assert manager.status(PLAN)['busy']
@@ -91,6 +132,97 @@ def test_release_is_rejected_for_an_entire_receipt_and_for_direct_prediction(man
     with paddle._prediction_slot():
         with pytest.raises(models.ModelsBusy): manager.change(False, PLAN)
     assert not manager.status(PLAN)['busy']
+
+
+def test_remote_seal_plan_initializes_only_its_local_detector(manager):
+    plan = {'seal': ['danzhengtong']}
+    assert manager.status(plan)['state'] == 'unloaded'
+    manager.change(True, plan)
+    manager._thread.join(timeout=5)
+    assert manager.seen == ['seal_detector']
+    assert manager.status(plan)['ready']
+    assert manager.status(plan)['required_count'] == 1
+    manager.change(False, plan)
+    manager._thread.join(timeout=5)
+    assert manager.status(plan)['state'] == 'unloaded'
+
+
+@pytest.fixture
+def async_seal_preparation(tmp_path):
+    from receipt_ocr.danzhengtong import Settings
+    from receipt_ocr.jobs.danzhengtong_seals import SealRequests
+
+    source = tmp_path / 'receipt.png'
+    source.write_bytes(b'placeholder')
+    worker = SealRequests()
+    worker.store = SimpleNamespace(get=lambda job_id: {})
+    worker.service = SimpleNamespace(source_for=lambda job: source)
+    worker._client = lambda task: SimpleNamespace(settings=Settings(), _validate_credentials=lambda: None)
+    worker._seal_storage = lambda task: (tmp_path, '')
+    worker._save_seals = lambda *args, **kwargs: True
+    return worker, {'job_id': 'test'}, {'seal_required': True}
+
+
+def test_async_detector_cannot_be_released_during_loading_or_prediction(
+        manager, monkeypatch, async_seal_preparation):
+    from receipt_ocr.imaging import seal_detector
+
+    loading, predicting = Event(), Event()
+    finish_load, finish_predict = Event(), Event()
+    plan = {'seal': ['danzhengtong']}
+    image = object()
+    worker, task, state = async_seal_preparation
+
+    def predict(actual):
+        assert actual is image
+        predicting.set()
+        assert finish_predict.wait(timeout=5)
+        return []
+
+    def load():
+        loading.set()
+        assert finish_load.wait(timeout=5)
+        return SimpleNamespace(predict=predict)
+
+    monkeypatch.setattr(seal_detector, 'load_seal_detector', load)
+    monkeypatch.setattr('receipt_ocr.danzhengtong_seal.prepare_requests',
+                        lambda *args: seal_detector.detect_seal_boxes(image))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(worker._prepare_seals, task, state, finish=False)
+        try:
+            assert loading.wait(timeout=2)
+            assert manager.status(plan)['busy']
+            with pytest.raises(models.ModelsBusy):
+                manager.change(False, plan)
+            finish_load.set()
+            assert predicting.wait(timeout=2)
+            assert manager.status(plan)['busy']
+            with pytest.raises(models.ModelsBusy):
+                manager.change(False, plan)
+        finally:
+            finish_load.set()
+            finish_predict.set()
+        assert pending.result(timeout=5)
+    assert state['prepared'] and 'preparation_error' not in state
+    assert not manager.status(plan)['busy']
+
+
+@pytest.mark.parametrize('failure_phase', ['load', 'predict'])
+def test_failed_async_detector_releases_its_model_activity(
+        manager, monkeypatch, failure_phase, async_seal_preparation):
+    from receipt_ocr.imaging import seal_detector
+
+    def fail(*args):
+        raise RuntimeError('failed detector')
+
+    monkeypatch.setattr(seal_detector, 'load_seal_detector',
+                        fail if failure_phase == 'load' else lambda: SimpleNamespace(predict=fail))
+    monkeypatch.setattr('receipt_ocr.danzhengtong_seal.prepare_requests',
+                        lambda *args: seal_detector.detect_seal_boxes(object()))
+    worker, task, state = async_seal_preparation
+    assert worker._prepare_seals(task, state, finish=False)
+    assert state['prepared'] and 'failed detector' in state['preparation_error']
+    assert not manager.status({'seal': ['danzhengtong']})['busy']
 
 
 def test_loading_blocks_new_recognition_and_duplicate_operations(manager, monkeypatch):

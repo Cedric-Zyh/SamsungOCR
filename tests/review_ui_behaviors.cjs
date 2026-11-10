@@ -5,6 +5,15 @@ const {createReviewImage} = require('../static/modules/review/review_image.mjs')
 const {createReview} = require('../static/modules/review/review.mjs');
 const {dateAuditText, sealEvidenceMarkup} = require('../static/modules/review/review_provider_evidence.mjs');
 
+test('remote seal evidence keeps returned colour and type alongside literal text', () => {
+  const html = sealEvidenceMarkup({seal_check: {backend: '单证通', recognized: '测试公司 收发货专用章',
+    status: '匹配', provider_color: '蓝色', provider_seal_type: '<椭圆章>'}});
+  assert.match(html, /测试公司 收发货专用章/);
+  assert.match(html, /颜色：蓝色/);
+  assert.match(html, /类型：&lt;椭圆章&gt;/);
+  assert.doesNotMatch(html, /<椭圆章>/);
+});
+
 test('sample seal matching is not converted into manual confirmation by reliability metadata', () => {
   const item = {sample_center:true,seal_check:{backend:'本地 PaddleOCR PP-OCRv6 Small',
     recognized:'客户公司收货专用章',status:'匹配',reliable:false}};
@@ -45,6 +54,25 @@ test('date evidence includes an additional Danzhengtong result and avoids duplic
   assert.equal(dateAuditText(record), '来源：单证通 · 2025-02-10');
   record.recognition_variants.date[0].error = '接口失败';
   assert.match(dateAuditText(record), /单证通：2025-02-10 · 识别失败/);
+});
+
+test('selecting the nearer Danzhengtong date preserves the other methods original dates and provenance', () => {
+  const local = {actual:'2025-02-02', source:'日期区域识别', backend:'本地 PaddleOCR PP-OCRv6 Small',
+    status:'不匹配', confidence:.68};
+  const remote = {actual:'2025-02-21', source:'单证通', backend:'单证通', status:'不匹配'};
+  const record = {date_check:remote, fields:{'要求到货':'2025-02-22'}, recognition_variants:{date:[
+    {method:'paddle_v6', details:{date_check:local}},
+    {method:'danzhengtong', details:{date_check:remote}},
+  ]}};
+  const before = JSON.stringify(record);
+  const evidence = dateAuditText(record);
+  assert.match(evidence,/来源：单证通 · 2025-02-21/);
+  assert.match(evidence,/本地 PaddleOCR PP-OCRv6 Small：2025-02-02 · 不匹配 · 置信度 68%/);
+  assert.equal((evidence.match(/2025-02-21/g)||[]).length,1);
+  assert.equal(JSON.stringify(record),before);
+  const readiness = reviewReadiness(record,{...draft(),requiredDate:'2025-02-22',actualDate:'2025-02-21'});
+  assert.equal(readiness.dateReady,false);
+  assert.equal(readiness.dateStatus,'不匹配');
 });
 
 test('seal evidence shows QingTong and Danzhengtong comparisons independently of the overall result', () => {

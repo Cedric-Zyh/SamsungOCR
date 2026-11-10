@@ -44,7 +44,7 @@
             </div>
             <div class="seal-orientation-setting">
               <div class="setting-item-copy">
-                <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M19 12a7 7 0 1 0-2 5"/><path d="m9 9 6 2-2 6-6-2z"/></svg></span>
+                <span class="setting-item-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11a9 9 0 0 1 15.7-6.3L21 7M17 7h4V3"/><path d="M21 13a9 9 0 0 1-15.7 6.3L3 17M7 17H3v4"/></svg></span>
                 <div><label for="seal-orientation-mode">印章方向处理</label><small id="seal-orientation-description"></small></div>
               </div>
               <div class="setting-select-wrap"><select id="seal-orientation-mode" aria-label="印章方向处理方式" aria-describedby="seal-orientation-description">
@@ -121,7 +121,7 @@
             <div class="settings-section-heading"><div><h2 id="remote-services-title">远程识别服务</h2><p>管理服务凭据，配置后可在识别方式中选择。</p></div><span class="remote-local-note">配置保存在本机</span></div>
             <div class="remote-service-row">
               <span class="remote-service-icon" aria-hidden="true">单</span>
-              <div class="remote-service-copy"><h3>单证通 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h3><p>识别回单字段、手写签名、日期与印章</p></div>
+              <div class="remote-service-copy"><h3>单证通 <span data-dzt-status class="remote-status {{ 'available' if dzt_status.configured else '' }}">{{ dzt_status.status }}</span></h3><p>识别回单字段、手写签名、日期，以及印章颜色、类型和文字</p></div>
               <button type="button" class="secondary-button" data-service-dialog="dzt-settings-dialog" aria-haspopup="dialog" aria-label="配置单证通">配置<span aria-hidden="true"> ›</span></button>
             </div>
             <div class="remote-service-row">
@@ -190,19 +190,20 @@
               <label class="{{ 'service-field-wide' if key == 'callback_url' else '' }}">{{ label }}<input name="{{ key }}" type="{{ 'password' if key in dzt_status.secrets_set else 'text' }}" autocomplete="{{ 'new-password' if key in dzt_status.secrets_set else 'off' }}" value="{{ dzt_status['values'].get(key, '') }}" placeholder="{{ '已设置，留空保留' if dzt_status.secrets_set.get(key) else '请输入' }}" maxlength="4096">{% if key == 'callback_url' %}<small>使用服务方提供或认可的地址</small>{% endif %}</label>
 {% endfor %}
             </div>
-            <details class="service-advanced"><summary>高级配置<span>接口地址、模型与查询设置</span></summary><div class="dzt-config-grid">
-{% for key, label in [('base_url','接口地址'), ('upload_url','文件上传地址'), ('org_id','组织 ID'), ('sys_code','系统编码'), ('model_id','模型 ID'), ('upload_source_code','上传来源编码'), ('poll_timeout_seconds','查询超时（秒）')] %}
-              <label class="{{ 'service-field-wide' if key in ['base_url','upload_url'] else '' }}">{{ label }}<input name="{{ key }}" type="{{ 'number' if key == 'poll_timeout_seconds' else 'text' }}" value="{{ dzt_status['values'].get(key, '') }}" {{ 'min=1 max=60 step=1' if key == 'poll_timeout_seconds' else '' }}>{% if key == 'upload_source_code' %}<small>留空时使用系统编码</small>{% endif %}</label>
+            <label class="service-download-setting"><input type="checkbox" name="download_seal_images" {% if dzt_status['values'].get('download_seal_images', true) %}checked{% endif %}><span>下载单证通旋正图<small>文字结果先保存，图片在后台下载。关闭后跳过下载，已有缓存仍可查看。</small></span></label>
+            <details class="service-advanced"><summary>高级配置<span>接口地址、场景与查询设置</span></summary><div class="dzt-config-grid">
+{% for key, label in [('base_url','接口地址'), ('upload_url','文件上传地址'), ('org_id','组织 ID'), ('sys_code','系统编码'), ('model_id','整页场景 ID'), ('seal_model_id','印章场景 ID'), ('upload_source_code','上传来源编码'), ('poll_timeout_seconds','查询超时（秒）')] %}
+              <label class="{{ 'service-field-wide' if key in ['base_url','upload_url'] else '' }}">{{ label }}<input name="{{ key }}" type="{{ 'number' if key == 'poll_timeout_seconds' else 'text' }}" value="{{ dzt_status['values'].get(key, '') }}" {{ 'min=1 max=60 step=1' if key == 'poll_timeout_seconds' else '' }}>{% if key == 'upload_source_code' %}<small>留空时使用系统编码</small>{% elif key == 'model_id' %}<small>提取回单字段、签收填写和日期</small>{% elif key == 'seal_model_id' %}<small>识别印章颜色、类型和文字，使用返回的旋正图</small>{% endif %}</label>
 {% endfor %}
             </div></details>
           </form>
           <section class="service-test" aria-labelledby="dzt-test-title">
-            <div class="service-test-heading"><h3 id="dzt-test-title">测试识别</h3><span>请先保存配置</span></div>
+            <div class="service-test-heading"><h3 id="dzt-test-title">整页连通测试</h3><span>请先保存配置</span></div>
             <form id="dzt-test-form" class="dzt-test-form">
               <label class="service-file-picker"><input id="dzt-test-file" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" aria-label="选择测试回单" required><span class="service-file-button">选择回单</span><span id="dzt-test-filename">未选择图片</span></label>
-              <button type="submit" class="secondary-button" {{ 'disabled' if not dzt_status.configured else '' }}>测试识别</button>
+              <button type="submit" class="secondary-button" {{ 'disabled' if not dzt_status.configured else '' }}>测试整页识别</button>
             </form>
-            <p>图片将上传至单证通，可能产生费用；测试不保存为正式记录。</p>
+            <p>此处检查整页场景；印章场景在印章识别时单独调用。图片将上传至单证通，可能产生费用；测试不保存为正式记录。</p>
           </section>
           <p id="dzt-save-status" class="service-feedback" role="status" aria-live="polite"></p>
         </div>

@@ -1,0 +1,11 @@
+<div class="sample-execution-choice">
+  <button type="button" id="sample-execution-mode" value="all" aria-haspopup="menu" aria-expanded="false" aria-controls="sample-execution-menu" aria-describedby="sample-execution-note" title="选择测试方式">
+    <span id="sample-execution-label">全部一起</span>
+    <svg class="sample-execution-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+  </button>
+  <div id="sample-execution-menu" class="sample-execution-menu" role="menu" aria-label="测试方式" hidden>
+    {% for mode, label in [('both', '本地 + 单证通'), ('local', '只本地'), ('qingtong', '只清瞳'), ('danzhengtong', '只单证通'), ('all', '全部一起')] %}
+    <button type="button" role="menuitemradio" data-sample-mode="{{ mode }}" aria-checked="{{ 'true' if mode == 'all' else 'false' }}" tabindex="-1"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg><span>{{ label }}</span></button>
+    {% endfor %}
+  </div>
+</div>

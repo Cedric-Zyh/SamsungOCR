@@ -4,9 +4,20 @@ import {createCompanyMarks, companyRowMarkup, requirementRowMarkup} from './comp
 import {createSampleLibrary} from './library.mjs';
 import {createResultFilters, matchesResultFilters} from './result_filters.mjs';
 import {createSampleThumbnails} from './thumbnails.mjs';
+import {createSampleExecutionMenu} from './execution_menu.mjs';
+import {createSampleRunProgress} from './run_progress.mjs';
+import {createSampleDataSession} from './data_session.mjs';
 
 const PAGE_SIZE = 6;
 const VIEW_STORAGE_KEY = 'sample-library-view-v1';
+const MODE_STORAGE_KEY = 'sample-execution-mode-v1';
+const executionModes = {
+  all: {label: '全部一起', note: '本地、清瞳、单证通一起运行'},
+  both: {label: '本地 + 单证通', note: '本地与单证通一起运行'},
+  local: {label: '只本地', note: '仅运行当前方案中的本地模型'},
+  qingtong: {label: '只清瞳', note: '仅识别印章，沿用已有字段核对'},
+  danzhengtong: {label: '只单证通', note: '仅更新单证通，保留已有的本地与清瞳结果'},
+};
 const actionIcons = {
   preview: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   result: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h5"/>',
@@ -26,25 +37,53 @@ export function sampleScope(items, {company = '', search = '', status = '', requ
 }
 
 export function sampleCompanyProgress(items) {
-  const total = items.length;
-  const completed = items.filter(item => item.status === '已完成').length;
-  const running = items.filter(item => item.status === '测试中').length;
-  const failed = items.filter(item => item.status === '运行失败').length;
+  const counts = emptyProgress();
+  for (const item of items) addProgress(counts, item.status);
+  return progressLabel(counts);
+}
+
+const emptyProgress = () => ({total: 0, completed: 0, running: 0, failed: 0});
+function addProgress(counts, status) {
+  counts.total++;
+  if (status === '已完成') counts.completed++;
+  else if (status === '测试中') counts.running++;
+  else if (status === '运行失败') counts.failed++;
+}
+function progressLabel({total, completed, running, failed}) {
   const state = total && completed === total ? 'complete' : running ? 'running' : failed ? 'failed' : completed ? 'partial' : 'untested';
   const label = state === 'complete' ? '✓ 已测完' : running ? `测试中 · 已完成 ${completed}/${total}`
     : failed ? `已完成 ${completed}/${total} · ${failed} 张失败` : completed ? `已完成 ${completed}/${total}` : '未测试';
   return {state, label, title: `共 ${total} 张，已完成 ${completed} 张，测试中 ${running} 张，运行失败 ${failed} 张。已测完表示测试执行完成，不代表识别结果全部正确。`};
 }
 
+/** Build directory progress in one pass, regardless of company/group count. */
+export function sampleProgressIndex(items) {
+  const all = emptyProgress(), companies = new Map(), groups = new Map();
+  for (const item of items) {
+    const status = item.status, name = item.company, key = item.requirement_key || '';
+    if (!companies.has(name)) companies.set(name, emptyProgress());
+    if (!groups.has(name)) groups.set(name, new Map());
+    if (!groups.get(name).has(key)) groups.get(name).set(key, emptyProgress());
+    addProgress(all, status);
+    addProgress(companies.get(name), status);
+    addProgress(groups.get(name).get(key), status);
+  }
+  return (company = '', requirement = null) => progressLabel(!company ? all
+    : (requirement === null ? companies.get(company) : groups.get(company)?.get(requirement)) || emptyProgress());
+}
+
 export function sampleCard(item, selected, evidence = '') {
   const filename = escapeHtml(item.filename), busy = item.status === '测试中';
   const checks = [['日期', item.checks?.date], ['印章', item.checks?.seal], ['签名', item.signature]];
-  const detail = item.status === '已完成'
-    ? `<p class="sample-card-checks">${checks.map(([label, value]) => `<span data-match="${value === '匹配' ? 'true' : value === '未执行' || (label === '签名' && value === '未识别') ? '' : 'false'}">${label} ${escapeHtml(value || '未执行')}</span>`).join('')}</p>`
+  const checkRow = () => `<p class="sample-card-checks">${checks.map(([label, value]) => `<span data-match="${value === '匹配' ? 'true' : value === '未执行' || (label === '签名' && value === '未识别') ? '' : 'false'}">${label} ${escapeHtml(value || '未执行')}</span>`).join('')}</p>`;
+  const detail = item.danzhengtong?.pending
+    ? `${item.retained_results ? checkRow() : ''}<p class="sample-card-checks">${item.execution_mode !== 'danzhengtong' && ['succeeded', 'failed'].includes(item.job_status) ? '常规识别已结束 · ' : ''}单证通${escapeHtml(item.danzhengtong.label)}</p>`
+    : item.status === '已完成'
+    ? checkRow()
     : `<p class="${item.error ? 'sample-card-error' : ''}"${item.error ? ` title="${escapeHtml(item.error)}"` : ''}>${escapeHtml(item.error || (busy ? item.job_status === 'queued' ? '等待测试…' : '正在识别…' : '尚无测试结果'))}</p>`;
   return `<article class="sample-card${selected ? ' is-selected' : ''}" data-filename="${filename}">
     <div class="sample-card-image"><button class="sample-thumbnail" type="button" data-sample-preview aria-label="预览 ${filename}"><img data-sample-src="${sampleImageUrl(item.filename, true)}" loading="lazy" alt="${filename} 样单缩略图"></button><label><input type="checkbox" data-sample-select aria-label="选择 ${filename}" ${selected ? 'checked' : ''} ${busy ? 'disabled' : ''}></label><span class="sample-state" data-status="${escapeHtml(item.status)}">${escapeHtml(item.status)}</span></div>
-    <div class="sample-card-copy"><h3>${filename}</h3>${detail}${evidence}
+    <div class="sample-card-copy"><div class="sample-card-title"><h3>${filename}</h3>${executionModes[item.execution_mode] ? `<span class="sample-execution-badge" title="最近一次测试方式">${executionModes[item.execution_mode].label}</span>` : ''}</div>${detail}${item.danzhengtong?.status === 'waiting' ? '<button type="button" class="mini-button" data-sample-dzt-query>查询单证通结果</button>' : ''}${evidence}
     <div class="sample-card-actions"><button type="button" data-sample-preview>${actionIcon('preview')}<span>预览</span></button><button type="button" data-sample-result ${item.result_id ? '' : 'disabled'}>${actionIcon('result')}<span>测试结果</span></button><button type="button" data-sample-run ${busy ? 'disabled' : ''}>${actionIcon('run')}<span>${busy ? '测试中…' : item.result_id || item.status === '运行失败' ? '重新测试' : '运行测试'}</span></button></div></div></article>`;
 }
 
@@ -53,19 +92,41 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   let items = [], companies = [], company = '', status = '', page = 1;
   let requirement = null, requirementGroups = {}, expanded = new Set();
   let classificationRequirement = null;
-  let selected = new Set(), loadPromise = null, running = false, loaded = false, lastRender = '';
+  let selected = new Set(), running = false, lastRender = '';
+  let submittingTests = false;
   let historyLoading = false, historyMarkup = '', historyRows = [];
   let view = 'grid';
+  let executionMode = 'all';
   let companyMarkup = '';
-  let lastAttemptAt = null, loadFailed = false;
   let thumbnailsCleared = false;
-  const now = () => (environment.Date || Date).now();
   const thumbnails = createSampleThumbnails({environment});
+  const runProgress = createSampleRunProgress({environment, ui, services, currentCompany: () => company});
+  const executionMenu = createSampleExecutionMenu({environment, ui, modes: executionModes, changed: mode => {
+    executionMode = mode;
+    try { environment.window.localStorage?.setItem(MODE_STORAGE_KEY, executionMode); } catch {}
+    syncSelection();
+  }});
   const resultFilters = createResultFilters({environment, ui, changed: () => {
     page = 1; selected.clear(); render({deferImages: true}); $('#sample-grid').scrollTop = 0;
   }});
   const companyMarks = createCompanyMarks({environment, ui, services, render: renderCompanies});
   const statistics = createSampleStatistics({environment, ui, services, openResult, openOriginal, imageUrl: sampleImageUrl});
+  const dataSession = createSampleDataSession({
+    list: revision => services.samples.list(revision),
+    now: () => (environment.Date || Date).now(),
+    isActive: () => running || runProgress.active(),
+    onSnapshot: acceptSnapshot,
+    onRefresh: async () => {
+      await runProgress.refresh();
+      $('#sample-feedback').textContent = '';
+      if ($('#sample-history-dialog').open) await refreshHistory();
+      await statistics.refresh();
+    },
+    onError: (error, {loaded}) => {
+      $('#sample-feedback').textContent = `加载失败：${error.message}，正在等待恢复连接。`;
+      if (!loaded) $('#sample-grid').innerHTML = '<div class="empty-state">样单暂时无法加载</div>';
+    },
+  });
   const library = createSampleLibrary({environment, ui, services,
     current: () => ({company, companies, selected, busy: running}),
     setBusy: busy => { running = busy; syncSelection(); },
@@ -92,11 +153,12 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   const browseIds = () => scope().filter(item => item.result_id).map(item => item.result_id);
 
   function renderCompanies() {
+    const progressFor = sampleProgressIndex(items);
     const query = $('#sample-company-search').value.trim().toLocaleLowerCase();
     const rows = companies.filter(row => row.name !== '未分类' && row.name.toLocaleLowerCase().includes(query) && companyMarks.matches(row.name));
     const unclassified = {name: '未分类', count: items.filter(item => item.company === '未分类').length};
     const markup = [{name: '', count: items.length}, unclassified, ...rows].map((row, index) => {
-      const progress = sampleCompanyProgress(sampleScope(items, {company: row.name}));
+      const progress = progressFor(row.name);
       const groups = requirementGroups[row.name] || [];
       const parent = companyRowMarkup(row, progress, company === row.name,
         {matched: groups.filter(group => group.key && group.has_standard).length}, expanded.has(row.name));
@@ -106,7 +168,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       const children = [ungrouped, ...groups.filter(group => group.key)];
       return parent + `<div class="sample-requirement-groups" aria-label="${escapeHtml(row.name)}的签章要求">${children.map(group =>
         requirementRowMarkup(row.name, group, company === row.name && requirement === group.key,
-            sampleCompanyProgress(sampleScope(items, {company: row.name, requirement: group.key}))))
+            progressFor(row.name, group.key)))
         .join('')}</div>`;
     }).join('') + (!rows.length ? '<p class="empty-state">没有符合条件的公司</p>' : '');
     if (markup !== companyMarkup) {
@@ -125,6 +187,11 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   }
 
   function syncSelection() {
+    executionMenu.render({value: executionMode, disabled: running});
+    $('#sample-execution-note').textContent = executionModes[executionMode].note;
+    for (const selector of ['#sample-run-company', '#sample-run-selected', '#sample-result-filters-run']) {
+      $(selector).title = `测试方式：${executionModes[executionMode].label}`;
+    }
     const available = visible().filter(item => item.status !== '测试中');
     $('#sample-select-page').checked = available.length > 0 && available.every(item => selected.has(item.filename));
     $('#sample-select-page').indeterminate = available.some(item => selected.has(item.filename)) && !$('#sample-select-page').checked;
@@ -141,7 +208,8 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-clear-selection').textContent = `已选 ${selected.size} 张${selected.size ? ' · 清空' : ''}`;
     $('#sample-clear-selection').disabled = !selected.size;
     $('#sample-batch-actions').hidden = !selected.size;
-    $('#sample-run-company').disabled = running || !companyItems().some(item => item.status !== '测试中');
+    $('#sample-run-company').title = `运行${company ? '本公司全部' : '全部'} ${companyItems().length} 张样单 · ${executionModes[executionMode].label}`;
+    runProgress.render({submitting: submittingTests, hasRunnable: !running && companyItems().some(item => item.status !== '测试中')});
     $('#sample-result-filters-run').disabled = running || !scope().some(item => item.status !== '测试中');
     $$('#sample-grid [data-sample-select]').forEach(input => {
       input.checked = selected.has(input.closest('[data-filename]').dataset.filename);
@@ -150,6 +218,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $$('#sample-grid [data-sample-run]').forEach(button => {
       const item = items.find(row => row.filename === button.closest('[data-filename]').dataset.filename);
       button.disabled = running || item.status === '测试中';
+      button.title = `测试方式：${executionModes[executionMode].label}`;
     });
   }
 
@@ -163,7 +232,6 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     $('#sample-library-summary').textContent = `${requirement !== null ? `当前分组 ${groupItems().length} 张 · ` : ''}${company ? `本公司 ${companyItems().length} 张` : `共 ${items.length} 张样单`} · ${sampleCompanyProgress(groupItems()).label}`;
     $('#sample-requirement-title').textContent = groupLabel || (company === '未分类' ? '未归类' : '本公司全部样单');
     $('#sample-requirement-title').title = $('#sample-requirement-title').textContent;
-    $('#sample-run-company').innerHTML = `${actionIcon('play')}<span>${company ? '运行本公司全部' : '运行全部样单'}</span>`;
     $('#sample-classify').hidden = false;
     $('#sample-grid').dataset.view = view;
     $('#sample-grid').setAttribute('aria-label', view === 'grid' ? '样单卡片' : '样单列表');
@@ -199,43 +267,27 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
     syncSelection();
   }
 
-  function load(force = false) {
-    if (loadPromise) return force ? loadPromise.then(() => load()) : loadPromise;
-    loadPromise = loadOnce().finally(() => { loadPromise = null; });
-    return loadPromise;
+  function load(force = false, {conditional = false} = {}) {
+    return dataSession.load({force, conditional});
   }
 
   function poll() {
-    const active = running || !loaded || loadFailed || items.some(item => item.status === '测试中');
-    if (lastAttemptAt !== null && now() - lastAttemptAt < (active ? 2000 : 30000)) return loadPromise;
-    return load();
+    return dataSession.poll();
   }
 
-  async function loadOnce() {
-    lastAttemptAt = now();
-    try {
-      const data = await services.samples.list();
-      items = data.items; companies = data.companies;
-      resultFilters.updateSources(data.filter_seal_sources);
-      requirementGroups = data.requirement_groups || {};
-      companyMarks.update(data);
-      if (company && company !== '未分类' && !companies.some(row => row.name === company)) { company = ''; requirement = null; classificationRequirement = null; }
-      if (requirement && !requirementGroups[company]?.some(group => group.key === requirement)) {
-        requirement = ''; classificationRequirement = '';
-      }
-      selected = new Set([...selected].filter(name => items.some(item => item.filename === name && item.status !== '测试中')));
-      renderCompanies();
-      loaded = true;
-      loadFailed = false;
-      $('#sample-feedback').textContent = '';
-      render();
-      if ($('#sample-history-dialog').open) await refreshHistory();
-      await statistics.refresh();
-    } catch (error) {
-      loadFailed = true;
-      $('#sample-feedback').textContent = `加载失败：${error.message}，正在等待恢复连接。`;
-      if (!loaded) $('#sample-grid').innerHTML = '<div class="empty-state">样单暂时无法加载</div>';
+  function acceptSnapshot(data) {
+    items = data.items; companies = data.companies;
+    runProgress.discover(items);
+    resultFilters.updateSources(data.filter_seal_sources);
+    requirementGroups = data.requirement_groups || {};
+    companyMarks.update(data);
+    if (company && company !== '未分类' && !companies.some(row => row.name === company)) { company = ''; requirement = null; classificationRequirement = null; }
+    if (requirement && !requirementGroups[company]?.some(group => group.key === requirement)) {
+      requirement = ''; classificationRequirement = '';
     }
+    selected = new Set([...selected].filter(name => items.some(item => item.filename === name && item.status !== '测试中')));
+    renderCompanies();
+    render();
   }
 
   async function classify() {
@@ -263,23 +315,23 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   async function run(names) {
     if (running) { toast('正在提交测试，请稍候再操作'); return false; }
     if (!names.length) return false;
-    running = true; syncSelection();
+    const mode = executionMode;
+    const runCompany = company;
+    running = true; submittingTests = true; syncSelection();
     try {
       await flushSettings();
-      const data = await services.samples.run(names);
-      const accepted = new Set(data.accepted);
-      for (const item of items) if (accepted.has(item.filename)) {
-        item.status = '测试中'; item.job_status = 'queued'; item.error = '';
-        delete item.result_filters;
-        selected.delete(item.filename);
-      }
+      const data = await services.samples.run(names, mode);
+      submittingTests = false;
+      runProgress.start(data.task_id, data.accepted.length, runCompany);
+      items = dataSession.markAccepted(data.accepted, mode).items;
+      for (const filename of data.accepted) selected.delete(filename);
       renderCompanies();
       render();
-      toast(data.accepted.length ? `已开始 ${data.accepted.length} 张样单测试${data.skipped.length ? `，${data.skipped.length} 张已在测试中` : ''}` : '所选样单已在测试中', 'success');
+      toast(data.accepted.length ? `已开始 ${data.accepted.length} 张样单测试 · ${executionModes[mode].label}${data.skipped.length ? `，${data.skipped.length} 张已在测试中` : ''}` : '所选样单已在测试中', 'success');
       await load(true);
       return true;
     } catch (error) { toast(error.message, 'danger'); return false; }
-    finally { running = false; syncSelection(); }
+    finally { running = false; submittingTests = false; syncSelection(); }
   }
 
   async function refreshHistory() {
@@ -291,7 +343,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       if (!dialog.open) return;
       historyRows = rows;
       const states = {queued: '等待测试', running: '测试中', succeeded: '已完成', failed: '运行失败', cancelled: '已取消'};
-      const markup = rows.map(row => `<div class="sample-history-row"><div><strong>${escapeHtml(row.filename)}</strong><small>${escapeHtml(row.created_at)}${row.error_message ? ` · ${escapeHtml(row.error_message)}` : ''}</small></div><span>${states[row.status] || '未测试'}</span><button type="button" class="text-button" data-history-result="${row.result_id || ''}" ${row.result_id ? '' : 'disabled'}>测试结果</button></div>`).join('') || '<p class="empty-state">暂无测试记录</p>';
+      const markup = rows.map(row => `<div class="sample-history-row"><div><strong>${escapeHtml(row.filename)}</strong><small>${executionModes[row.execution_mode] ? executionModes[row.execution_mode].label + ' · ' : ''}${escapeHtml(row.created_at)}${row.error_message ? ` · ${escapeHtml(row.error_message)}` : ''}</small></div><span>${states[row.status] || '未测试'}</span><button type="button" class="text-button" data-history-result="${row.result_id || ''}" ${row.result_id ? '' : 'disabled'}>测试结果</button></div>`).join('') || '<p class="empty-state">暂无测试记录</p>';
       if (markup !== historyMarkup) { body.innerHTML = markup; historyMarkup = markup; }
     } catch (error) {
       historyMarkup = '';
@@ -309,6 +361,13 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
 
   function initialize() {
     try { if (environment.window.localStorage?.getItem(VIEW_STORAGE_KEY) === 'list') view = 'list'; } catch {}
+    try {
+      const saved = environment.window.localStorage?.getItem(MODE_STORAGE_KEY);
+      if (Object.hasOwn(executionModes, saved)) executionMode = saved;
+    } catch {}
+    runProgress.initialize();
+    executionMenu.initialize();
+    executionMenu.render({value: executionMode, disabled: false});
     resultFilters.initialize();
     statistics.initialize();
     companyMarks.initialize();
@@ -335,7 +394,9 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
         classificationRequirement = null;
       } else { requirement = null; classificationRequirement = null; }
       company = nextCompany; page = 1; selected.clear();
+      runProgress.discover(items);
       renderCompanies(); renderFromTop();
+      runProgress.refresh();
     });
     $('#sample-search').addEventListener('input', () => { page = 1; renderFromTop(); });
     $$('[data-sample-status]').forEach(button => button.addEventListener('click', () => {
@@ -359,7 +420,14 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       if (!card) return;
       const item = items.find(row => row.filename === card.dataset.filename);
       try {
-        if (event.target.closest('[data-sample-run]')) await run([item.filename]);
+        if (event.target.closest('[data-sample-dzt-query]')) {
+          const button = event.target.closest('[data-sample-dzt-query]');
+          if (button.disabled) return;
+          button.disabled = true;
+          try { await services.samples.queryDanzhengtong([item.job_id]); toast('已安排查询单证通原请求。', 'success'); await load(true); }
+          finally { if (button.isConnected) button.disabled = false; }
+        }
+        else if (event.target.closest('[data-sample-run]')) await run([item.filename]);
         else if (event.target.closest('[data-sample-result]')) await openResult(item.result_id, {browseIds: browseIds()});
         else if (event.target.closest('[data-sample-preview]')) {
           if (item.result_id) await openResult(item.result_id, {preview: true, browseIds: browseIds()});
@@ -385,6 +453,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
       } catch (error) { toast(error.message, 'danger'); }
     });
     environment.window.addEventListener('hashchange', () => {
+      executionMenu.close();
       thumbnails.clear(); thumbnailsCleared = true;
       $('#sample-history-dialog').close();
     });

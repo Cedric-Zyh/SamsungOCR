@@ -35,6 +35,7 @@ export function initializeColumnWidths({environment, ui}) {
     table.style.width = total;
     table.style.minWidth = total;
     table.classList.toggle('has-custom-column-widths', !!widths);
+    table.classList.toggle('has-narrow-actions', !!widths && widths[6] < 140);
     handles.forEach((handle,index) => handle.setAttribute('aria-valuenow', String(widths?.[index] || measure()[index])));
   }
 

@@ -9,6 +9,7 @@ from time import perf_counter
 MODEL_LABELS = {
     'page_v6': '整页文字识别',
     'line_v6': '文字行识别',
+    'seal_detector': '印章定位',
     'seal': '印章专用识别',
     'line_orientation': '文字行方向识别',
     'doc_orientation': '印章方向识别',
@@ -26,6 +27,10 @@ def required_models(plan):
         needed.add('page_v6')
     if 'paddle_v6' in stages['date'] or local_seal:
         needed.add('line_v6')
+    # The remote seal scene still locates its upload crops with local YOLO.
+    # This dependency does not imply local text or orientation recognition.
+    if local_seal or 'danzhengtong' in stages['seal']:
+        needed.add('seal_detector')
     if 'paddle_seal' in stages['seal']:
         needed.add('seal')
     if local_seal and plan.get('seal_orientation', 'polygon') != 'none':
@@ -38,9 +43,11 @@ def required_models(plan):
 
 def loaded_models():
     from . import paddle_runtime as paddle, orientation
+    from ..imaging.seal_detector import seal_detector_loaded
     return {
         'page_v6': 'v6' in paddle._PIPELINES,
         'line_v6': 'v6' in paddle._LINE_RECOGNIZERS,
+        'seal_detector': seal_detector_loaded(),
         'seal': 'seal' in paddle._SEAL_DETECTORS,
         'line_orientation': orientation._classifier is not None,
         'doc_orientation': orientation._doc_classifier is not None,
@@ -49,9 +56,11 @@ def loaded_models():
 
 def _load_model(key):
     from . import paddle_runtime as paddle, orientation
+    from ..imaging.seal_detector import load_seal_detector
     return {
         'page_v6': lambda: paddle._pipeline('v6'),
         'line_v6': lambda: paddle._line_recognizer('v6'),
+        'seal_detector': load_seal_detector,
         'seal': paddle._seal_pipeline,
         'line_orientation': orientation._line_classifier,
         'doc_orientation': orientation._document_classifier,
@@ -60,6 +69,7 @@ def _load_model(key):
 
 def _release_models():
     from . import paddle_runtime as paddle, orientation
+    from ..imaging.seal_detector import release_seal_detector
     # The manager owns the prediction lock here; no caller can retain a model
     # for inference while these references are being removed.
     with paddle._PIPELINE_LOCK, orientation._lock:
@@ -68,6 +78,7 @@ def _release_models():
         paddle._SEAL_DETECTORS.clear()
         orientation._classifier = None
         orientation._doc_classifier = None
+    release_seal_detector()
     gc.collect()
 
 

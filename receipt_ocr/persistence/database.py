@@ -23,6 +23,14 @@ from .constants import (
     REVIEW_STATUSES,
 )
 from .database_clock import now_iso
+from .result_writes import ResultWrites
+
+
+_ACTIVE_REMOTE_SQL = """active=1 AND (
+    status IN ('queued','submitting','waiting','received','unknown','conflict')
+    OR (status='applied' AND EXISTS (
+        SELECT 1 FROM json_each(danzhengtong_jobs.seal_requests_json, '$.requests') child
+        WHERE json_extract(child.value, '$.image_download.status') IN ('queued','running'))))"""
 
 
 class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin, StatisticsMixin, SettingsMixin, SealStandardOperationsMixin, RecognitionCallOperationsMixin):
@@ -31,6 +39,7 @@ class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self.result_writes = ResultWrites(self)
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -63,6 +72,10 @@ class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin
         removed_jobs = 0
         removed_tasks = 0
         with self.connect() as connection:
+            # Queue admission and retention must see one protected snapshot.
+            # A deferred transaction started by DELETE would let a retry be
+            # admitted after the protection checks but before its target goes.
+            connection.execute("BEGIN IMMEDIATE")
             active_result_ids = set()
             has_jobs = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recognition_jobs'"
@@ -79,6 +92,10 @@ class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin
                     for value in (row["result_id"], row["target_result_id"])
                     if value
                 }
+            has_remote = connection.execute("SELECT 1 FROM sqlite_master WHERE name='danzhengtong_jobs'").fetchone()
+            if has_remote:
+                active_result_ids.update(row[0] for row in connection.execute(f"""SELECT result_id FROM danzhengtong_jobs
+                    WHERE {_ACTIVE_REMOTE_SQL} AND result_id IS NOT NULL"""))
             rows = connection.execute(
                 """SELECT id,stored_name,preview_name,result_json
                    FROM results WHERE julianday(created_at) < julianday(?) ORDER BY id""", (cutoff_iso,)
@@ -102,6 +119,10 @@ class Database(TaskOperationsMixin, ResultOperationsMixin, ReviewOperationsMixin
                     (cutoff_iso,),
                 ).fetchall()
                 job_ids = [row["id"] for row in old_jobs]
+                if has_remote:
+                    protected = {row[0] for row in connection.execute(f"""SELECT job_id FROM danzhengtong_jobs
+                        WHERE {_ACTIVE_REMOTE_SQL}""")}
+                    job_ids = [job_id for job_id in job_ids if job_id not in protected]
                 if job_ids:
                     placeholders = ",".join("?" for _ in job_ids)
                     if has_job_history:

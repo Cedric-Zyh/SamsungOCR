@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {sampleScope, sampleCard, sampleImageUrl} = require('../static/modules/samples/center.mjs');
+const {sampleScope, sampleCard, sampleImageUrl, sampleCompanyProgress, sampleProgressIndex} = require('../static/modules/samples/center.mjs');
 const {createApiClients} = require('../static/modules/core/api.mjs');
 const {ReceiptWorkbench} = require('../static/modules/core/workbench.mjs');
 const {createSampleCenter} = require('../static/modules/samples/center.mjs');
@@ -38,6 +38,40 @@ test('sample clients always use independent endpoints even for colliding result 
   assert(calls.every(([url]) => url.startsWith('/api/samples/')));
   assert.deepEqual(calls[3][1].json, {filenames:['123.jpg']});
   assert.equal(calls[4][0], '/api/samples/results/1/seal-standard');
+});
+
+test('sample API sends explicit execution choices without changing legacy callers', async () => {
+  const calls = [];
+  const clients = createApiClients(async (...args) => calls.push(args));
+  for (const mode of ['local', 'qingtong', 'danzhengtong', 'both', 'all']) {
+    await clients.samples.run(['one.jpg', 'two.jpg'], mode);
+    assert.deepEqual(calls.at(-1), ['/api/samples/run', {method:'POST', json:{filenames:['one.jpg', 'two.jpg'], mode}}]);
+  }
+});
+
+test('sample list revisions are optional and only change the list query', async () => {
+  const calls = [], clients = createApiClients(async url => calls.push(url));
+  await clients.samples.list();
+  await clients.samples.list('snapshot 1');
+  assert.deepEqual(calls, ['/api/samples', '/api/samples?revision=snapshot+1']);
+});
+
+test('directory progress visits each sample once and keeps company and requirement scopes independent', () => {
+  let reads = 0;
+  const items = [
+    {company: '甲', requirement_key: '共用', get status() { reads++; return '已完成'; }},
+    {company: '甲', requirement_key: '', get status() { reads++; return '测试中'; }},
+    {company: '乙', requirement_key: '共用', get status() { reads++; return '运行失败'; }},
+  ];
+  const progress = sampleProgressIndex(items);
+  assert.equal(reads, 3);
+  assert.equal(progress('甲', '共用').state, 'complete');
+  assert.equal(progress('乙', '共用').state, 'failed');
+  assert.equal(progress('甲', '').state, 'running');
+  assert.equal(progress('不存在').state, 'untested');
+  assert.match(progress().title, /共 3 张/);
+  assert.equal(reads, 3, 'reading many group summaries must not revisit the sample rows');
+  assert.deepEqual(progress('甲'), sampleCompanyProgress(items.filter(item => item.company === '甲')));
 });
 
 test('sample selected-seal previews never reference the production result id route', () => {
@@ -261,6 +295,61 @@ function performanceHarness({list, run, history, openResult, images = false} = {
     hashchange:()=>windowEvents.get('hashchange').forEach(callback=>callback()), writes:()=>gridWrites};
 }
 
+test('company, filtered, selected and single sample actions use the visible execution choice', async () => {
+  const requests = [], data = performanceData('未测试');
+  const h = performanceHarness({list:async()=>structuredClone(data), run:async(names,mode)=>{
+    requests.push({names,mode});
+    return {accepted:names,skipped:[]};
+  }});
+  await h.center.load();
+  const choose = mode => {
+    h.$('#sample-execution-mode').value = mode;
+    h.$('#sample-execution-menu').handlers.click({target:{closest:()=>({dataset:{sampleMode:mode}})}});
+  };
+  choose('local');
+  await h.$('#sample-run-company').handlers.click();
+  assert.equal(requests.at(-1).mode, 'local');
+  assert.equal(requests.at(-1).names.length, data.items.length);
+  choose('qingtong');
+  await h.$('#sample-result-filters-run').handlers.click();
+  assert.equal(requests.at(-1).mode, 'qingtong');
+  assert.match(h.$('#sample-execution-note').textContent, /仅识别印章/);
+  h.$('#sample-grid').handlers.change({target:{matches:()=>true,checked:true,
+    closest:()=>({dataset:{filename:'sample-0.jpg'}})}});
+  choose('danzhengtong');
+  await h.$('#sample-run-selected').handlers.click();
+  assert.deepEqual(requests.at(-1), {names:['sample-0.jpg'],mode:'danzhengtong'});
+  choose('all');
+  await h.$('#sample-grid').handlers.click({target:{closest:selector=>
+    selector === '[data-filename]' ? {dataset:{filename:'sample-1.jpg'}} : selector === '[data-sample-run]' ? {} : null}});
+  assert.deepEqual(requests.at(-1), {names:['sample-1.jpg'],mode:'all'});
+  assert.equal(h.$('#sample-execution-mode').disabled, false);
+});
+
+test('remote-only cards and history identify their execution choice accurately', async () => {
+  const html = sampleCard({filename:'one.jpg',execution_mode:'danzhengtong',status:'测试中',
+    job_status:'queued',danzhengtong:{pending:true,label:'等待提交'}},false);
+  assert.match(html,/只单证通/);
+  assert.doesNotMatch(html,/常规识别已结束/);
+  const h = performanceHarness({list:async()=>performanceData('已完成'),history:async()=>[
+    {filename:'one.jpg',execution_mode:'qingtong',status:'succeeded',created_at:'2026-11-02',result_id:1},
+  ]});
+  await h.center.load();
+  await h.$('#sample-history-open').handlers.click();
+  assert.match(h.$('#sample-history-body').innerHTML,/只清瞳 · 2026-11-02/);
+});
+
+test('pending remote refresh cards keep the existing checks and result entry', () => {
+  const html = sampleCard({filename:'one.jpg',result_id:12,execution_mode:'danzhengtong',
+    retained_results:true,status:'测试中',job_status:'succeeded',signature:'匹配',
+    checks:{date:'匹配',seal:'不匹配'},danzhengtong:{pending:true,status:'waiting',label:'等待结果'}},false);
+  assert.match(html,/日期 匹配/);
+  assert.match(html,/印章 不匹配/);
+  assert.match(html,/签名 匹配/);
+  assert.match(html,/单证通等待结果/);
+  assert.doesNotMatch(html,/data-sample-result disabled/);
+});
+
 const performanceData = status => ({items:Array.from({length:18},(_,index)=>({
   filename:`sample-${index}.jpg`,company:'甲公司',status,
 })),companies:[{name:'甲公司',count:18}]});
@@ -352,6 +441,30 @@ test('sample polling slows while idle, stays timely for active tests, and manual
   assert.equal(calls,4);
   h.at(64000); await h.center.poll();
   assert.equal(calls,5);
+});
+
+test('unchanged conditional polls preserve the directory while changed revisions and manual loads refresh it', async () => {
+  const calls = [];
+  let data = {...performanceData('测试中'), revision: 'first'};
+  const h = performanceHarness({list: async revision => {
+    calls.push(revision);
+    return revision === data.revision ? {unchanged: true, revision} : structuredClone(data);
+  }, images: true});
+  await h.center.load();
+  h.$('#sample-company-list').handlers.click({target: {closest: () => ({dataset: {company: '甲公司'}})}});
+  h.$('#sample-next').handlers.click();
+  const writes = h.writes(), directory = h.$('#sample-company-list').innerHTML;
+  h.at(2000); await h.center.poll();
+  assert.equal(calls.at(-1), 'first');
+  assert.equal(h.writes(), writes);
+  assert.equal(h.$('#sample-company-list').innerHTML, directory);
+  assert.equal(h.$('#sample-page-number').textContent, '2 / 3');
+  data = {...performanceData('已完成'), revision: 'second'};
+  h.at(4000); await h.center.poll();
+  assert.match(h.$('#sample-grid').innerHTML, /已完成/);
+  assert.equal(h.$('#sample-page-number').textContent, '2 / 3');
+  await h.center.load();
+  assert.equal(calls.at(-1), undefined, 'manual refresh bypasses conditional cache');
 });
 
 test('returning to samples restores cancelled thumbnails without replacing the same page controls', async () => {

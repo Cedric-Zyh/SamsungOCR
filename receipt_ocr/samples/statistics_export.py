@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .sample_statistics import sample_statistics, summarize_problem_annotations
+from .statistics import sample_statistics, summarize_problem_annotations
 
 
 BAD = {'错误', '未识别', '失败'}
@@ -488,7 +488,7 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
     header_row = sheet.max_row
     states = {'succeeded': '已完成', 'failed': '运行失败', 'queued': '测试中',
               'running': '测试中', 'awaiting_upload': '测试中'}
-    from .sample_library import sample_number
+    from .library import sample_number
     date_columns = [5] if tab == 'date' else []
     if tab == 'date':
         date_columns.extend(identity_end + index * 4 + 2 for index in range(len(columns)))

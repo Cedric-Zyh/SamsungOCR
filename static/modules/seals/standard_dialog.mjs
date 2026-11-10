@@ -22,7 +22,7 @@ export function openStandardDialog({ui, standard, requirement, sources, onSave, 
     <div class="standard-picker-body"><aside class="standard-picker-library"><header><h3>选择印章</h3><span>${entries.length} 枚</span></header><div class="standard-picker-list">
     ${entries.map(({source, candidate:c}, index) => `<button type="button" class="standard-picker-candidate" data-picker-index="${index}" aria-pressed="false">
       <img src="${escapeHtml(c.image_url || c.original_url)}" alt="印章 ${Number(c.index)+1}" loading="lazy">
-      <b>印章 ${Number(c.index)+1} · ${c.source === 'qingtong' ? '清瞳图' : '本地处理图'}</b>
+      <b>印章 ${Number(c.index)+1} · ${c.source === 'danzhengtong' ? '单证通旋正图' : c.source === 'qingtong' ? '清瞳图' : '本地处理图'}</b>
       <span>${shapeLabel(c.shape)} · ${colorLabel(c.color)}</span><small>${escapeHtml(source.filename || '')}</small>
       <small>${c.can_register ? escapeHtml(c.text_status || '待核对') : '仅供查看 · 暂不可加入'}</small></button>`).join('') || '<p class="standard-picker-empty">暂无印章处理图，请重新识别后选择。</p>'}
     </div></aside><section class="standard-picker-detail"><header><div><h3>标准章预览</h3><p>核对完整章图与方向</p></div><div class="standard-picker-zoom"><button type="button" data-standard-zoom="out" aria-label="缩小印章">−</button><span data-standard-zoom-label>100%</span><button type="button" data-standard-zoom="in" aria-label="放大印章">＋</button></div></header>

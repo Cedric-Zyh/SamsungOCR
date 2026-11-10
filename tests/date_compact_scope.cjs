@@ -13,15 +13,20 @@ test('legacy date previews expose only the compact region and preserve seals', (
   assert.deepEqual(sources.map(item => item.url), ['/files/page.jpg', '/files/date-2.jpg', '/files/seal.jpg']);
 });
 
-test('legacy date evidence hides every non-compact card', () => {
+test('legacy date evidence prefers the compact crop and keeps the available-image fallback', () => {
   const target = {innerHTML: ''};
   const reviewState = {artifactTab: 'date', current: {processing_artifacts: {date: artifacts}}};
   const evidence = createReviewEvidence({environment: {}, ui: {$: () => target}, reviewState});
   evidence.renderArtifacts();
-  assert.match(target.innerHTML, /紧凑区域/);
+  assert.match(target.innerHTML, /日期区域原图/);
   assert.match(target.innerHTML, /date-2.jpg/);
   for (const index of [0, 1, 3, 4]) assert.ok(!target.innerHTML.includes(`date-${index}.jpg`));
   reviewState.current.processing_artifacts.date = [artifacts[0]];
   evidence.renderArtifacts();
-  assert.match(target.innerHTML, /没有保存的中间处理图/);
+  assert.match(target.innerHTML, /data-region-evidence-url="\/files\/date-0.jpg"/);
+  assert.doesNotMatch(target.innerHTML, /date-2.jpg/);
+  reviewState.current.processing_artifacts.date = [];
+  evidence.renderArtifacts();
+  assert.match(target.innerHTML, /未保存区域处理图片/);
+  assert.doesNotMatch(target.innerHTML, /data-region-evidence-url/);
 });

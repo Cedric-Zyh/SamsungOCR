@@ -1,6 +1,7 @@
 """Recognize and compare seal evidence after document routing."""
 
 from __future__ import annotations
+from copy import deepcopy
 from ..application.context import DocumentContext
 from ..application.requests import StageRequest
 from ..imaging.detection import detect_seal_regions
@@ -71,36 +72,22 @@ def _round_stamp_candidates(seal_texts, seal_artifacts):
     return _dedupe([*combined, *seal_texts])
 
 
-def _settled_future(future):
-    """The prefetched seal response, or ``None`` when it is unusable.
-
-    A local-only run never asks the API anything; it only reuses a request the
-    selected QingTong run already made.  A failure there belongs to that run, so
-    this must not turn into an exception here.
-    """
-    if future is None:
-        return None
-    try:
-        return future.result()
-    except Exception:
-        return None
-
-
-def recognize(context: DocumentContext, request: StageRequest, recognize_seals, seal_api) -> SealStageResult:
+def recognize(context: DocumentContext, request: StageRequest, recognize_seals) -> SealStageResult:
     # Printed fields precede this stage. Stop before page access, remote-box
     # waiting, detection, orientation or any local OCR when no basis exists.
     if request.seal_mode == "local" and not has_seal_requirement(request.fields):
         return SealStageResult(check=no_requirement_seal_check(), regions=[], artifacts=[])
     source = context.source
     remote_only = request.seal_mode == "qingtong_only"
-    rows = [] if remote_only else context.page(request.route["page"])
+    rows = ([] if remote_only else list(request.seal_page_rows)
+            if request.seal_page_rows is not None else context.page(request.route["page"]))
     fields, stage_backends = dict(request.fields), request.route
     stage_labels = {key: backend_label(value) for key, value in stage_backends.items()}
     artifact_dir, artifact_url_prefix = (
         request.artifact_dir,
         request.artifact_url_prefix,
     )
-    selected_seal_mode, _seal_api_future = request.seal_mode, request.seal_future
+    selected_seal_mode, remote_evidence = request.seal_mode, request.seal_evidence
     detail_page_rows = (
         context.cached_page(stage_backends["date"])
         if stage_backends["date"] != stage_backends["page"]
@@ -113,10 +100,9 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
     signature_anchor = signature_row.y if signature_row else 0.47
     regions, recipient_regions, seal_artifacts = [], [], []
     kind = context.document_type["type"]
-    # Ask the seal API before recognising anything ourselves: the stamp boxes it
-    # returns are better geometry than a second detection of our own around the
-    # footer, so they double as the local region set.  The request stays on the
-    # original gates -- remote-only mode, or a footer to attach the stamp to.
+    # The application has settled any selected remote request. Compare its
+    # observed boxes against the final printed requirement before local OCR;
+    # this stage evaluates evidence and never schedules or repeats an upload.
     external = None
     remote_check = None
     wants_remote = (
@@ -125,20 +111,18 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
         and (remote_only or has_receipt_footer)
     )
     if wants_remote:
-        external = (
-            _seal_api_future.result()
-            if _seal_api_future is not None
-            else seal_api.recognize(source)
-        )
+        if remote_evidence is None:
+            raise ValueError("清瞳印章阶段缺少已调度的响应")
+        external = remote_evidence.require_response()
         remote_check = compare_qingtong_seal(
             requirement, external, match_mode=match_mode
         )
         regions = qingtong_seal_regions(source, remote_check)
-    elif selected_seal_mode == "local" and _seal_api_future is not None:
+    elif selected_seal_mode == "local" and remote_evidence is not None:
         # A local engine was selected next to QingTong, which already asked the
         # API on this run's behalf.  Reuse its box instead of detecting our own,
         # and mark the reading so it can vote as its own channel.
-        external = _settled_future(_seal_api_future)
+        external = deepcopy(remote_evidence.response)
         if isinstance(external, dict) and external.get("ok"):
             remote_check = compare_qingtong_seal(
                 requirement, external, match_mode=match_mode
@@ -195,15 +179,15 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals, 
             )
     else:
         if selected_seal_mode == "qingtong":
-            # 未获远程印章授权时该模式原先仍会请求接口，此处保留原路径。
+            # Combined mode receives its already-settled response from the application.
             if remote_check is None:
-                external = seal_api.recognize(source)
+                external = remote_evidence.require_response()
                 remote_check = compare_qingtong_seal(
                     requirement, external, match_mode=match_mode
                 )
                 regions = regions or qingtong_seal_regions(source, remote_check)
         else:
-            external = seal_api.skipped()
+            external = {"enabled": False, "requested": False, "message": "本次选择仅使用本地印章识别"}
         if has_receipt_footer or boxed:
             if regions:
                 # 清瞳已经指出印章在哪，本地识别直接用它，不再自行截图。

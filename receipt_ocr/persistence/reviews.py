@@ -7,10 +7,8 @@ import sqlite3
 from contextlib import nullcontext
 
 from ..domain.decision import has_provider_failure
-from .constants import REVIEW_STATUSES
 from .database_clock import now_iso
 from .issue_migration import migrate_saved_issues
-from .recognition_calls import take_recognition_calls
 
 
 class ReviewOperationsMixin:
@@ -27,86 +25,16 @@ class ReviewOperationsMixin:
         error_type: str = "",
         _connection: sqlite3.Connection | None = None,
     ) -> dict:
-        if review_status not in REVIEW_STATUSES:
-            raise ValueError("无效复核状态")
-        timestamp = now_iso()
-        result["review_status"] = review_status
-        result["final_result"] = final_result
-        result["human_note"] = note
-        result["updated_at"] = timestamp
-        payload = json.dumps(result, ensure_ascii=False)
-        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
-            if _connection is None:
-                connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT * FROM results WHERE id=? AND deleted_at=''", (result_id,)).fetchone()
-            if row is None:
-                raise KeyError(result_id)
-            before = self._row_to_result(row)
-            connection.execute(
-                """UPDATE results SET updated_at=?,overall=?,result_json=?,review_status=?,final_result=?,
-                human_note=?,error_type=? WHERE id=?""",
-                (timestamp, result.get("overall", final_result), payload, review_status, final_result, note, error_type, result_id),
-            )
-            connection.execute(
-                """INSERT INTO review_history(result_id,changed_at,action,before_json,after_json,note,error_type)
-                VALUES(?,?,?,?,?,?,?)""",
-                (
-                    result_id, timestamp, action,
-                    json.dumps(before, ensure_ascii=False), payload, note, error_type,
-                ),
-            )
-            self._adjust_task_pending_review(
-                connection,
-                str(before.get("task_id", "")),
-                str(before.get("review_status", "")),
-                review_status,
-                timestamp,
-            )
-            self.reconcile_task_pages(str(before.get("task_id", "")), filename=before["filename"],
-                                      _connection=connection)
-            return self._row_to_result(connection.execute("SELECT * FROM results WHERE id=?", (result_id,)).fetchone())
+        return self.result_writes.save_review(
+            result_id, result=result, review_status=review_status, final_result=final_result,
+            note=note, action=action, error_type=error_type, connection=_connection,
+        )
 
     def replace_after_retry(self, result_id: int, result: dict, preview_name: str,
                             *, _connection: sqlite3.Connection | None = None) -> dict:
-        result = dict(result)
-        trace, trace_key = take_recognition_calls(result)
-        with (nullcontext(_connection) if _connection is not None else self.connect()) as connection:
-            if _connection is None:
-                connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT * FROM results WHERE id=? AND deleted_at=''", (result_id,)).fetchone()
-            if row is None:
-                raise KeyError(result_id)
-            before = self._row_to_result(row)
-            timestamp = now_iso()
-            result["created_at"] = before["created_at"]
-            result["updated_at"] = timestamp
-            payload = json.dumps(result, ensure_ascii=False)
-            connection.execute(
-                """UPDATE results SET updated_at=?,preview_name=?,overall=?,result_json=?,review_status=?,
-                final_result=?,error_type='',error_message='',attempt=attempt+1 WHERE id=?""",
-                (
-                    timestamp, preview_name, result["overall"], payload,
-                    result["review_status"], result["overall"], result_id,
-                ),
-            )
-            connection.execute(
-                """INSERT INTO review_history(result_id,changed_at,action,before_json,after_json,note)
-                VALUES(?,?,?,?,?,?)""",
-                (result_id, timestamp, "重新识别", json.dumps(before, ensure_ascii=False), payload, ""),
-            )
-            self.save_recognition_calls(before["filename"], trace, result_id=result_id,
-                                        run_key=trace_key, _connection=connection)
-            self._adjust_task_pending_review(
-                connection,
-                str(before.get("task_id", "")),
-                str(before.get("review_status", "")),
-                str(result.get("review_status", "待复核")),
-                timestamp,
-            )
-            if _connection is None:
-                self.reconcile_task_pages(str(before.get("task_id", "")), filename=before["filename"],
-                                          _connection=connection)
-            return self._row_to_result(connection.execute("SELECT * FROM results WHERE id=?", (result_id,)).fetchone())
+        return self.result_writes.replace_recognition(
+            result_id, result, preview_name, connection=_connection,
+        )
 
     def history(self, result_id: int) -> list[dict]:
         with self.connect() as connection:
@@ -171,11 +99,21 @@ class ReviewOperationsMixin:
         changed = 0
         with self.connect() as connection:
             migrate_saved_issues(connection)
+            remote_pending = set()
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='danzhengtong_jobs'").fetchone():
+                remote_pending = {row[0] for row in connection.execute("""SELECT result_id
+                    FROM danzhengtong_jobs WHERE active=1
+                    AND status IN ('queued','submitting','waiting','received') AND result_id IS NOT NULL""")}
             rows = connection.execute(
                 """SELECT * FROM results
                 WHERE review_status NOT IN ('确认通过','确认不通过')"""
             ).fetchall()
             for row in rows:
+                # Missing evidence is expected while an accepted remote task
+                # is pending. Startup repair must not rewrite that snapshot or
+                # invalidate its revision guard before the result returns.
+                if row['id'] in remote_pending:
+                    continue
                 try:
                     result = json.loads(row["result_json"])
                 except json.JSONDecodeError:

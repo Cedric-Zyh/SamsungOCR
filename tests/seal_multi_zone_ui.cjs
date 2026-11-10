@@ -2,6 +2,39 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
 
+test('remote and local artifacts keep separate results even when their stamp index and colour agree', () => {
+  const target = {innerHTML: ''};
+  const local = {index: 0, color: 'blue', shape: '椭圆', isolated_text: '本地公司',
+    color_isolated_oriented_url: '/files/local-oriented.png'};
+  const remote = {index: 0, color: 'blue', shape: '椭圆', provider: 'danzhengtong',
+    provider_text: '远端公司 收发货专用章', provider_color: '蓝色', provider_seal_type: '椭圆章',
+    original_url: '/files/raw.png', input_url: '/files/upload.png',
+    returned_image_url: '/files/remote-oriented.png', returned_image_status: 'downloaded'};
+  const reviewState = {artifactTab: 'seals', current: {processing_artifacts: {seals: [local, remote]}}};
+  createReviewEvidence({environment: {}, ui: {$: () => target}, reviewState}).renderArtifacts();
+  assert.match(target.innerHTML, /data-seal-workspace-panel="1"/);
+  assert.match(target.innerHTML, /本地公司/);
+  assert.match(target.innerHTML, /远端公司 收发货专用章/);
+  assert.match(target.innerHTML, /单证通返回的旋正图/);
+  const remotePanel = target.innerHTML.split('data-seal-workspace-panel="1"')[1];
+  assert.doesNotMatch(remotePanel, /local-oriented|本地公司|环形文字展开|印章分区识别/);
+});
+
+test('remote image failures retain provider text and show an escaped retrieval error', () => {
+  const target = {innerHTML: ''};
+  const remote = {index: 0, provider: 'danzhengtong', provider_text: '返回的实际文字',
+    provider_color: '红色', provider_seal_type: '圆章', input_url: '/files/upload.png',
+    returned_image_status: 'unavailable', returned_image_error: '连接超时 <详情>',
+    color_isolated_url: '/files/upload.png'};
+  const reviewState = {artifactTab: 'seals', current: {processing_artifacts: {seals: [remote]}}};
+  createReviewEvidence({environment: {}, ui: {$: () => target}, reviewState}).renderArtifacts();
+  assert.match(target.innerHTML, /返回的实际文字/);
+  assert.match(target.innerHTML, /单证通旋正图未能取回/);
+  assert.match(target.innerHTML, /连接超时 &lt;详情&gt;/);
+  assert.doesNotMatch(target.innerHTML, /<详情>/);
+  assert.doesNotMatch(target.innerHTML, /<figure[^>]*>[^]*?<figcaption>单证通返回的旋正图/);
+});
+
 test('double-border company and website have separate previews with raw evidence retained', () => {
   const target = {innerHTML: ''};
   const item = {schema_version:2,index:0,color:'red',shape:'椭圆',

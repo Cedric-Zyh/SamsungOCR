@@ -242,7 +242,7 @@ body:is([data-active-page="progress"],[data-active-page="records"]) .hero .subti
 .record-filter-table .records-table { table-layout:fixed; width:100%; min-width:1040px; }
 .record-filter-table col.selection-col { width:34px; }.record-filter-table col.file-col { width:auto; }
 .record-filter-table col.signature-col { width:26%; }.record-filter-table col.date-col { width:24%; }.record-filter-table col.seal-col { width:100px; }
-.record-filter-table col.verdict-col { width:104px; }.record-filter-table col.action-col { width:102px; }
+.record-filter-table col.verdict-col { width:128px; }.record-filter-table col.action-col { width:102px; }
 .record-filter-table .record-file-column,.record-filter-table .record-customer-column,.record-filter-table .record-date-column,
 .record-filter-table th:last-child,.record-filter-table td:last-child,.record-filter-table th:nth-last-child(2),.record-filter-table td:nth-last-child(2) { min-width:0; }
 .record-filter-table th { padding:9px 10px; font-size:12px; background:#f7f9fc; }

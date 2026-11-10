@@ -12,7 +12,8 @@ from receipt_ocr import danzhengtong as dzt
 from receipt_ocr.danzhengtong_errors import safe_error_text
 
 SECRETS = {'app_key', 'app_secret', 'key_id'}
-REQUIRED = ('app_id', 'app_key', 'app_secret', 'key_id', 'callback_url', 'org_id', 'sys_code', 'model_id', 'base_url', 'upload_url')
+REQUIRED = ('app_id', 'app_key', 'app_secret', 'key_id', 'callback_url', 'org_id', 'sys_code',
+            'model_id', 'seal_model_id', 'base_url', 'upload_url')
 _lock = RLock()
 
 
@@ -48,13 +49,17 @@ def settings_handler(database):
         return jsonify(error='配置必须是 JSON 对象'), 400
     with _lock:
         values = asdict(dzt.Settings.load())
+        previous = values.copy()
         if payload.get('clear') is True:
             values = asdict(dzt.Settings())
         else:
             if set(payload) - set(values):
                 return jsonify(error='包含未知配置项'), 400
             for key, value in payload.items():
-                if key == 'poll_timeout_seconds':
+                if key == 'download_seal_images':
+                    if not isinstance(value, bool):
+                        return jsonify(error='旋正图下载开关必须为布尔值'), 400
+                elif key == 'poll_timeout_seconds':
                     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 60:
                         return jsonify(error='查询超时应为 1 至 60 秒的整数'), 400
                 else:
@@ -77,7 +82,8 @@ def settings_handler(database):
                             return jsonify(error='请输入有效的 HTTP 或 HTTPS 地址'), 400
                 values[key] = value
         database.set_json_setting('danzhengtong_credentials', values)
-        database.set_json_setting('danzhengtong_tested', False)
+        if payload.get('clear') is True or any(values[key] != previous[key] for key in values if key != 'download_seal_images'):
+            database.set_json_setting('danzhengtong_tested', False)
         dzt.set_software_settings(dzt.Settings(**values))
         return jsonify(status(database))
 
@@ -102,7 +108,7 @@ def test_handler(database, allowed_extensions):
             if dzt.Settings.load() != settings:
                 return jsonify(error='测试期间配置已更改，请重新测试'), 409
             database.set_json_setting('danzhengtong_tested', True)
-        return jsonify({**status(database), 'message': '测试通过：上传、提交和查询均成功'})
+        return jsonify({**status(database), 'message': '整页测试通过：上传、提交和查询均成功'})
     except Exception as exc:
         with _lock:
             if dzt.Settings.load() == settings:

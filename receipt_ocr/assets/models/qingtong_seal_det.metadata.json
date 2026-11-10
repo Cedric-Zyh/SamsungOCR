@@ -1,0 +1,25 @@
+{
+  "name": "QingTong-YOLO11s-seal_det",
+  "architecture": "Ultralytics YOLO11s",
+  "task": "detect",
+  "input_shape": [
+    1,
+    3,
+    640,
+    640
+  ],
+  "output_shape": [
+    1,
+    5,
+    8400
+  ],
+  "classes": {
+    "0": "seal"
+  },
+  "exported_at": "2026-02-06T11:41:11.838469",
+  "ultralytics_version": "8.3.39",
+  "source_artifact": "印章识别系统-交付/seal_rec_alg_recognition/seal_rec_alg/weights/onnx/yolo/seal_det.onnx",
+  "size_bytes": 37907035,
+  "sha256": "61cc178e4125a44043e6a584b31dbecdbe81443fc49de00f44b97c24da59552f",
+  "embedded_license": "AGPL-3.0 License (https://ultralytics.com/license)"
+}

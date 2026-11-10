@@ -1,6 +1,7 @@
 """Physical OCR accounting uses fake predictors and transports, never real OCR."""
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from datetime import datetime
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +52,9 @@ def test_nested_capture_parallel_calls_and_safe_image_metadata(source, tmp_path)
     snapshot = captured.snapshot()
     assert snapshot['status'] == 'completed'
     assert snapshot['finished_at'] and snapshot['processing_seconds'] >= 0
+    assert snapshot['run_id'] and all(row['run_id'] == snapshot['run_id'] for row in snapshot['calls'])
+    assert all(datetime.fromisoformat(row['finished_at']) >= datetime.fromisoformat(row['started_at'])
+               for row in snapshot['calls'])
     assert snapshot['summary'] == dict(total=14, succeeded=14, failed=0, cache_hits=0)
     assert [row['id'] for row in snapshot['calls']] == list(range(1, 15))
     row = snapshot['calls'][0]
@@ -65,6 +69,7 @@ def test_nested_capture_parallel_calls_and_safe_image_metadata(source, tmp_path)
     with capture_recognition_calls() as next_run:
         pass
     assert next_run.snapshot()['summary']['total'] == 0
+    assert next_run.snapshot()['run_id'] != snapshot['run_id']
 
 
 def test_failure_snapshot_attaches_to_exception_without_secrets(source):
@@ -268,10 +273,68 @@ def test_overlapping_model_initialization_is_subtracted_once_and_does_not_leak(m
     assert snapshot['model_initialization_seconds'] == 7
     assert snapshot['recognition_seconds'] == 3
     assert snapshot['summary']['total'] == 0
+    spans = snapshot['model_initialization_spans']
+    assert [span['seconds'] for span in spans] == [4, 4, 2]
+    assert all(span['kind'] == 'model_initialization' and span['run_id'] == snapshot['run_id'] for span in spans)
+    starts = [datetime.fromisoformat(span['started_at']) for span in spans]
+    ends = [datetime.fromisoformat(span['finished_at']) for span in spans]
+    assert starts[1] < ends[0] and starts[2] < ends[1]  # Raw overlaps remain visible.
+    assert [(end - start).total_seconds() for start, end in zip(starts, ends)] == [4, 4, 2]
     with capture_recognition_calls() as next_run:
         clock[0] = 12
     assert next_run.snapshot()['model_initialization_seconds'] == 0
     assert next_run.snapshot()['recognition_seconds'] == 2
+    assert next_run.snapshot()['model_initialization_spans'] == []
+
+
+def test_call_boundaries_share_one_monotonic_utc_anchor_and_stable_run_id(monkeypatch):
+    from receipt_ocr.runtime import calls
+    clock = [100.0]
+    monkeypatch.setattr(calls, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(calls, '_now', lambda: '2026-11-04T00:00:00.000000+00:00')
+    with capture_recognition_calls() as captured:
+        identity = captured.snapshot()['run_id']
+        with capture_recognition_calls() as nested:
+            assert nested.snapshot()['run_id'] == identity
+        # A wall clock adjustment cannot move later events outside this run.
+        monkeypatch.setattr(calls, '_now', lambda: '2099-01-01T00:00:00.000000+00:00')
+        clock[0] = 101
+        with recognition_call('paddle_v6', '文字识别'):
+            active = captured.snapshot()['calls'][0]
+            assert active['run_id'] == identity and 'finished_at' not in active
+            clock[0] = 103.25
+        clock[0] = 104
+    snapshot = captured.snapshot()
+    assert snapshot['run_id'] == identity
+    assert snapshot['started_at'] == '2026-11-04T00:00:00.000000+00:00'
+    assert snapshot['finished_at'] == '2026-11-04T00:00:04.000000+00:00'
+    assert snapshot['calls'][0]['started_at'] == '2026-11-04T00:00:01.000000+00:00'
+    assert snapshot['calls'][0]['finished_at'] == '2026-11-04T00:00:03.250000+00:00'
+    assert snapshot['calls'][0]['seconds'] == 2.25
+    assert snapshot['summary']['total'] == 1
+    assert captured.snapshot() == snapshot
+
+
+def test_resuming_a_logical_call_clears_its_previous_finish_boundary(monkeypatch):
+    from receipt_ocr.runtime import calls
+    clock = [0.0]
+    monkeypatch.setattr(calls, 'perf_counter', lambda: clock[0])
+    with capture_recognition_calls() as captured:
+        with recognition_call('danzhengtong', '整页单证识别') as invocation:
+            clock[0] = 1
+        first = captured.snapshot()['calls'][0]
+        clock[0] = 5
+        invocation.resume()
+        resumed = captured.snapshot()['calls'][0]
+        assert resumed['status'] == 'running' and 'finished_at' not in resumed
+        clock[0] = 6
+        invocation.finish()
+    final = captured.snapshot()['calls'][0]
+    assert final['run_id'] == first['run_id']
+    assert final['started_at'] == first['started_at']
+    assert final['finished_at'] > first['finished_at']
+    assert final['seconds'] == 6  # Keep the established logical-call clock.
+    assert captured.snapshot()['summary']['total'] == 1
 
 
 def test_failed_initialization_keeps_its_separate_time_without_an_inference(monkeypatch):

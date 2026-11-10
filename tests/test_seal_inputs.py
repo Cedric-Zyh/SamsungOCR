@@ -207,3 +207,44 @@ def test_pale_interpolation_bridge_does_not_keep_the_entire_type_row(tmp_path):
     result = cv2.imread(str(target))
     assert np.all(result[30:40, 25:50] == 255)
     assert np.array_equal(result[:, 56:], image[:, 56:])
+
+
+def test_partial_multi_zone_failure_keeps_completed_inputs_before_ring_fallback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from receipt_ocr.recognition.seal.preprocess import inputs
+
+    events = []
+
+    def zone_jobs():
+        events.append("zone")
+        yield "phone", tmp_path / "phone.png", "layout_inner", "电话"
+        raise RuntimeError("later zone unavailable")
+
+    plan = {"method": "test_zones", "rows": [], "arcs": [], "overlay": tmp_path / "overlay.png",
+            "ring_input": tmp_path / "mask.png", "mask": tmp_path / "mask-preview.png", "border": {},
+            "jobs": zone_jobs()}
+    monkeypatch.setattr(inputs, "save_region_crop", lambda *a: None)
+    monkeypatch.setattr(inputs, "save_color_isolated_seal", lambda *a: None)
+    monkeypatch.setattr(inputs, "classify_shape", lambda *a: "round")
+    monkeypatch.setattr(inputs, "enhance_oriented_seal", lambda *a: None)
+    monkeypatch.setattr(inputs, "prepare_multi_zone", lambda *a, **k: plan)
+    monkeypatch.setattr(inputs, "_copy_ring_input", lambda *a: None)
+    monkeypatch.setattr(inputs, "save_ring_text_band_preview", lambda *a, **k: None)
+    monkeypatch.setattr(inputs, "save_unwrapped_seal", lambda *a, **k: events.append("unwrap"))
+    monkeypatch.setattr(inputs, "prepare_round_rim", lambda *a, **k: (None, {}))
+    monkeypatch.setattr(inputs, "prepare_han_ring", lambda *a, **k: None)
+    monkeypatch.setattr(inputs, "save_company_ring_input", lambda *a: None)
+    monkeypatch.setattr(inputs, "save_ring_with_blank_seam", lambda *a: {"applied": False})
+
+    def recover(*args, **kwargs):
+        events.append("number_recovery")
+        return {}, {"status": "not_needed"}
+
+    monkeypatch.setattr(inputs, "recover_number_punctuation", recover)
+    artifact, jobs = inputs.prepare_inputs(tmp_path / "not-read.png", SimpleNamespace(color="red"),
+                                          0, tmp_path, "/files", "paddle_v6", "none")
+    assert artifact["multi_zone_fallback"] == "later zone unavailable"
+    assert artifact["errors"] == []
+    assert [entry["channel"] for entry, _ in jobs] == ["layout_inner", "ring"]
+    assert jobs[0][1] == tmp_path / "phone.png"
+    assert events == ["zone", "unwrap", "number_recovery"]

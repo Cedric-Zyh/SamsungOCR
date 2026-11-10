@@ -4,8 +4,8 @@ from pathlib import Path
 from PIL import Image
 import pytest
 
-from receipt_ocr.web.samples import SampleCenter
-from receipt_ocr.web.sample_library import LibraryConflict
+from sample_support import SampleCenter
+from receipt_ocr.samples.library import LibraryConflict
 from test_sample_center import samples
 
 
@@ -146,7 +146,7 @@ def test_delete_is_atomic_blocks_running_and_removes_legacy_source(samples):
 
 
 def test_delete_rolls_back_files_and_database_if_file_move_fails(samples, monkeypatch):
-    from receipt_ocr.web import sample_library
+    from receipt_ocr.samples import library as sample_library
     ctx, client = samples
     upload(client, 'first.png', '')
     upload(client, 'second.png', '')

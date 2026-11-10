@@ -184,6 +184,8 @@ def sample_result_filters(job, truth, *, result=None):
     options = json.loads(job.get('payload_json') or '{}')
     options = options.get('sample_options') or options
     config = options.get('recognition_config')
+    if options.get('_preserve_provider_results') and isinstance(result.get('recognition_config'), dict):
+        config = result['recognition_config']
     if not isinstance(config, dict):
         config = result.get('recognition_config')
     config = config if isinstance(config, dict) else None

@@ -1,6 +1,7 @@
 from io import BytesIO
 import json
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 from zipfile import ZipFile, ZIP_DEFLATED
 
 from flask import Flask
@@ -8,7 +9,8 @@ from PIL import Image
 import pytest
 
 from receipt_ocr.persistence.database import Database
-from receipt_ocr.web.samples import SampleCenter, register_sample_routes
+from sample_support import SampleCenter, sample_dependencies
+from receipt_ocr.web.samples import register_sample_routes
 from receipt_ocr.web.bootstrap_data import export_package, import_package
 from test_sample_center import samples
 
@@ -26,7 +28,7 @@ def target(tmp_path):
     app.config.update(TESTING=True, BACKGROUND_WORKER=False)
     ctx = SimpleNamespace(database=db, DATA_DIR=data, GROUND_TRUTH_PATH=truth,
                           ALLOWED_EXTENSIONS={'.png'}, app=app, _configured_analyze=lambda *a, **kw: {})
-    register_sample_routes(app, ctx)
+    register_sample_routes(app, lambda: sample_dependencies(ctx))
     return ctx, app.test_client()
 
 
@@ -94,7 +96,8 @@ def test_transfer_is_self_contained_and_repeatable(samples, tmp_path):
     saved = ctx.database.list_seal_standards()[0]
     assert saved['recognized'] == '甲公司公章'
     assert saved['source_kind'] == 'bootstrap' and saved['source_result_id'] == 0
-    image = ctx.database.path.parent / 'seal-standards' / saved['image_url'].rsplit('/', 1)[-1]
+    image = ctx.database.path.parent / 'seal-standards' / unquote(urlsplit(saved['image_url']).path.rsplit('/', 1)[-1])
+    assert image.name == '甲公司公章.png'
     assert Image.open(image).getpixel((0, 0)) == (255, 0, 0)
     before = set(service.library.directory.iterdir())
     assert post(client, data).json == dict(samples_added=0, samples_skipped=5, standards_added=0, standards_skipped=1)
@@ -104,6 +107,98 @@ def test_transfer_is_self_contained_and_repeatable(samples, tmp_path):
     assert ctx.database.get_retention_days() != 123
     # Imported installations can export the same seed data again.
     assert len(json.loads(ZipFile(BytesIO(package(ctx, client))).read('manifest.json'))['samples']) == 5
+
+
+def test_import_named_standard_reserves_a_collision_without_overwriting_existing_file(samples, tmp_path):
+    source, source_client = samples
+    standard(source)
+    data = package(source, source_client)
+    ctx, client = target(tmp_path)
+    directory = ctx.database.path.parent / 'seal-standards'
+    directory.mkdir(exist_ok=True)
+    existing = directory / '甲公司公章.png'
+    Image.new('RGB', (40, 40), 'blue').save(existing)
+    original = existing.read_bytes()
+    result = post(client, data)
+    assert result.status_code == 200 and result.json['standards_added'] == 1
+    saved = ctx.database.list_seal_standards()[0]
+    image = directory / unquote(urlsplit(saved['image_url']).path.rsplit('/', 1)[-1])
+    assert image != existing and image.name.startswith('甲公司公章') and image.suffix == '.png'
+    assert existing.read_bytes() == original
+    assert Image.open(image).getpixel((0, 0)) == (255, 0, 0)
+    files = set(directory.iterdir())
+    assert post(client, data).json['standards_skipped'] == 1
+    assert set(directory.iterdir()) == files
+    exported = package(ctx, client)
+    with ZipFile(BytesIO(exported)) as archive:
+        manifest = json.loads(archive.read('manifest.json'))
+        assert Image.open(BytesIO(archive.read(manifest['standards'][0]['image']))).getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_import_standard_name_cannot_reuse_a_migrated_legacy_url_alias(samples, tmp_path):
+    source, source_client = samples
+    requirement = 'a' * 32
+    standard(source, requirement=requirement)
+    data = package(source, source_client)
+    ctx, client = target(tmp_path)
+    directory = ctx.database.path.parent / 'seal-standards'
+    directory.mkdir(exist_ok=True)
+    historical = directory / '旧公司公章.png'
+    Image.new('RGB', (40, 40), 'blue').save(historical)
+    original = historical.read_bytes()
+    alias = requirement + '.png'
+    with ctx.database.connect() as con:
+        con.execute('INSERT INTO seal_standard_image_aliases(old_name,image_name) VALUES(?,?)',
+                    (alias, historical.name))
+    result = post(client, data)
+    assert result.status_code == 200 and result.json['standards_added'] == 1
+    saved = ctx.database.list_seal_standards()[0]
+    image = directory / unquote(urlsplit(saved['image_url']).path.rsplit('/', 1)[-1])
+    assert image.name != alias and image.name.startswith(requirement)
+    assert Image.open(image).getpixel((0, 0)) == (255, 0, 0)
+    assert historical.read_bytes() == original
+    assert not (directory / alias).exists()
+    assert ctx.database.seal_standard_image_name(alias) == historical.name
+
+
+@pytest.mark.parametrize('filename', ['甲公司公章.png', '客户 #01 100% ? 标准章.png'])
+def test_export_resolves_encoded_unicode_and_special_filename_as_a_local_file(samples, filename):
+    source, client = samples
+    saved = standard(source)
+    directory = source.database.path.parent / 'seal-standards'
+    (directory / 'original.png').rename(directory / filename)
+    with source.database.connect() as con:
+        con.execute('UPDATE seal_standards SET image_name=? WHERE id=?', (filename, saved['id']))
+    saved = source.database.list_seal_standards()[0]
+    assert unquote(urlsplit(saved['image_url']).path.rsplit('/', 1)[-1]) == filename
+    with ZipFile(BytesIO(package(source, client))) as archive:
+        manifest = json.loads(archive.read('manifest.json'))
+        assert manifest['standards'][0]['requirement'] == '甲公司公章'
+        picture = Image.open(BytesIO(archive.read(manifest['standards'][0]['image'])))
+        assert picture.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_import_failure_removes_only_its_reserved_standard_file(samples, tmp_path, monkeypatch):
+    source, client = samples
+    standard(source)
+    data = package(source, client)
+    ctx, _ = target(tmp_path)
+    service = SampleCenter(ctx)
+    directory = ctx.database.path.parent / 'seal-standards'
+    directory.mkdir(exist_ok=True)
+    existing = directory / '甲公司公章.png'
+    existing.write_bytes(b'keep existing image bytes')
+
+    def fail(*args, **kwargs):
+        raise OSError('simulated database failure after image reservation')
+
+    monkeypatch.setattr(ctx.database, 'save_seal_standard', fail)
+    with pytest.raises(OSError):
+        import_package(ctx, service, BytesIO(data))
+    assert set(directory.iterdir()) == {existing}
+    assert existing.read_bytes() == b'keep existing image bytes'
+    assert ctx.database.list_seal_standards() == []
+    assert list(service.library.directory.iterdir()) == []
 
 
 def test_local_standards_and_deleted_samples_are_preserved(samples, tmp_path):

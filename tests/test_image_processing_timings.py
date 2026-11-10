@@ -1,6 +1,7 @@
 """Image timing accounts for real work without changing OCR invocation counts."""
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from datetime import datetime
 from threading import local
 
 import pytest
@@ -40,6 +41,15 @@ def test_nested_image_steps_keep_exclusive_times_and_ocr_count(clock):
     assert steps['rotation']['stage'] == 'seal' and steps['rotation']['stage_label'] == '客户印章'
     assert snapshot['summary'] == dict(total=0, succeeded=0, failed=0, cache_hits=0)
     assert snapshot['processing_seconds'] == 7
+    spans = snapshot['image_processing']['spans']
+    assert len(spans) == 3
+    outer = next(span for span in spans if span['operation'] == 'unwrap')
+    assert outer['seconds'] == 6  # Inclusive timeline interval, exclusive aggregate stays 4.
+    assert sum(span['seconds'] for span in spans) == 9
+    assert all(span['kind'] == 'image' and span['timing_scope'] == 'inclusive' for span in spans)
+    assert all(span['run_id'] == snapshot['run_id'] and span['status'] == 'succeeded' for span in spans)
+    assert all((datetime.fromisoformat(span['finished_at']) - datetime.fromisoformat(span['started_at'])).total_seconds()
+               == span['seconds'] for span in spans)
 
 
 def test_recognition_and_model_initialization_are_excluded_from_image_work(clock):
@@ -61,6 +71,11 @@ def test_recognition_and_model_initialization_are_excluded_from_image_work(clock
     assert by_operation(snapshot)['crop']['seconds'] == 4
     assert by_operation(snapshot)['rotation']['seconds'] == 2
     assert snapshot['summary']['total'] == 1 and snapshot['calls'][0]['seconds'] == 8
+    spans = {span['operation']: span for span in snapshot['image_processing']['spans']}
+    assert spans['crop']['seconds'] == 34 and spans['rotation']['seconds'] == 10
+    assert snapshot['model_initialization_spans'][0]['seconds'] == 20
+    assert spans['rotation']['started_at'] < snapshot['calls'][0]['started_at']
+    assert spans['rotation']['finished_at'] == snapshot['calls'][0]['finished_at']
 
 
 def test_overlapping_exclusions_are_subtracted_once(clock):
@@ -88,6 +103,9 @@ def test_exception_keeps_completed_and_partial_image_work_without_error_text(clo
     assert trace['image_processing']['seconds'] == 3
     assert by_operation(trace)['crop']['failed'] == 0
     assert by_operation(trace)['denoise']['failed'] == 1
+    spans = {span['operation']: span for span in trace['image_processing']['spans']}
+    assert spans['crop']['status'] == 'succeeded'
+    assert spans['denoise']['status'] == 'failed' and spans['denoise']['seconds'] == 2
     assert 'secret' not in str(trace)
 
 
@@ -102,8 +120,10 @@ def test_nested_capture_reuses_timings_and_next_run_has_no_history(clock):
             assert rotate(4) == 5
     snapshot = first.snapshot()
     snapshot['image_processing']['steps'].clear()
+    snapshot['image_processing']['spans'].clear()
     assert first.snapshot()['image_processing']['seconds'] == 2
     assert len(first.snapshot()['image_processing']['steps']) == 1
+    assert len(first.snapshot()['image_processing']['spans']) == 1
     with capture_recognition_calls() as second:
         pass
     assert second.snapshot()['image_processing'] == {'seconds': 0, 'steps': []}
@@ -136,6 +156,11 @@ def test_parallel_contexts_aggregate_separately_by_stage_without_lost_updates(mo
     assert len(rows) == 4
     assert all(row['calls'] == 20 and row['seconds'] == 40 for row in rows)
     assert trace['summary']['total'] == 0
+    spans = trace['image_processing']['spans']
+    assert len(spans) == 80 and all(span['run_id'] == trace['run_id'] for span in spans)
+    assert sum(span['seconds'] for span in spans) == 240
+    assert {span['stage'] for span in spans} == {'date', 'seal'}
+    assert all(span['status'] == 'succeeded' for span in spans)
 
 
 def test_image_operations_outside_capture_do_not_allocate_a_trace(clock):

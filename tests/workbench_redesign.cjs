@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {createProgress} = require('../static/modules/workbench/workbench.mjs');
-const {createState} = require('../static/modules/core/state.mjs');
+const {createState, createResultChanges} = require('../static/modules/core/state.mjs');
 const {workbenchAttention} = require('../static/modules/workbench/presentation.mjs');
 const ReceiptWorkbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
 const ReceiptQueue = require('../static/modules/core/queue.mjs').ReceiptQueue;
@@ -44,7 +44,7 @@ function harness() {
     if (url.startsWith('/api/daily-results?')) return h.data;
     throw Error(url);
   };
-  const environment = {document: {...node(), body: {dataset: {activePage: 'progress'}}, createElement() { const input = node(); files.push(input); return input; }},
+  const environment = {document: {...node(), body: {...node(), dataset: {activePage: 'progress'}}, createElement() { const input = node(); files.push(input); return input; }},
     window: {...node(), confirm: () => h.confirm}, location: {}, localStorage: {getItem: () => '2026-09-10', setItem() {}},
     FormData: class { append() {} },
   };
@@ -52,9 +52,15 @@ function harness() {
     ...Object.fromEntries(Object.entries(state).map(([key, value]) => [`${key}State`, value])), ReceiptWorkbench, ReceiptQueue,
     api: async (url, options) => { requests.push({url, options}); return h.api(url, options); },
     retryOne: async (...args) => { h.retry = args; },
+    onResultsChanged: createResultChanges(state).resultsChanged,
     openResultPreview: async (...args) => { h.preview = args; },
     startReviewScope: async (...args) => { scopes.push(args); return h.openReview?.(); },
+    openManagedRecords: (...args) => { h.managedRecords = args; },
   });
+  const drawer = $('#task-drawer');
+  drawer.showModal = () => { drawer.open = true; };
+  drawer.close = () => { drawer.open = false; };
+  drawer.querySelectorAll = () => [];
   $('#import-date').value = '2026-09-10';
   controller.initialize();
   return Object.assign(h, {$, state, filters, counts, requests, notices, scopes, files, environment, controller});
@@ -76,7 +82,43 @@ test('task drawer excludes completed receipts while keeping active jobs', async 
   await h.controller.loadDailyResults();
   assert.match(h.$('#queue').innerHTML, /waiting.jpg/);
   assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1|receipt-2|cancelled.jpg/);
-  assert.equal(h.$('#task-strip-counts').textContent, '待开始 0 · 排队 1 · 识别中 0');
+  assert.equal(h.$('#task-strip-counts').textContent, '已完成 2 / 3 张 · 排队 1');
+});
+
+test('remote waiting leaves regular progress complete and has its own task filter', async () => {
+  const h = harness();
+  h.data = [row(1,{overall:'待结果',final_result:'待结果'})];
+  h.jobs = [{id:'remote-pending',filename:'receipt-1.jpg',result_id:1,status:'succeeded',
+    danzhengtong:{status:'waiting',pending:true,label:'等待结果'}}];
+  await h.controller.loadDailyResults();
+  assert.equal(h.$('#overview-completed').textContent,'1');
+  assert.equal(h.$('#workbench-state-pill').textContent,'常规识别已完成');
+  assert.equal(h.$('#task-count-pending').textContent,'0');
+  assert.equal(h.$('[data-work-count="processing"]').textContent,0);
+  assert.equal(h.$('[data-work-count="waiting_remote"]').textContent,1);
+  assert.doesNotMatch(h.$('#queue').innerHTML,/receipt-1.jpg/);
+  h.state.progress.workFilters = ['waiting_remote'];
+  h.controller.renderWorkbenchRows();
+  assert.match(h.$('#queue').innerHTML,/receipt-1.jpg/);
+  assert.match(h.$('#queue').innerHTML,/查看已有结果/);
+});
+
+test('main start respects selected receipt jobs and the records batch scope', async () => {
+  const h=harness(); h.data=[];
+  h.environment.document.body.dataset.activePage='records';
+  h.state.records.batchFilter='first';
+  h.jobs=[readyJob('selected',{task_id:'first'}),readyJob('unselected',{task_id:'first'}),readyJob('other',{task_id:'second'})];
+  await h.controller.loadDailyResults();
+  h.state.records.selected=new Set(['job:selected']);
+  h.controller.syncStartRecognition();
+  assert.equal(h.$('#queue-start').textContent,'运行所选（1）');
+  const read=h.api;
+  h.api=async(url,options)=>url==='/api/jobs/start'?releaseJobs(h,options.json.ids):read(url,options);
+  await h.$('#queue-start').dispatch('click');
+  const request=h.requests.find(r=>r.url==='/api/jobs/start');
+  assert.deepEqual(request.options.json,{ids:['selected'],mode:'all'});
+  assert.equal(h.jobs.find(job=>job.id==='unselected').status,'ready');
+  assert.equal(h.jobs.find(job=>job.id==='other').status,'ready');
 });
 
 test('workbench polling updates provider progress while the record result remains cached', async () => {
@@ -248,14 +290,50 @@ test('task selection is limited to displayed rows and resets with search and day
   assert.equal(all.checked, false);
 });
 
-test('task batch scope isolates task list without narrowing the main day start action', async () => {
+test('same-day tasks aggregate across imports and ignore a stale batch selection', async () => {
   const h = harness();
   h.jobs = [readyJob('a', {task_id:'first'}), readyJob('b', {task_id:'second'})];
   h.state.progress.taskBatch = 'first';
   await h.controller.loadDailyResults();
   assert.match(h.$('#queue').innerHTML, /a.jpg/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /b.jpg|receipt-1.jpg/);
-  assert.equal(h.$('#queue-start').textContent, '开始识别');
+  assert.match(h.$('#queue').innerHTML, /b.jpg/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /receipt-1.jpg/);
+  assert.equal(h.$('#overview-total').textContent, '3');
+  assert.equal(h.$('#task-count-pending').textContent, '2');
+  assert.equal(h.$('#task-batch-title').textContent, '当天全部回单 · 3 张');
+  assert.equal(h.$('#queue-start').textContent, '开始运行');
+});
+
+test('opening one task retains the whole day and view records needs no batch selector', async () => {
+  const h = harness(); h.data = [];
+  h.jobs = [readyJob('a', {task_id: 'first'}), readyJob('b', {task_id: 'second'})];
+  h.state.progress.taskBatch = 'first';
+  await h.controller.loadDailyResults();
+  await h.environment.document.dispatch('click', node({openTaskJob: 'b'}));
+  assert.equal(h.$('#task-drawer').open, true);
+  assert.match(h.$('#queue').innerHTML, /a.jpg/);
+  assert.match(h.$('#queue').innerHTML, /b.jpg/);
+  assert.equal(h.$('#overview-total').textContent, '2');
+  await h.$('#task-view-records').dispatch('click');
+  assert.equal(h.$('#task-drawer').open, false);
+  assert.deepEqual(h.managedRecords, ['2026-09-10']);
+});
+
+test('drawer selected start crosses imports without inheriting the records batch filter', async () => {
+  const h = harness(); h.data = [];
+  h.environment.document.body.dataset.activePage = 'records';
+  h.state.records.batchFilter = 'first';
+  h.jobs = [readyJob('a', {task_id: 'first'}), readyJob('b', {task_id: 'second'}), readyJob('c', {task_id: 'third'})];
+  await h.controller.loadDailyResults();
+  for (const id of ['a', 'b']) {
+    const input = node({workSelect: 'job:' + id}); input.checked = true;
+    await h.$('#queue').dispatch('change', input);
+  }
+  const read = h.api;
+  h.api = async (url, options) => url === '/api/jobs/start' ? releaseJobs(h, options.json.ids) : read(url, options);
+  await h.$('#queue-selected-start').dispatch('click');
+  assert.deepEqual(h.requests.find(request => request.url === '/api/jobs/start').options.json.ids, ['a', 'b']);
+  assert.equal(h.jobs.find(job => job.id === 'c').status, 'ready');
 });
 
 test('batch actions only act on selected eligible jobs, not saved records', async () => {
@@ -276,15 +354,15 @@ test('global queue controls stay explicit while day progress reports processed c
   h.jobs = [{id: 'running', filename: 'running.jpg', status: 'running'}, {id: 'failed', filename: 'failed.jpg', status: 'failed'}];
   await h.controller.loadDailyResults(); await h.filters[1].dispatch('click');
   assert.equal(h.$('#queue-control-label').textContent, '后台识别暂停中');
-  assert.equal(h.$('#queue-toggle').textContent, '继续识别');
-  assert.match(h.$('#task-pause-scope').textContent, /所有日期和批次/);
+  assert.equal(h.$('#queue-toggle').textContent, '继续常规识别');
+  assert.match(h.$('#task-pause-scope').textContent, /所有日期的任务/);
   assert.match(h.$('#queue-pause-notice').textContent, /所有日期.*11 张/);
   assert.match(h.$('#queue').innerHTML, /正在完成当前图片/);
   assert.equal(h.$('#task-summary').textContent, '已处理 2 / 3 张');
   assert.equal(h.$('#workbench-list-title').textContent, '任务列表');
   h.state.progress.queueControl = {paused: false}; h.controller.renderQueueControl();
   assert.equal(h.$('#queue-pause-notice').classList.contains('hidden'), true);
-  assert.equal(h.$('#queue-toggle').textContent, '暂停识别');
+  assert.equal(h.$('#queue-toggle').textContent, '暂停常规识别');
   assert.equal(h.$('#queue-control-label').textContent, '后台识别已开启');
 });
 
@@ -302,10 +380,10 @@ test('completed drawer uses result navigation and hides selection, while search 
   assert.match(h.$('#queue').innerHTML, /data-task-view-records/);
   h.state.progress.workSearch = 'missing'; h.controller.renderWorkbenchRows();
   assert.match(h.$('#queue').innerHTML, /未找到匹配的任务/);
-  assert.doesNotMatch(h.$('#queue').innerHTML, /本批次已处理完成/);
+  assert.doesNotMatch(h.$('#queue').innerHTML, /当天回单已处理完成/);
 });
 
-test('drawer metrics follow batch scope and selection returns only for selectable rows', async () => {
+test('drawer metrics stay on the whole day and selection returns only for selectable rows', async () => {
   const h = harness(); h.data = [];
   h.jobs = [readyJob('ready', {task_id: 'a'}), readyJob('running', {task_id: 'a', status: 'running'}),
     readyJob('failed', {task_id: 'b', status: 'failed'})];
@@ -315,8 +393,8 @@ test('drawer metrics follow batch scope and selection returns only for selectabl
   assert.equal(h.$('#task-count-failed').textContent, '1');
   assert.equal(h.$('#task-queue-select').classList.contains('hidden'), false);
   h.state.progress.taskBatch = 'a'; h.controller.renderWorkbenchRows();
-  assert.equal(h.$('#task-count-failed').textContent, '0');
-  assert.equal(h.$('#overview-total').textContent, '2');
+  assert.equal(h.$('#task-count-failed').textContent, '1');
+  assert.equal(h.$('#overview-total').textContent, '3');
   h.state.progress.workFilters = ['running']; h.controller.renderWorkbenchRows();
   assert.equal(h.$('#task-queue-select').classList.contains('hidden'), true);
   h.$('#progress-date').value = '2026-09-09'; h.api = async () => { throw Error('offline'); };
@@ -338,11 +416,11 @@ test('uploaded ready receipts stay pending and do not count as processed', async
   assert.equal(h.state.progress.workFilter, 'all');
   assert.equal(ReceiptQueue.labels.ready, '待开始');
   assert.deepEqual(ReceiptQueue.counts([{status: 'ready'}]), {total: 1, completed: 0, succeeded: 0, failed: 0,
-    cancelled: 0, awaiting_upload: 0, ready: 1, queued: 0, running: 0, pending_review: 0, status: '待开始'});
+    cancelled: 0, awaiting_upload: 0, ready: 1, queued: 0, running: 0, waiting_remote: 0, pending_review: 0, status: '待开始'});
   assert.equal(ReceiptWorkbench.category({status: 'ready'}), 'processing');
   assert.match(h.$('#task-summary').textContent, /已处理 0 \/ 1 张 · 1 张待开始/);
   assert.match(h.$('#queue').innerHTML, /待开始/);
-  assert.equal(h.$('#queue-start').textContent, '开始识别');
+  assert.equal(h.$('#queue-start').textContent, '开始运行');
   assert.equal(h.$('#queue-start').disabled, false);
   assert.equal(h.$('#queue-start-remote-note').classList.contains('hidden'), false);
   assert.equal(h.requests.some(request => request.options?.method), false);
@@ -377,7 +455,7 @@ test('start captures all ready jobs in the loaded day beyond visible rows withou
   const ids = writes[0].options.json.ids;
   assert.deepEqual(ids, Array.from({length: 61}, (_, index) => `ready-${index}`));
   pending.resolve(releaseJobs(h, ids)); await starting;
-  assert.equal(h.$('#queue-start').textContent, '开始识别');
+  assert.equal(h.$('#queue-start').textContent, '开始运行');
   assert.equal(h.$('#queue-start').disabled, true);
 });
 
@@ -411,7 +489,7 @@ test('a day change during start never adds the newly displayed day to the captur
   assert.equal(h.state.progress.queueDay, '2026-09-09');
   assert.equal(h.state.progress.queueJobs.get('new-day').status, 'ready');
   assert.equal(h.state.progress.queueJobs.has('old-day'), false);
-  assert.equal(h.$('#queue-start').textContent, '开始识别');
+  assert.equal(h.$('#queue-start').textContent, '开始运行');
 });
 
 test('start batches more than 5000 captured IDs and preserves completed batches after a later failure', async () => {
@@ -427,7 +505,7 @@ test('start batches more than 5000 captured IDs and preserves completed batches 
   const writes = h.requests.filter(request => request.url === '/api/jobs/start');
   assert.deepEqual(writes.map(request => request.options.json.ids.length), [5000, 1]);
   assert.equal(writes[1].options.json.ids[0], 'ready-5000');
-  assert.equal(h.$('#queue-start').textContent, '开始识别');
+  assert.equal(h.$('#queue-start').textContent, '开始运行');
   assert.match(h.notices.at(-1), /已提交 5000 张回单，剩余 1 张/);
   h.api = async (url, options) => url === '/api/jobs/start' ? releaseJobs(h, options.json.ids) : read(url, options);
   await h.$('#queue-start').dispatch('click');
@@ -457,7 +535,7 @@ test('reuploading a held remote job has no confirmation and still waits for expl
   const h = harness(); h.data = []; h.jobs = [readyJob('reupload', {status: 'awaiting_upload', uses_remote: true})];
   h.environment.window.confirm = () => { throw Error('Unexpected remote confirmation for local upload'); };
   await h.controller.loadDailyResults(); await h.filters[1].dispatch('click');
-  assert.match(h.$('#queue').innerHTML, /补传后点击“开始识别”/);
+  assert.match(h.$('#queue').innerHTML, /补传后点击“开始运行”/);
   await h.$('#queue').dispatch('click', node({jobUpload: 'reupload'}));
   const read = h.api;
   h.api = async (url, options) => {
@@ -555,4 +633,22 @@ test('deletion locks duplicate clicks and refreshes records even after partial f
   assert.match(h.notices.at(-1), /删除未全部完成/);
   assert.doesNotMatch(h.$('#queue').innerHTML, /data-work-delete="record:1"/);
   assert.equal(h.state.records.recordsStale, true);
+});
+
+test('queue completions notify the state owner without discarding the newly loaded daily cache', async () => {
+  const h = harness();
+  h.jobs = [{id: 'first', filename: 'receipt-1.jpg', status: 'running'}];
+  await h.controller.loadDailyResults();
+  const notifications = [];
+  h.state.store.subscribe('results', slice => notifications.push(slice.resultRevision));
+  h.jobs = [{id: 'first', filename: 'receipt-1.jpg', status: 'succeeded', result_id: 1, finished_at: 'now'}];
+  await h.controller.loadDailyResults({refreshRecords: false});
+  assert.deepEqual(notifications, [1]);
+  assert.equal(h.state.records.recordsStale, true);
+  assert.equal(h.state.report.reportStale, true);
+  assert.equal(h.state.progress.progressRecordCache.records, h.data);
+  const reads = h.requests.filter(row => row.url.startsWith('/api/daily-results?')).length;
+  await h.controller.loadDailyResults({refreshRecords: false});
+  assert.equal(h.requests.filter(row => row.url.startsWith('/api/daily-results?')).length, reads);
+  assert.deepEqual(notifications, [1]);
 });

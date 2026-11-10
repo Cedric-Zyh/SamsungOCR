@@ -6,7 +6,7 @@ import re
 from receipt_ocr.domain.documents.pagination import page_identity
 from receipt_ocr.domain.fields.schema import recognition_fields
 from receipt_ocr.jobs.store import JobStore
-from .sample_library import sample_number
+from .library import sample_number
 
 
 NUMBERED_NAME = re.compile(r'[0-9]{10}(?:[-_][0-9]{2}|\s*\([0-9]+\))?')

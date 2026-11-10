@@ -58,7 +58,8 @@ BASE='北京华康君泰贸易有限公司售后业务专用章'
     (BASE+'(1)',BASE+'(1)','匹配'),
     (BASE+'(2)',BASE+'(1)','不匹配'),
     (BASE+'(1)',BASE,'部分匹配'),
-    (BASE,BASE+'11011110146728','不匹配'),
+    # A complete matching identity may carry an extra 13–15-digit seal serial.
+    (BASE,BASE+'11011110146728','匹配'),
     (BASE,BASE+'(1234)','不匹配'),
     (BASE,BASE.replace('君泰','君太')+'(1)','不匹配'),
     (BASE+'6237143站',BASE+'(1)6237144站','不匹配'),

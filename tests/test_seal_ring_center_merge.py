@@ -92,7 +92,6 @@ def test_local_stage_selects_complete_stamp_for_provider_evidence(monkeypatch, t
     result = seal.recognize(
         context, request,
         lambda *args, **kwargs: (["收货专用", "收货专用章", company], artifacts),
-        SimpleNamespace(skipped=lambda: {"enabled": False}),
     )
     assert result.check["recognized"] == result.check["display_text"] == company + "收货专用章"
     assert result.check["status"] == "匹配"

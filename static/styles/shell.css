@@ -30,3 +30,23 @@ html {scrollbar-gutter:stable}
   :root body .app-sidebar {position:static;width:auto;padding:15px}
   :root body .app-brand {padding:0 0 15px}
 }
+
+/* The receipt list uses a compact header so its table owns the viewport. */
+:root body[data-active-page="records"] .app-shell {padding:16px 20px}
+:root body[data-active-page="records"] .hero {
+  grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto;
+  min-height:52px;gap:12px;padding:0 0 14px;
+}
+:root body[data-active-page="records"] .hero .subtitle {display:none}
+:root body[data-active-page="records"] .hero h1 {font-size:24px;letter-spacing:.5px}
+:root body[data-active-page="records"] .hero .toolbar-actions {align-self:center;justify-content:flex-end;gap:8px}
+.hero .records-header-tasks {display:none}
+:root body[data-active-page="records"] .hero .records-header-tasks {display:inline-flex;align-items:center;gap:7px}
+:root body[data-active-page="records"] .hero .records-header-tasks svg {width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+:root body[data-active-page="records"] .hero :is(.primary-button,.secondary-button) {border-radius:6px}
+:root body[data-active-page="records"] .hero #queue-start[hidden] {display:none}
+@media(max-width:760px) {
+  :root body[data-active-page="records"] .app-shell {padding:14px}
+  :root body[data-active-page="records"] .hero {grid-template-columns:minmax(0,1fr);gap:10px;padding-bottom:12px}
+  :root body[data-active-page="records"] .hero .toolbar-actions {justify-content:flex-start}
+}

@@ -8,7 +8,9 @@ from PIL import Image
 import pytest
 
 from receipt_ocr.persistence.database import Database, DEFAULT_RECOGNITION_SETTINGS
-from receipt_ocr.web.samples import register_sample_routes, SampleCenter
+from sample_support import SampleCenter, sample_dependencies
+from receipt_ocr.web.samples import register_sample_routes
+from receipt_ocr.samples.library import SampleLibrary
 
 
 @pytest.fixture
@@ -49,7 +51,7 @@ def samples(tmp_path):
                           GROUND_TRUTH_PATH=truth_path, ALLOWED_EXTENSIONS={".png"},
                           analyzer=SimpleNamespace(seal_api=SimpleNamespace(enabled=False)),
                           _configured_analyze=analyze)
-    register_sample_routes(app, ctx)
+    register_sample_routes(app, lambda: sample_dependencies(ctx))
     return ctx, app.test_client()
 
 
@@ -70,6 +72,70 @@ def test_company_catalog_uses_customers_and_preview_never_creates_jobs(samples):
     assert client.get("/api/samples/history").get_json() == []
     assert ctx.database.list_results() == []
     assert ctx.database.list_tasks() == []
+
+
+def test_conditional_listing_skips_catalog_and_detects_other_connection_changes(samples, monkeypatch):
+    ctx, client = samples
+    first = client.get('/api/samples').json
+    calls = []
+    original = SampleLibrary.catalog
+
+    def catalog(library, **kwargs):
+        calls.append(True)
+        return original(library, **kwargs)
+
+    monkeypatch.setattr(SampleLibrary, 'catalog', catalog)
+    response = client.get('/api/samples', query_string={'revision': first['revision']})
+    assert response.json == {'unchanged': True, 'revision': first['revision']}
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert calls == []
+    # Worker progress writes invalidate the result projection, not the static
+    # catalog and its per-image filesystem checks.
+    db = Database(ctx.database.path.parent / 'sample-center' / 'results.db')
+    with db.connect() as con:
+        con.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('cache-test','1','now')")
+    refreshed = client.get('/api/samples', query_string={'revision': first['revision']}).json
+    assert refreshed == {'unchanged': True, 'revision': first['revision']}
+    assert calls == []
+    with db.connect() as con:
+        con.execute('INSERT INTO sample_library(filename,entry_json) VALUES(?,?)',
+                    ('one.png', json.dumps({'fields': {'客户名称': '跨窗口修改'}})))
+    changed = client.get('/api/samples', query_string={'revision': refreshed['revision']}).json
+    assert next(item for item in changed['items'] if item['filename'] == 'one.png')['company'] == '跨窗口修改'
+    assert len(calls) == 1
+    client.get('/api/samples')
+    assert len(calls) == 2, 'manual reload must recheck the source directory'
+
+
+def test_conditional_listing_observes_external_truth_and_image_removal(samples):
+    ctx, client = samples
+    first = client.get('/api/samples').json
+    truth = json.loads(ctx.GROUND_TRUTH_PATH.read_text())
+    truth['one.png']['fields']['客户名称'] = '外部标注更新'
+    ctx.GROUND_TRUTH_PATH.write_text(json.dumps(truth), encoding='utf-8')
+    changed = client.get('/api/samples', query_string={'revision': first['revision']}).json
+    assert next(item for item in changed['items'] if item['filename'] == 'one.png')['company'] == '外部标注更新'
+    (ctx.DATA_DIR / 'one.png').unlink()
+    removed = client.get('/api/samples', query_string={'revision': changed['revision']}).json
+    assert removed['total'] == 3
+    assert 'one.png' not in {item['filename'] for item in removed['items']}
+
+
+def test_conditional_listing_observes_committed_wal_changes(samples):
+    ctx, client = samples
+    client.get('/api/samples')
+    db = Database(ctx.database.path.parent / 'sample-center' / 'results.db')
+    # Keep a separate connection open so the commit remains in WAL rather than
+    # being checkpointed into the main DB before the conditional request.
+    with db.connect() as writer:
+        writer.execute('PRAGMA journal_mode=WAL')
+        first = client.get('/api/samples').json
+        writer.execute('INSERT INTO sample_library(filename,entry_json) VALUES(?,?)',
+                       ('two.png', json.dumps({'fields': {'客户名称': 'WAL 更新'}})))
+        writer.commit()
+        assert db.path.with_name(db.path.name + '-wal').is_file()
+        changed = client.get('/api/samples', query_string={'revision': first['revision']}).json
+        assert next(item for item in changed['items'] if item['filename'] == 'two.png')['company'] == 'WAL 更新'
 
 
 def test_batch_is_atomic_deduplicated_and_separate_from_production(samples):

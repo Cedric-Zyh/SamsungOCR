@@ -21,6 +21,7 @@ datas = [
     (str(ROOT / "static"), "static"),
     (str(ROOT / "数据" / "ground_truth.json"), "数据"),
     (str(ROOT / "数据" / "document_ground_truth.json"), "数据"),
+    (str(ROOT / "receipt_ocr" / "assets" / "models"), "receipt_ocr/assets/models"),
 ]
 binaries = []
 hiddenimports = []

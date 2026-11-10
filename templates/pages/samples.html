@@ -13,7 +13,21 @@
       <div id="sample-company-list" class="sample-company-list"></div>
     </aside>
     <div class="sample-library">
-      <header class="sample-library-heading"><div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p></div><div class="sample-header-actions"><div class="sample-heading-actions"><button type="button" class="secondary-button" id="sample-classify" title="按已有测试结果自动归类" disabled>自动归类</button><button type="button" class="primary-button" id="sample-run-company" disabled>运行全部样单</button></div><button type="button" id="sample-company-mark-edit" class="text-button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-4-4L4 15z"/></svg><span>标记与备注</span></button></div></header>
+      <header class="sample-library-heading">
+        <div><h2 id="sample-company-title">全部样单</h2><p id="sample-library-summary">正在加载样单…</p><p id="sample-execution-note" class="sample-execution-note">本地、清瞳、单证通一起运行</p></div>
+        <div class="sample-header-actions">
+          <div class="sample-heading-actions">
+            <button type="button" class="secondary-button" id="sample-classify" title="按已有测试结果自动归类" disabled>自动归类</button>
+            {% include "partials/sample_execution_menu.html" %}
+            <button type="button" class="primary-button" id="sample-run-company" aria-describedby="sample-run-progress" disabled>开始运行</button>
+          </div>
+          <div id="sample-run-progress" class="sample-run-progress" role="status" aria-live="polite" hidden>
+            <div><span id="sample-run-progress-label"></span><span id="sample-run-progress-note"></span></div>
+            <progress id="sample-run-progress-bar" max="1" value="0" aria-label="本次样单测试进度"></progress>
+          </div>
+          <button type="button" id="sample-company-mark-edit" class="text-button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-4-4L4 15z"/></svg><span>标记与备注</span></button>
+        </div>
+      </header>
       <section id="sample-company-mark-panel" class="sample-company-mark-panel" aria-label="当前公司的标记与备注" hidden>
         <div class="sample-company-mark-line"><span class="sample-company-mark-label">签章要求</span><span id="sample-requirement-title" class="sample-requirement-title"></span><span id="sample-company-header-seal" class="sample-company-header-seal" hidden></span><span id="sample-company-header-mark" class="sample-company-human-mark" data-mark="unmarked">未标记</span><span id="sample-company-header-new" class="sample-company-new-results" hidden>有新测试结果</span></div>
         <p id="sample-company-header-note" class="sample-company-header-note" hidden></p>

@@ -37,3 +37,22 @@ export function createState() {
   Object.defineProperty(state, 'store', {value: store, enumerable: false});
   return state;
 }
+
+/** Cross-page invalidation belongs to the composition boundary. Features report
+ * changes through these callbacks rather than writing another page's state. */
+export function createResultChanges(state) {
+  function patch(name, changes) {
+    if (state.store) state.store.patch(name, changes);
+    else Object.assign(state[name], changes);
+  }
+  function resultsChanged({keepProgressCache = false} = {}) {
+    if (!keepProgressCache) patch('progress', {progressRecordCache: null});
+    patch('records', {recordsStale: true});
+    patch('report', {reportStale: true});
+    patch('results', {resultRevision: (state.results.resultRevision || 0) + 1});
+  }
+  function queueChanged() {
+    patch('records', {recordsStale: true});
+  }
+  return {resultsChanged, queueChanged};
+}

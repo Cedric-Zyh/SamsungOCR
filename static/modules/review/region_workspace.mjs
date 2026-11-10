@@ -29,8 +29,10 @@ export function dateWorkspaceModel(record) {
   const check = record.date_check || {};
   const original = sealImageUrl(item.date_line_original_url || item.original_url);
   const processed = sealImageUrl(item.date_line_positioned_frame_clean_url || item.date_line_color_clean_url || item.color_clean_url || item.line_clean_url);
+  const preferred = processed || original;
+  const preferredLabel = steps.find(step => step.url === preferred)?.label || (processed ? '处理后' : '日期区域原图');
   const rawReadings = readings(lineVariants) || readings(item.ocr_variants);
-  return {group: 'date', label: '日期区域', original, processed, steps,
+  return {group: 'date', label: '日期区域', original, processed, preferred, preferredLabel, steps,
     result: text(check.actual_display || check.actual), required: text(record.fields?.['要求到货'] || check.required),
     status: check.status === '匹配' && !check.reliable ? '匹配待确认' : check.status || '未识别',
     rawReadings, message: text(check.message),
@@ -71,7 +73,7 @@ export function renderRegionWorkspace(model) {
     ${model.rawReadings ? `<div class="region-raw-reading"><span>原始读数</span><p>${escapeHtml(model.rawReadings)}</p></div>` : ''}
     ${model.source ? `<p class="region-source">来源：${escapeHtml(model.source)}</p>` : ''}
     ${model.message && date ? `<p class="region-source">${escapeHtml(model.message)}</p>` : ''}
-    <div class="seal-image-entry">${button(`${model.label}原图`, model.original || model.processed, '查看区域图片')}${model.pageUrl ? '<button type="button" class="text-button" data-region-location>查看原图位置 ›</button>' : ''}<small>在左侧查看，可放大与拖动</small></div>
+    <div class="seal-image-entry">${button(model.preferredLabel || `${model.label}原图`, model.preferred || model.original || model.processed, '查看区域图片')}${model.pageUrl ? '<button type="button" class="text-button" data-region-location>查看原图位置 ›</button>' : ''}<small>在左侧查看，可放大与拖动</small></div>
     <details class="seal-recognition-process"><summary>识别过程<span>处理图片与原始读数</span></summary><div class="region-processing-steps">${model.steps.map((step, index) => `<div class="region-processing-step"><span>${index + 1}</span><div><strong>${escapeHtml(step.label)}</strong>${step.source ? `<small>${escapeHtml(step.source)}</small>` : ''}<p>${escapeHtml(step.error ? `识别失败：${step.error}` : step.text || step.note || '未保存识别读数')}</p></div>${button(step.label, step.url)}</div>`).join('') || '<p class="region-source">这条记录未保存区域处理图片。</p>'}</div>${history}</details></section>`;
 }
 
@@ -83,5 +85,5 @@ export function bindRegionWorkspace(root, model, previewRegion) {
     show(button.dataset.regionEvidenceUrl, button.dataset.regionEvidenceLabel, null, true);
   }));
   root.querySelector('[data-region-location]')?.addEventListener('click', () => show(model.pageUrl, '整页定位', model.location));
-  return () => show(model.original || model.processed, model.original ? `${model.label}原图` : '处理后');
+  return () => show(model.preferred || model.original || model.processed, model.preferredLabel || (model.original ? `${model.label}原图` : '处理后'));
 }

@@ -830,8 +830,11 @@ def test_queued_jobs_snapshot_latest_settings_only_when_claimed(store, tmp_path)
         return result()
     service = ReceiptJobService(analyze, data_dir=tmp_path, upload_dir=tmp_path,
                                 preview_dir=tmp_path, artifact_dir=tmp_path)
-    service(claimed)
-    assert calls[0]['recognition_config'] == snapshot['recognition_config']
+    pending, _ = service(claimed)
+    # A remote-only plan is now handled by the independent durable worker.
+    assert calls == []
+    assert pending['_assembly_snapshot']['config'] == snapshot['recognition_config']
+    assert store.remote_detail(claimed['id'])['status'] == 'queued'
 
 
 def test_failed_retry_uses_new_plan_and_preserves_source_context(store):
@@ -865,7 +868,7 @@ def test_pending_remote_indicator_tracks_shared_settings(store):
     store.database.set_json_setting('recognition_defaults', shared_settings())
     assert store.daily(day)[0]['uses_remote'] is True  # running snapshot
     store.finish(claimed, error='test failure')
-    assert store.daily(day)[0]['uses_remote'] is False  # retry will use latest
+    assert store.daily(day)[0]['uses_remote'] is True  # the accepted remote lane retains its plan
 
 
 def test_http_import_ignores_stale_client_plan(web_queue):

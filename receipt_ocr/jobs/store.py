@@ -1,13 +1,14 @@
 """Durable per-image queue. Result writes and job completion share one transaction."""
 from copy import deepcopy
-import hashlib
 import json
 import uuid
 
 from ..persistence.database import now_iso, DEFAULT_RECOGNITION_SETTINGS
 from ..persistence.recognition_calls import take_recognition_calls
+from ..persistence.result_versions import result_revision
 from ..domain.recognition import options_with_current_settings
 from ..runtime.progress import public_progress, merge_progress, seconds_between, STAGE_LABELS, MODEL_LABELS
+from .danzhengtong_store import DanzhengtongOperations, scope_plan, has_remote
 
 
 ACTIVE = ('awaiting_upload', 'ready', 'queued', 'running')
@@ -22,21 +23,7 @@ PROGRESS_STAGE_LABELS = {
 }
 
 
-def result_revision(row, *, legacy=False):
-    values = [row[key] for key in ('result_json', 'review_status', 'final_result',
-                                   'human_note', 'attempt', 'deleted_at')]
-    if legacy:
-        return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
-    payload = json.loads(values[0])
-    # Page associations are a projection of the current batch, not a human
-    # edit. Linking another page must not invalidate an otherwise safe retry.
-    for key in ('page_group', 'page_group_id', 'page_role', 'parent_result_id', 'page_index'):
-        payload.pop(key, None)
-    values[0] = payload
-    return 'v2:' + hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-
-
-class JobStore:
+class JobStore(DanzhengtongOperations):
     def __init__(self, database):
         self.database = database
 
@@ -91,6 +78,7 @@ class JobStore:
                          AND EXISTS(SELECT 1 FROM queue_control WHERE id=1 AND paused=1)
                     BEGIN SELECT RAISE(ABORT,'recognition_queue_paused'); END;
             ''')
+            self.initialize_danzhengtong(con)
             con.execute('BEGIN IMMEDIATE')
             columns = {row['name'] for row in con.execute('PRAGMA table_info(recognition_jobs)')}
             if 'start_requested' not in columns:
@@ -100,6 +88,8 @@ class JobStore:
                 con.execute('ALTER TABLE recognition_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
             if 'progress_json' not in columns:
                 con.execute("ALTER TABLE recognition_jobs ADD COLUMN progress_json TEXT NOT NULL DEFAULT '{}'")
+            if 'branch_snapshot_json' not in columns:
+                con.execute("ALTER TABLE recognition_jobs ADD COLUMN branch_snapshot_json TEXT NOT NULL DEFAULT '{}'")
             con.execute('''CREATE TRIGGER IF NOT EXISTS require_recognition_start
                 BEFORE UPDATE OF status ON recognition_jobs
                 WHEN NEW.status='running' AND OLD.status!='running' AND NEW.start_requested=0
@@ -193,7 +183,7 @@ class JobStore:
         if output['status'] == 'queued' and not output['start_requested']:
             output['status'] = 'ready'
         options = json.loads(job['payload_json'])
-        if current_settings is not None and job['status'] in ('awaiting_upload', 'queued', 'failed'):
+        if current_settings is not None and not options.get('_independent_dzt') and job['status'] in ('awaiting_upload', 'queued', 'failed'):
             options = options_with_current_settings(options, current_settings)
         plan = options.get('recognition_config')
         output['uses_remote'] = any(method in {'qingtong', 'danzhengtong'} for methods in plan.values() if isinstance(methods, list) for method in methods) if plan is not None else options.get('seal_recognition_mode') in ('qingtong', 'qingtong_only')
@@ -217,8 +207,10 @@ class JobStore:
                 self._refresh(con, row['task_id'])
         return self.get(job_id), accepted
 
-    def start_jobs(self, job_ids):
+    def start_jobs(self, job_ids, mode='all'):
         """Authorize only the selected, locally uploaded jobs; repeated starts are harmless."""
+        if mode not in ('all', 'local', 'danzhengtong'):
+            raise ValueError('不支持的识别启动方式')
         if (not isinstance(job_ids, list) or not job_ids or len(job_ids) > 5000
                 or any(not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 100
                        for job_id in job_ids)):
@@ -240,7 +232,39 @@ class JobStore:
             started = 0
             tasks = set()
             for job in jobs:
+                if mode == 'local' and job['start_requested'] and job['status'] in ('succeeded', 'failed'):
+                    result_id = job['result_id'] or job['target_result_id']
+                    current = con.execute("SELECT * FROM results WHERE id=? AND deleted_at=''", (result_id,)).fetchone()
+                    if current is None:
+                        raise ValueError('原记录已删除，不能运行常规识别')
+                    if con.execute("SELECT 1 FROM recognition_jobs WHERE target_result_id=? AND status IN ('queued','running') AND id<>?", (result_id, job['id'])).fetchone():
+                        raise ValueError('该回单已有识别任务，请等待处理结束')
+                    options = options_with_current_settings(json.loads(job['payload_json']), settings)
+                    if not any(method != 'danzhengtong' for methods in scope_plan(options).values()
+                               if isinstance(methods, list) for method in methods):
+                        raise ValueError('当前方案未选择常规识别内容，请先在设置中选择')
+                    options.update(_execution_scope='local', _independent_dzt=True)
+                    con.execute("""UPDATE recognition_jobs SET status='queued',target_result_id=?,source_revision=?,
+                        payload_json=?,started_at='',finished_at='',error_message='' WHERE id=?""",
+                        (result_id, result_revision(current), json.dumps(options, ensure_ascii=False), job['id']))
+                    started += 1
+                    tasks.add(job['task_id'])
                 if not job['start_requested']:
+                    options = options_with_current_settings(json.loads(job['payload_json']), settings)
+                    plan = scope_plan(options)
+                    if mode == 'local' and not any(method != 'danzhengtong' for methods in plan.values()
+                                                  if isinstance(methods, list) for method in methods):
+                        raise ValueError('当前方案未选择常规识别内容，请先在设置中选择')
+                    if mode == 'danzhengtong' and not has_remote(plan):
+                        for stage in ('fields', 'handwriting', 'date', 'seal'):
+                            plan[stage] = list(dict.fromkeys([*plan[stage], 'danzhengtong']))
+                    options['recognition_config'] = plan
+                    if has_remote(plan) or mode != 'all':
+                        options.update(_execution_scope=mode, _independent_dzt=True)
+                        con.execute('UPDATE recognition_jobs SET payload_json=? WHERE id=?',
+                                    (json.dumps(options, ensure_ascii=False), job['id']))
+                        if mode != 'local' and has_remote(plan):
+                            self.ensure_remote(con, job)
                     con.execute('UPDATE recognition_jobs SET start_requested=1 WHERE id=?', (job['id'],))
                     self._log(con, job['id'], job['task_id'], 'queued', '已加入识别队列',
                               '等待后台处理', 'queued')
@@ -250,6 +274,7 @@ class JobStore:
                 self._refresh(con, task_id)
             items = [self.public(dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()), settings)
                      for job_id in job_ids]
+            self.attach_remote(items, con)
         return {'started': started, 'items': items}
 
     def manage_queued(self, job_ids, action):
@@ -421,6 +446,15 @@ class JobStore:
             for task_id in tasks:
                 self._refresh(con, task_id)
 
+    def resolve_claim_options(self, saved_options, current_settings):
+        """Resolve execution settings inside the claim transaction.
+
+        Specialized queues may override their configuration policy without
+        rewriting an already claimed job in a second transaction.
+        """
+        return (deepcopy(saved_options) if saved_options.get('_independent_dzt')
+                else options_with_current_settings(saved_options, current_settings))
+
     def claim(self):
         with self.database.connect() as con:
             con.execute('BEGIN IMMEDIATE')
@@ -433,7 +467,12 @@ class JobStore:
                 "SELECT value FROM app_settings WHERE key='recognition_defaults'"
             ).fetchone()
             settings = json.loads(settings_row['value']) if settings_row else DEFAULT_RECOGNITION_SETTINGS
-            options = options_with_current_settings(json.loads(row['payload_json']), settings)
+            saved_options = json.loads(row['payload_json'])
+            options = self.resolve_claim_options(saved_options, settings)
+            if has_remote(scope_plan(options)):
+                options['_independent_dzt'] = True
+                if options.get('_execution_scope') != 'local':
+                    self.ensure_remote(con, row, plan=scope_plan(options))
             timestamp = now_iso()
             con.execute("UPDATE recognition_jobs SET status='running',started_at=?,attempt=attempt+1,error_message='',progress_json='{}',payload_json=? WHERE id=?",
                         (timestamp, json.dumps(options, ensure_ascii=False), row['id']))
@@ -443,7 +482,11 @@ class JobStore:
             self._log(con, row['id'], row['task_id'], 'running', '开始识别',
                       f"第 {int(row['attempt']) + 1} 次处理", 'running', event_at=timestamp)
             self._refresh(con, row['task_id'])
-            return dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (row['id'],)).fetchone())
+            claimed = dict(con.execute('SELECT * FROM recognition_jobs WHERE id=?', (row['id'],)).fetchone())
+            remote = con.execute('SELECT plan_json FROM danzhengtong_jobs WHERE job_id=? AND active=1', (row['id'],)).fetchone()
+            claimed['_has_dzt_task'] = bool(remote)
+            claimed['_dzt_plan'] = json.loads(remote['plan_json']) if remote else {}
+            return claimed
 
     def update_progress(self, claimed, event):
         with self.database.connect() as con:
@@ -475,10 +518,12 @@ class JobStore:
             control = dict(con.execute('SELECT paused,updated_at FROM queue_control WHERE id=1').fetchone())
             counts = {row['public_status']: row['n'] for row in con.execute(
                 f"SELECT {PUBLIC_STATUS_SQL} public_status,COUNT(*) n FROM recognition_jobs WHERE status IN ('running','queued','awaiting_upload') GROUP BY public_status")}
+            remote = con.execute('SELECT submit_paused,auto_query FROM danzhengtong_control WHERE id=1').fetchone()
         paused = bool(control['paused'])
         return {**control, 'paused': paused, 'running': counts.get('running', 0),
                 'queued': counts.get('queued', 0), 'ready': counts.get('ready', 0),
                 'awaiting_upload': counts.get('awaiting_upload', 0),
+                'danzhengtong': {key: bool(remote[key]) for key in ('submit_paused', 'auto_query')},
                 'status': ('pausing' if counts.get('running') else 'paused') if paused else 'active'}
 
     def set_paused(self, paused):
@@ -493,21 +538,26 @@ class JobStore:
         """Allow specialized queues to finalize identity within the result transaction."""
         return job, result
 
-    def finish(self, claimed, result=None, preview_name='', error='', *, recognition_calls=None):
+    def finish(self, claimed, result=None, preview_name='', error='', *, recognition_calls=None, remote_only=False):
         """Commit the result and final job state together, preventing duplicate rows on restart."""
-        reconcile = ''
         result = dict(result) if result is not None else None
+        snapshot = result.pop('_assembly_snapshot', None) if result is not None else None
         trace, _ = take_recognition_calls(result)
         trace = recognition_calls if recognition_calls is not None else trace
         with self.database.connect() as con:
             con.execute('BEGIN IMMEDIATE')
             job = con.execute('SELECT * FROM recognition_jobs WHERE id=?', (claimed['id'],)).fetchone()
-            if job is None or job['status'] != 'running' or job['attempt'] != claimed['attempt']:
+            eligible = (job is not None and job['status'] == 'running')
+            if remote_only:
+                eligible = (job is not None and job['status'] == 'queued' and job['start_requested']
+                            and json.loads(job['payload_json']).get('_execution_scope') == 'danzhengtong')
+            if not eligible or job['attempt'] != claimed['attempt']:
                 return False
             result_id = job['result_id']
             target = job['target_result_id']
             if not error and result is not None and not target:
                 job, result = self._prepare_result(con, job, result)
+            remote = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1', (job['id'],)).fetchone()
             status = 'failed' if error else 'succeeded'
             if target:
                 current = con.execute("SELECT * FROM results WHERE id=? AND deleted_at=''", (target,)).fetchone()
@@ -519,7 +569,6 @@ class JobStore:
                     result.setdefault('queue', {}).update(job_id=job['id'], attempt=job['attempt'])
                     self.database.replace_after_retry(target, result, preview_name, _connection=con)
                     result_id = target
-                    reconcile = current['task_id']
             else:
                 if error:
                     options = json.loads(job['payload_json'])
@@ -531,25 +580,38 @@ class JobStore:
                               'ocr_backend': options.get('ocr_backend', ''),
                               'recognition_config': options.get('recognition_config'),
                               'seal_recognition_mode': options.get('seal_recognition_mode', 'local')}
+                    if remote:
+                        from ..application.deferred_document import empty_snapshot, mark_danzhengtong_pending
+                        snapshot = empty_snapshot(scope_plan(options), options.get('previous_fields'))
+                        for stage, methods in snapshot['config'].items():
+                            if isinstance(methods, list):
+                                snapshot['results'][stage] = [{'method': method, 'error': error}
+                                                             for method in methods if method != 'danzhengtong']
+                        result = mark_danzhengtong_pending(result, snapshot['config'])
                 result.setdefault('queue', {}).update(job_id=job['id'], attempt=job['attempt'])
                 result_id = self.database.insert_result(filename=job['filename'], stored_name=job['stored_name'],
                     preview_name=preview_name if not error else '', task_id=job['task_id'], result=result,
                     error_type='识别失败' if error else '', error_message=error, _connection=con)
-                reconcile = job['task_id']
             if status != 'cancelled':
                 self.database.save_recognition_calls(job['filename'], trace,
                     result_id=result_id or target, run_key=f"{job['id']}:{job['attempt']}",
                     status=status, _connection=con)
+            if result_id and status in ('succeeded', 'failed') and snapshot is not None and not (target and error):
+                self.save_branch(con, job, result_id, snapshot, result)
             timestamp = now_iso()
             con.execute('UPDATE recognition_jobs SET status=?,finished_at=?,result_id=?,error_message=? WHERE id=?',
                         (status, timestamp, result_id, str(error), job['id']))
+            if remote_only and remote and status == 'succeeded':
+                con.execute("UPDATE danzhengtong_jobs SET status='applied',lease_until='',updated_at=? WHERE id=?",
+                            (timestamp, remote['id']))
+                self.mark_remote_applied(con, remote['id'])
+            if remote and status != 'cancelled':
+                self.database.sync_remote_recognition_calls(con, job['id'])
             title = {'succeeded': '处理完成', 'failed': '处理失败', 'cancelled': '处理已取消'}[status]
             detail = str(error) if error else (f"生成结果 #{result_id}" if result_id else '')
             self._log(con, job['id'], job['task_id'], status, title, detail, status,
                       {'result_id': result_id} if result_id else {}, event_at=timestamp)
             self._refresh(con, job['task_id'])
-            if reconcile:
-                self.database.reconcile_task_pages(reconcile, filename=job['filename'], _connection=con)
         return True
 
     @staticmethod
@@ -560,20 +622,30 @@ class JobStore:
             ON r.id=COALESCE(j.result_id,j.target_result_id)
             WHERE j.task_id=? AND r.deleted_at='' AND r.review_status='待复核'""", (task_id,)).fetchone()[0]
         active = sum(counts.get(key, 0) for key in ACTIVE)
+        remote = {row['status']: row['n'] for row in con.execute('''SELECT d.status,COUNT(*) n
+            FROM danzhengtong_jobs d JOIN recognition_jobs j ON j.id=d.job_id
+            WHERE j.task_id=? AND d.active=1 GROUP BY d.status''', (task_id,))}
+        remote_pending = sum(remote.get(key, 0) for key in ('queued', 'submitting', 'waiting', 'received'))
         status = ('处理中' if counts.get('running') else '等待识别' if counts.get('queued')
-                  else '等待上传' if counts.get('awaiting_upload') else '待开始' if counts.get('ready') else '已完成')
+                  else '等待上传' if counts.get('awaiting_upload') else '待开始' if counts.get('ready')
+                  else '已完成')
         return dict(status=status, total=sum(counts.values()), completed=sum(counts.values()) - active,
                     succeeded=counts.get('succeeded', 0), failed=counts.get('failed', 0),
                     cancelled=counts.get('cancelled', 0), pending_review=pending,
                     awaiting_upload=counts.get('awaiting_upload', 0), ready=counts.get('ready', 0),
                     queued=counts.get('queued', 0),
-                    running=counts.get('running', 0))
+                    running=counts.get('running', 0), remote_pending=remote_pending,
+                    remote_completed=remote.get('applied', 0))
 
     def _refresh(self, con, task_id):
         counts = self._counts(con, task_id)
         con.execute('''UPDATE batch_tasks SET status=?,updated_at=?,completed=?,succeeded=?,failed=?,pending_review=?
             WHERE id=?''', (counts['status'], now_iso(), counts['completed'], counts['succeeded'],
                            counts['failed'], counts['pending_review'], task_id))
+
+    def refresh_task(self, connection, task_id):
+        """Refresh batch counters inside a caller-owned state-change transaction."""
+        self._refresh(connection, task_id)
 
     def task(self, task_id):
         settings = self.database.get_json_setting('recognition_defaults', DEFAULT_RECOGNITION_SETTINGS)
@@ -585,6 +657,7 @@ class JobStore:
             output.update(self._counts(con, task_id))
             output['items'] = [self.public(dict(row), settings) for row in con.execute(
                 'SELECT * FROM recognition_jobs WHERE task_id=? ORDER BY CAST(client_key AS INTEGER)', (task_id,))]
+            self.attach_remote(output['items'], con)
         return output
 
     @staticmethod
@@ -719,9 +792,10 @@ class JobStore:
     def daily(self, day):
         settings = self.database.get_json_setting('recognition_defaults', DEFAULT_RECOGNITION_SETTINGS)
         with self.database.connect() as con:
-            return [self.public(dict(row), settings) for row in con.execute('''SELECT j.*,r.review_status,r.final_result FROM recognition_jobs j
+            items = [self.public(dict(row), settings) for row in con.execute('''SELECT j.*,r.review_status,r.final_result FROM recognition_jobs j
                 JOIN batch_tasks t ON t.id=j.task_id
                 LEFT JOIN results r ON r.id=COALESCE(j.result_id,j.target_result_id) AND r.deleted_at=''
                 WHERE substr(t.created_at,1,10)=?
                   AND (COALESCE(j.result_id,j.target_result_id) IS NULL OR r.id IS NOT NULL)
                 ORDER BY j.created_at DESC,j.rowid DESC''', (day,))]
+            return self.attach_remote(items, con)

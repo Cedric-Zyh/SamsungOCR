@@ -4,10 +4,10 @@ from copy import deepcopy
 
 import pytest
 
-from receipt_ocr.web.sample_result_filters import (
+from receipt_ocr.samples.result_filters import (
     FILTER_RESULT_SQL, LIST_RESULT_SQL, decode_list_result, sample_result_filters, project_sample_seal_result,
 )
-from receipt_ocr.web.samples import SampleCenter
+from sample_support import SampleCenter
 from receipt_ocr.persistence.database import DEFAULT_RECOGNITION_SETTINGS
 from test_sample_center import samples
 
@@ -222,7 +222,11 @@ def test_list_endpoint_uses_latest_sample_job_and_carries_only_compact_filter_da
     options = {'ocr_backend': 'paddle_v6', 'seal_recognition_mode': 'qingtong', 'recognition_config': PLAN}
     settings = deepcopy(DEFAULT_RECOGNITION_SETTINGS)
     center.store.enqueue(['one.png'], options, settings)
-    center.store.finish(center.store.claim(), evidence())
+    job = center.store.claim()
+    center.store.finish(job, evidence())
+    # This fixture represents a fully returned test, including its remote lane.
+    with center.database.connect() as con:
+        con.execute("UPDATE danzhengtong_jobs SET status='applied' WHERE job_id=?", (job['id'],))
     data = client.get('/api/samples').json
     item = next(row for row in data['items'] if row['filename'] == 'one.png')
     assert item['result_filters']['seals']['qingtong_ocr']['state'] == '不匹配'

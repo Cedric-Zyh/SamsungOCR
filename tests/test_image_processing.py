@@ -8,7 +8,7 @@ from receipt_ocr.imaging.ellipse import _save_ellipse_annulus_unwrapped, save_el
 
 from receipt_ocr.imaging.colors import _color_masks
 
-from receipt_ocr.imaging.detection import _dedupe_overlapping_regions, _merge_split_stamp_fragments, _overlap_ratio, classify_seal_role, detect_seal_regions
+from receipt_ocr.imaging.detection import _dedupe_overlapping_regions, _merge_split_stamp_fragments, _overlap_ratio, classify_seal_role, _detect_color_seal_regions
 
 from receipt_ocr.imaging.crops import save_color_isolated_seal, save_rectangular_seal_code_line
 
@@ -464,7 +464,7 @@ def test_page_wide_joined_stamps_are_split_and_roles_reclassified(tmp_path):
     source = tmp_path / "joined-stamps.jpg"
     assert cv2.imwrite(str(source), image)
 
-    regions = detect_seal_regions(source)
+    regions = _detect_color_seal_regions(cv2.imread(str(source)))
 
     assert len(regions) == 2
     assert {region.role for region in regions} == {"发货单位章", "收货客户章"}
@@ -481,7 +481,7 @@ def test_joined_pair_is_split_even_when_combined_center_looks_like_shipping(tmp_
     source = tmp_path / "left-biased-joined-stamps.jpg"
     assert cv2.imwrite(str(source), image)
 
-    regions = detect_seal_regions(source)
+    regions = _detect_color_seal_regions(cv2.imread(str(source)))
 
     assert len(regions) == 2
     assert {region.role for region in regions} == {"发货单位章", "收货客户章"}
@@ -500,7 +500,7 @@ def test_dense_overlapping_oval_stamps_are_recovered_from_inner_contours(tmp_pat
     source = tmp_path / "overlapping-oval-stamps.jpg"
     assert cv2.imwrite(str(source), image)
 
-    regions = [r for r in detect_seal_regions(source) if r.role == "收货客户章"]
+    regions = [r for r in _detect_color_seal_regions(cv2.imread(str(source))) if r.role == "收货客户章"]
 
     assert len(regions) >= 2
     assert all(region.width < .36 and region.height < .25 for region in regions)
@@ -520,7 +520,7 @@ def test_page_spanning_red_scan_line_does_not_hide_customer_stamp(tmp_path):
     source = tmp_path / "stamp-with-vertical-scan-line.jpg"
     assert cv2.imwrite(str(source), image)
 
-    regions = [r for r in detect_seal_regions(source) if r.role == "收货客户章"]
+    regions = [r for r in _detect_color_seal_regions(cv2.imread(str(source))) if r.role == "收货客户章"]
 
     assert len(regions) == 1
     assert regions[0].height < 0.25
@@ -537,7 +537,7 @@ def test_customer_stamp_starting_above_footer_cutoff_is_kept_by_center(tmp_path)
     source = tmp_path / "high-overlap-customer-stamp.jpg"
     assert cv2.imwrite(str(source), image)
 
-    regions = [r for r in detect_seal_regions(source) if r.role == "收货客户章"]
+    regions = [r for r in _detect_color_seal_regions(cv2.imread(str(source))) if r.role == "收货客户章"]
 
     assert len(regions) == 1
     assert regions[0].y < .43

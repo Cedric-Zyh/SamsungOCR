@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from receipt_ocr.domain.seal_standards import apply_standard_check, standard_comparison
-from receipt_ocr.web.sample_result_filters import (
+from receipt_ocr.samples.result_filters import (
     LIST_RESULT_SQL, decode_list_result, project_sample_seal_result, sample_result_filters,
 )
 

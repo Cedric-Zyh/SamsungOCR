@@ -45,4 +45,9 @@ def provider_error(stage, settings, *, exception=None, response=None, body=None,
     if detail:
         details.append(detail)
     message = '；'.join(dict.fromkeys(safe_error_text(value, settings) for value in details if value))
-    return RuntimeError(f'单证通{stage}失败：{message or "接口未提供错误详情"}')
+    error = RuntimeError(f'单证通{stage}失败：{message or "接口未提供错误详情"}')
+    # A received rejection is different from losing an accepted POST reply.
+    error.provider_rejected = bool(isinstance(body, dict) and (
+        body.get('status') is False or body.get('success') is False
+        or body.get('code') not in (None, 200)))
+    return error

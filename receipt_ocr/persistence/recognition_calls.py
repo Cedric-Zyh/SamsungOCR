@@ -87,6 +87,29 @@ def _legacy_initialization(con, row, snapshot):
 
 
 class RecognitionCallOperationsMixin:
+    def sync_remote_recognition_calls(self, con, job_id):
+        from .async_recognition_calls import combined_remote_trace
+        job = con.execute('SELECT filename FROM recognition_jobs WHERE id=?', (job_id,)).fetchone()
+        if job is None:
+            return
+        current = con.execute('SELECT * FROM latest_recognition_calls WHERE filename=?', (job['filename'],)).fetchone()
+        combined = combined_remote_trace(con, job['filename'], current)
+        if combined is None or combined[0]['job_id'] != job_id:
+            return
+        remote, snapshot = combined
+        result_id = remote['result_id'] or remote['job_result_id'] or remote['target_result_id']
+        if result_id and con.execute("SELECT 1 FROM results WHERE id=? AND deleted_at=''", (result_id,)).fetchone() is None:
+            return
+        con.execute('''INSERT INTO latest_recognition_calls
+            (filename,run_key,started_at,status,snapshot_json,result_id,job_id,attempt)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(filename) DO UPDATE SET
+            run_key=excluded.run_key,started_at=excluded.started_at,status=excluded.status,
+            snapshot_json=excluded.snapshot_json,result_id=excluded.result_id,
+            job_id=excluded.job_id,attempt=excluded.attempt''',
+            (job['filename'], f"{job_id}:{remote['attempt']}", snapshot['started_at'] or trace_timestamp(),
+             'succeeded' if snapshot['status'] == 'completed' else snapshot['status'],
+             json.dumps(snapshot, ensure_ascii=False), result_id, job_id, remote['attempt']))
+
     def begin_recognition_calls(self, filename, run_key, *, job_id="", attempt=0,
                                 result_id=None, _connection=None):
         with (nullcontext(_connection) if _connection is not None else self.connect()) as con:
@@ -138,12 +161,49 @@ class RecognitionCallOperationsMixin:
                 raise KeyError(result_id)
             row = con.execute("SELECT * FROM latest_recognition_calls WHERE filename=?",
                               (result["filename"],)).fetchone()
+            combined = None
+            # Earlier versions recorded accepted async requests but no call row.
+            # Project that known call without inventing missing local details or timing.
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='danzhengtong_jobs'").fetchone():
+                from .async_recognition_calls import combined_remote_trace
+                combined = combined_remote_trace(con, result['filename'], row)
+                if combined:
+                    remote, snapshot = combined
+                    row = {**(dict(row) if row is not None else {}), 'snapshot_json': json.dumps(snapshot),
+                           'started_at': snapshot.get('started_at', ''),
+                           'status': 'succeeded' if snapshot['status'] == 'completed' else snapshot['status'],
+                           'result_id': remote['result_id'] or remote['job_result_id'],
+                           'job_id': remote['job_id'], 'attempt': remote['attempt']}
+
+            def remote_timings(snapshot):
+                from .remote_timings import remote_interface_timings
+
+                identity = (row['result_id'] if row is not None else None) or result_id
+                saved = con.execute("SELECT result_json FROM results WHERE id=? AND filename=? AND deleted_at=''",
+                                    (identity, result['filename'])).fetchone()
+                try:
+                    evidence = json.loads(saved['result_json']) if saved else {}
+                except (TypeError, json.JSONDecodeError):
+                    evidence = {}
+                if not isinstance(evidence, dict):
+                    evidence = {}
+                # A failed/running full retry can still point to the preceding
+                # saved result. Its remote response must not become this run's
+                # server timing. Incremental sample runs intentionally retain it.
+                if (row is not None and row['status'] not in {'succeeded', 'completed'}
+                        and not snapshot.get('incremental')
+                        and (not row['job_id'] or (evidence.get('queue') or {}).get('job_id') != row['job_id'])):
+                    evidence = {}
+                return remote_interface_timings(snapshot, evidence)
+
             output = dict(filename=result["filename"], available=False, status="unavailable",
                           summary=None, calls=[], started_at="", finished_at="",
                           processing_seconds=None, model_initialization_seconds=None,
-                          recognition_seconds=None, image_processing=None, result_id=None,
+                          recognition_seconds=None, image_processing=None, result_id=None, remote_timings=[],
+                          timeline=None,
                           note="这张回单尚未采集识别调用明细，请重新识别后查看。")
             if row is None:
+                output['remote_timings'] = remote_timings({})
                 return output
             snapshot = json.loads(row["snapshot_json"])
             available = isinstance(snapshot.get("calls"), list)
@@ -151,13 +211,15 @@ class RecognitionCallOperationsMixin:
             if status == "running" and row["job_id"]:
                 job = con.execute("SELECT status,attempt FROM recognition_jobs WHERE id=?",
                                   (row["job_id"],)).fetchone()
-                if job is None or job["status"] != "running" or job["attempt"] != row["attempt"]:
+                remote_pending = con.execute("""SELECT 1 FROM danzhengtong_jobs WHERE job_id=? AND active=1
+                    AND status IN ('queued','submitting','waiting','received')""", (row['job_id'],)).fetchone() if combined else None
+                if not remote_pending and (job is None or job["status"] != "running" or job["attempt"] != row["attempt"]):
                     status = "interrupted"
             output.update(available=available, status=status, started_at=row["started_at"],
                           result_id=row["result_id"])
             if available:
                 output.update({key: snapshot.get(key) for key in
-                               ("summary", "calls", "finished_at", "processing_seconds", "image_processing")})
+                               ("summary", "calls", "finished_at", "processing_seconds", "image_processing", "incremental")})
                 total = _seconds(snapshot.get('processing_seconds'))
                 initialization = _seconds(snapshot.get('model_initialization_seconds'))
                 if initialization is None:
@@ -167,8 +229,14 @@ class RecognitionCallOperationsMixin:
                     output.update(model_initialization_seconds=initialization,
                                   recognition_seconds=round(max(0, total - initialization), 4))
                 output.pop("note")
+                if snapshot.get('note'):
+                    output['note'] = snapshot['note']
             elif status == "running":
                 output["note"] = "本次正在识别，完成后可查看实际调用次数和耗时。"
             elif status == "interrupted":
                 output["note"] = "最近一次识别已中断，未保存完整调用明细。"
+            output['remote_timings'] = remote_timings(snapshot)
+            from .run_timeline import recognition_timeline
+            output['timeline'] = recognition_timeline(snapshot,
+                run_key=row.get('run_key', '') if isinstance(row, dict) else row['run_key'], status=status)
             return output

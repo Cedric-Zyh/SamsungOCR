@@ -1,12 +1,11 @@
 """A mistaken dispatch template must not discard an observed customer box."""
-from concurrent.futures import Future
 from copy import deepcopy
 from types import SimpleNamespace
 
 from PIL import Image
 import pytest
 
-from receipt_ocr.application.requests import StageRequest
+from receipt_ocr.application.requests import StageRequest, QingTongEvidence
 from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal, qingtong_region_boxes
 from receipt_ocr.stages import seal as seal_stage
 
@@ -70,12 +69,11 @@ def test_known_dispatch_ocr_is_still_excluded_even_if_template_is_wrong():
 def test_local_stage_reuses_retained_box_instead_of_detecting_fragments(tmp_path, monkeypatch):
     source = tmp_path / 'receipt.png'
     Image.new('RGB', (2480, 3594), 'white').save(source)
-    future = Future()
-    future.set_result(response())
+    future = QingTongEvidence(response=response())
     context = SimpleNamespace(source=source, page=lambda backend: [],
                               document_type={'type': 'receipt'}, allows_remote_seal=False)
     request = StageRequest(route={stage: 'paddle_v6' for stage in ('page', 'date', 'seal')},
-                           fields={'签章要求': REQUIRED}, seal_future=future)
+                           fields={'签章要求': REQUIRED}, seal_evidence=future)
     seen = []
 
     def unexpected_detection(*args, **kwargs):
@@ -86,8 +84,7 @@ def test_local_stage_reuses_retained_box_instead_of_detecting_fragments(tmp_path
         return [], []
 
     monkeypatch.setattr(seal_stage, 'detect_seal_regions', unexpected_detection)
-    result = seal_stage.recognize(context, request, reader,
-                                  SimpleNamespace(skipped=lambda: {'enabled': False}))
+    result = seal_stage.recognize(context, request, reader)
     assert len(seen) == len(result.regions) == 1
     region = seen[0]
     assert (region.x * 2480, region.y * 3594,
