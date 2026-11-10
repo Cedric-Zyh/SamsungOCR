@@ -75,7 +75,7 @@ class Transport:
         uuid = kwargs['params']['reqUuid']
         # The first GET is allowed only after its accepted ID is durable.
         if self.output:
-            assert any(json.loads(path.read_text()).get('req_uuid') == uuid
+            assert any(json.loads(path.read_text(encoding='utf-8')).get('req_uuid') == uuid
                        for path in self.output.glob('standard-*.json'))
         self.queries.append(uuid)
         self.events.append(('query', uuid))
@@ -106,7 +106,7 @@ def setup(tmp_path):
         source.write_bytes(b'unchanged-original-image-' + str(index).encode())
         records.append({'standard_id': index, 'image_path': str(source), 'expected': 'DO-NOT-SEND-EXPECTED-ANSWER',
                         'image_sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
-    manifest.write_text(json.dumps({'records': records}))
+    manifest.write_text(json.dumps({'records': records}), encoding='utf-8')
     output = tmp_path / 'responses'
     transport.output = output
     arguments = dict(settings=settings, transport=transport, clock=clock.time, sleep=clock.sleep, now=clock.now,
@@ -122,7 +122,7 @@ def test_limit_then_resume_full_batch_keeps_raw_fields_max_four_and_no_duplicate
     assert full['counts'] == dict(completed=7, waiting=0, failed=0, unknown=0, queued=0, total=7)
     assert len(transport.uploads) == len(transport.submits) == 7
     assert transport.max_active == 4
-    report = json.loads((output / 'standard-0001.json').read_text())
+    report = json.loads((output / 'standard-0001.json').read_text(encoding='utf-8'))
     assert report['commitResult']['收货客户印章'] == {'value': '原始 返回文字', 'ratio': 0}
     assert report['response']['commitResult'] == report['commitResult']
     assert report['timings']['ocr_calls'] == 1 and report['timings']['query_count'] == 1
@@ -130,7 +130,7 @@ def test_limit_then_resume_full_batch_keeps_raw_fields_max_four_and_no_duplicate
     assert [event['phase'] for event in report['requests']] == ['upload', 'submit', 'query']
     assert report['timings']['request_seconds'] == 3
     assert report['timings']['elapsed_seconds'] >= 3
-    serialized = ''.join(path.read_text() for path in output.glob('*.json'))
+    serialized = ''.join(path.read_text(encoding='utf-8') for path in output.glob('*.json'))
     for secret in (settings.app_id, settings.app_key, settings.app_secret, settings.key_id, 'upload-secret', 'image-secret'):
         assert secret not in serialized
 
@@ -142,7 +142,7 @@ def test_code_9007_reuses_file_id_and_preserves_all_rejections_with_only_two_ret
     result = run_benchmark(manifest, output, limit=1, **args)
     assert result['counts']['completed'] == 1
     assert len(transport.uploads) == 1 and len(transport.submits) == 3
-    report = json.loads((output / 'standard-0001.json').read_text())
+    report = json.loads((output / 'standard-0001.json').read_text(encoding='utf-8'))
     attempts = [event for event in report['requests'] if event['phase'] == 'submit']
     assert [event['response']['body']['code'] for event in attempts] == [9007, 9007, 200]
     assert report['retry_9007_count'] == 2
@@ -168,7 +168,7 @@ def test_unknown_post_never_repeats_and_get_network_failure_retries_same_uuid(se
     run_benchmark(manifest, output, limit=2, **args)
     assert len(transport.uploads) == len(transport.submits) == 2
     assert transport.queries == ['uuid-standard-0002.png'] * 2
-    report = json.loads((output / 'standard-0002.json').read_text())
+    report = json.loads((output / 'standard-0002.json').read_text(encoding='utf-8'))
     assert report['timings']['query_count'] == 2 and report['timings']['ocr_calls'] == 1
     assert report['requests'][-2]['status'] == 'failed'
 
@@ -179,7 +179,7 @@ def test_wait_timeout_remains_waiting_and_resume_only_queries_accepted_uuid(setu
     args['wait_timeout_seconds'] = 6
     waiting = run_benchmark(manifest, output, limit=1, **args)
     assert waiting['counts']['waiting'] == 1 and waiting['counts']['failed'] == 0
-    report = json.loads((output / 'standard-0001.json').read_text())
+    report = json.loads((output / 'standard-0001.json').read_text(encoding='utf-8'))
     assert report['wait_timeout'] is True
     transport.pending = 0
     resumed = run_benchmark(manifest, output, limit=1, **args)
@@ -196,7 +196,7 @@ def test_four_expired_waits_do_not_prevent_later_manifest_records_from_being_tes
     assert len(transport.uploads) == len(transport.submits) == 7
     assert result['counts']['failed'] == result['counts']['unknown'] == 0
     for path in output.glob('standard-*.json'):
-        report = json.loads(path.read_text())
+        report = json.loads(path.read_text(encoding='utf-8'))
         assert report['wait_timeout'] and report['req_uuid']
         assert report['runs'][-1]['elapsed_seconds'] <= result['elapsed_seconds']
 
@@ -204,7 +204,7 @@ def test_four_expired_waits_do_not_prevent_later_manifest_records_from_being_tes
 def test_per_record_elapsed_ends_at_its_last_request_not_at_batch_completion(setup):
     manifest, output, transport, clock, settings, args = setup
     result = run_benchmark(manifest, output, **args)
-    first = json.loads((output / 'standard-0001.json').read_text())
+    first = json.loads((output / 'standard-0001.json').read_text(encoding='utf-8'))
     run = first['runs'][-1]
     assert run['request_count'] == 3
     assert run['finished_at'] == first['requests'][-1]['finished_at']
@@ -215,9 +215,9 @@ def test_crashed_submit_marker_is_unknown_and_input_mutation_refuses_resume(setu
     manifest, output, transport, clock, settings, args = setup
     run_benchmark(manifest, output, limit=1, **args)
     path = output / 'standard-0001.json'
-    report = json.loads(path.read_text())
+    report = json.loads(path.read_text(encoding='utf-8'))
     report.update(status='submitting', req_uuid='')
-    path.write_text(json.dumps(report))
+    path.write_text(json.dumps(report), encoding='utf-8')
     result = run_benchmark(manifest, output, limit=1, **args)
     assert result['counts']['unknown'] == 1 and len(transport.submits) == 1
     Path(report['input_path']).write_bytes(b'mutated')

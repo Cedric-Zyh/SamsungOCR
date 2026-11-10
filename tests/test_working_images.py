@@ -101,6 +101,44 @@ def test_external_overwrite_invalidates_pixels_even_with_restored_mtime(tmp_path
         np.testing.assert_array_equal(images.predictor_input(source), second)
 
 
+def test_windows_usn_invalidates_pixels_with_unchanged_stat_timestamps(tmp_path, monkeypatch):
+    from receipt_ocr.runtime import execution
+
+    source = tmp_path / "input.png"
+    first = pixels()
+    generation = [1]
+    monkeypatch.setattr(execution, '_WINDOWS', True)
+    monkeypatch.setattr(execution, '_windows_file_usn', lambda path: generation[0])
+    with images.image_workspace_scope():
+        images.write_cv(source, first)
+        initial_stat, original_stat = source.stat(), Path.stat
+        monkeypatch.setattr(Path, 'stat', lambda path, *a, **kw:
+                            initial_stat if path == source else original_stat(path, *a, **kw))
+        second = 255 - first
+        assert cv2.imwrite(str(source), second)
+        generation[0] += 1
+        np.testing.assert_array_equal(images.read_cv(source), second)
+        np.testing.assert_array_equal(images.predictor_input(source), second)
+
+
+def test_unavailable_windows_usn_never_reuses_stale_pixels(tmp_path, monkeypatch):
+    from receipt_ocr.runtime import execution
+
+    def unavailable(path):
+        raise OSError('File change journal unavailable')
+
+    monkeypatch.setattr(execution, '_WINDOWS', True)
+    monkeypatch.setattr(execution, '_windows_file_usn', unavailable)
+    source = tmp_path / "input.png"
+    first = pixels()
+    with images.image_workspace_scope() as workspace:
+        assert images.write_cv(source, first)
+        np.testing.assert_array_equal(images.read_cv(source), first)
+        assert cv2.imwrite(str(source), 255 - first)
+        np.testing.assert_array_equal(images.read_cv(source), 255 - first)
+        assert workspace.stats['decoded_cache_hits'] == 0
+
+
 def test_virtual_images_spill_before_eviction_and_memory_is_bounded(tmp_path):
     first = pixels(20, 20)
     second = 255 - first

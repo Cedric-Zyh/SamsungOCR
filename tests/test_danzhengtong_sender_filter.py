@@ -1,5 +1,6 @@
 """Use source pixels and footer pairing before discarding a possible customer."""
 import hashlib
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 import pytest
@@ -165,7 +166,7 @@ def test_fresh_preparation_filters_before_cropping_and_retains_original_index(tm
     assert detections == [source]
     assert crops == [('original', right), ('enhanced', right)]
     assert [item['index'] for item in prepared] == [1]
-    assert prepared[0]['input_path'].endswith('/dzt-seal-1-input.png')
+    assert Path(prepared[0]['input_path']) == destination / 'seals' / 'dzt-seal-1-input.png'
     assert prepared[0]['local_orientation'] == 'not_run'
     assert not list((destination / 'seals').glob('dzt-seal-0-*'))
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash

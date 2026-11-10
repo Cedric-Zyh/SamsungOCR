@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+import os
 from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -161,7 +162,12 @@ def test_import_standard_name_cannot_reuse_a_migrated_legacy_url_alias(samples, 
     assert ctx.database.seal_standard_image_name(alias) == historical.name
 
 
-@pytest.mark.parametrize('filename', ['甲公司公章.png', '客户 #01 100% ? 标准章.png'])
+@pytest.mark.parametrize('filename', [
+    '甲公司公章.png',
+    '客户 #01 100% 标准章.png',
+    pytest.param('客户 #01 100% ? 标准章.png', marks=pytest.mark.skipif(
+        os.name == 'nt', reason='Windows filenames cannot contain a question mark')),
+])
 def test_export_resolves_encoded_unicode_and_special_filename_as_a_local_file(samples, filename):
     source, client = samples
     saved = standard(source)

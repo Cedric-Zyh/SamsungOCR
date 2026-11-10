@@ -185,31 +185,48 @@ def reuse_text_boxes(source, model_signature, recognize):
 def _file_version(path):
     stat = path.stat()
     version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-    # On Windows/Python 3.11 st_ctime is creation time. Restoring mtime after
-    # a rewrite must not hide that rewrite, including an A -> B -> A sequence.
-    return (*version, _windows_change_time(path)) if _WINDOWS else version
+    # Windows ctime is creation time on Python 3.11, and even ChangeTime can
+    # collide for rapid writes. A journal sequence detects closed rewrites,
+    # including A -> B -> A with restored content and timestamps.
+    return (*version, _windows_file_usn(path)) if _WINDOWS else version
 
 
-def _windows_change_time(path):
-    """Read FILE_BASIC_INFO.ChangeTime; unavailable metadata disables reuse."""
+def _windows_file_usn(path):
+    """Read the last journal sequence; unsupported filesystems disable reuse."""
     import ctypes
     from ctypes import wintypes
     import msvcrt
 
-    class FileBasicInfo(ctypes.Structure):
-        _fields_ = [(name, ctypes.c_longlong) for name in (
-            'CreationTime', 'LastAccessTime', 'LastWriteTime', 'ChangeTime')]
-        _fields_.append(('FileAttributes', wintypes.DWORD))
-
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-    query = kernel.GetFileInformationByHandleEx
-    query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    query = kernel.DeviceIoControl
+    query.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                     ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                     ctypes.c_void_p]
     query.restype = wintypes.BOOL
-    info = FileBasicInfo()
+    # READ_FILE_USN_DATA accepts both NTFS (V2) and ReFS (V3) records.
+    versions = (wintypes.WORD * 2)(2, 3)
+    record = ctypes.create_string_buffer(4096)
+    returned = wintypes.DWORD()
     with open(str(path), 'rb') as source:
         handle = msvcrt.get_osfhandle(source.fileno())
-        if not query(handle, 0, ctypes.byref(info), ctypes.sizeof(info)):
+        # FSCTL_READ_FILE_USN_DATA: query only; never creates a journal.
+        if not query(handle, 0x000900EB, versions, ctypes.sizeof(versions),
+                     record, ctypes.sizeof(record), ctypes.byref(returned), None):
             raise ctypes.WinError(ctypes.get_last_error())
-    if info.ChangeTime <= 0:
-        raise OSError('File change time is unavailable')
-    return int(info.ChangeTime)
+    return _usn_from_record(record.raw[:returned.value])
+
+
+def _usn_from_record(record):
+    """Decode the fixed USN field, rejecting unavailable or unknown records."""
+    import struct
+
+    if len(record) < 8:
+        raise OSError('File change journal record is incomplete')
+    length, major, _ = struct.unpack_from('<IHH', record)
+    offset, minimum = {2: (24, 60), 3: (40, 76)}.get(major, (0, 0))
+    if not minimum or not minimum <= length <= len(record):
+        raise OSError('File change journal record is unsupported or incomplete')
+    usn = struct.unpack_from('<q', record, offset)[0]
+    if usn <= 0:
+        raise OSError('File change journal sequence is unavailable')
+    return usn

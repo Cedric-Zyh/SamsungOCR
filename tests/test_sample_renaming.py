@@ -130,9 +130,9 @@ def test_existing_number_across_extensions_or_legacy_copies_is_never_overwritten
 def test_builtin_number_is_reserved_when_renaming_uploaded_sample(samples):
     ctx, client = samples
     name = NUMBER + '.png'
-    truth = json.loads(ctx.GROUND_TRUTH_PATH.read_text())
+    truth = json.loads(ctx.GROUND_TRUTH_PATH.read_text(encoding='utf-8'))
     truth[name] = {'fields': {'客户名称': '内置客户'}}
-    ctx.GROUND_TRUTH_PATH.write_text(json.dumps(truth, ensure_ascii=False))
+    ctx.GROUND_TRUTH_PATH.write_text(json.dumps(truth, ensure_ascii=False), encoding='utf-8')
     Image.new('RGB', (32, 48), 'red').save(ctx.DATA_DIR / name)
     assert upload(client, 'scan.png').status_code == 201
     center, _, result_id = run_sample(ctx, client, 'scan.png', {'客户订单号': NUMBER})

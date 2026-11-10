@@ -69,7 +69,9 @@ def test_model_boxes_keep_geometry_without_color_size_or_page_position_filters(m
     image[100:140, 800:850] = (30, 30, 220)  # Small upper-page red stamp.
     image[700:800, 100:200] = (220, 30, 30)  # Displaced blue customer stamp.
     source = tmp_path / '中文回单.png'
-    cv2.imwrite(str(source), image)
+    ok, encoded = cv2.imencode('.png', image)
+    assert ok
+    source.write_bytes(encoded.tobytes())
     monkeypatch.setattr(detection, 'detect_seal_boxes', lambda image: [
         model.SealDetection((100, 700, 200, 800), .9),
         model.SealDetection((800, 100, 850, 140), .9),

@@ -18,7 +18,7 @@ _unknown_version = object()
 
 
 def _version(path):
-    # Shares the Windows ChangeTime guard used by OCR-result reuse.
+    # Shares the Windows journal-sequence guard used by OCR-result reuse.
     from ..runtime.execution import _file_version
 
     try:
