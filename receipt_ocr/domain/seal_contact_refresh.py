@@ -7,23 +7,12 @@ from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text
 from .parsing.seal_information_fields import repair_hotline_field_match
 from .review_policy import has_human_edits
 from .seal_provider_selection import combine_seal_provider_checks
-
-
-def _details(variant):
-    return variant.get('details') or variant.get('result') or {}
-
-
-def _real_trace(trace):
-    return (trace.get('mode') == 'real' and trace.get('simulated') is False
-            and trace.get('status') == 'completed' and not inactive(trace))
+from .saved_evidence import SavedStageEvidence, variant_details as _details
 
 
 def _usable(variant, current):
-    details = _details(variant)
-    check = details.get('seal_check') or {}
-    trace = details.get('danzhengtong') or current.get('danzhengtong') or {}
-    return bool(check) and not any(inactive(value) for value in
-                                  (variant, details, check, trace if variant.get('method') == 'danzhengtong' else {}))
+    evidence = SavedStageEvidence.from_variant('seal', variant, current)
+    return bool(evidence.check) and evidence.active
 
 
 def refresh_seal_contact_results(current):
@@ -39,12 +28,11 @@ def refresh_seal_contact_results(current):
         return result
     changed = False
     for variant in variants:
-        details = _details(variant)
-        old = details.get('seal_check') or {}
-        trace = details.get('danzhengtong') or result.get('danzhengtong') or {}
-        if (variant.get('method') != 'danzhengtong' or not _usable(variant, result)
+        evidence = SavedStageEvidence.from_variant('seal', variant, result)
+        details, old = evidence.details, evidence.check
+        if (evidence.method != 'danzhengtong' or not evidence.active
                 or old.get('status') == '匹配' or old.get('reliable') is not True
-                or not _real_trace(trace)):
+                or not evidence.real_provider):
             continue
         required = old.get('requirement') or (result.get('fields') or {}).get('签章要求') or ''
         active_required = (result.get('fields') or {}).get('签章要求')

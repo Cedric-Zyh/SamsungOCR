@@ -75,3 +75,41 @@ def test_header_filters_apply_to_list(tmp_path, monkeypatch):
     client = app_module.app.test_client()
     listed = client.get('/api/results' + query).get_json()
     assert [r['filename'] for r in listed] == ['8172.jpg', '7123.jpg']
+
+
+def test_pending_seal_filter_combines_review_states_and_preserves_details(tmp_path, monkeypatch):
+    db = Database(tmp_path / 'pending-seals.db')
+    db.initialize()
+    monkeypatch.setattr(app_module, 'database', db)
+    checks = [
+        ('unreliable.jpg', '匹配', False),
+        ('pending.jpg', '匹配待确认', False),
+        ('review.jpg', '需人工复核', False),
+        ('matched.jpg', '匹配', True),
+        ('partial.jpg', '部分匹配', False),
+        ('mismatch.jpg', '不匹配', True),
+        ('unrecognized.jpg', '未识别', False),
+        ('unexecuted.jpg', '未执行', False),
+    ]
+    ids = {}
+    for filename, status, reliable in checks:
+        ids[filename] = db.insert_result(filename=filename, stored_name=filename, preview_name='', task_id='', result={
+            'created_at': '2026-09-10T10:00:00', 'overall': '需人工复核',
+            'date_check': {'status': '匹配', 'reliable': False},
+            'seal_check': {'status': status, 'reliable': reliable, 'message': f'{filename} 的原始判断原因'}})
+    client = app_module.app.test_client()
+    query = {'seal_status': '待确认', 'date_status': '匹配待确认', 'import_date': '2026-09-10',
+             'page': 1, 'page_size': 2, 'include_status_counts': 1}
+    first = client.get('/api/results', query_string=query).get_json()
+    second = client.get('/api/results', query_string={**query, 'page': 2}).get_json()
+    assert first['total'] == second['total'] == first['status_counts'][''] == 3
+    assert {row['filename'] for row in first['items'] + second['items']} == {
+        'unreliable.jpg', 'pending.jpg', 'review.jpg'}
+    for filename, status, reliable in checks[:3]:
+        detail = client.get(f'/api/results/{ids[filename]}').get_json()
+        assert detail['seal_check'] == {'status': status, 'reliable': reliable,
+                                        'message': f'{filename} 的原始判断原因'}
+    # Existing narrower filters and the date filter retain their meaning.
+    assert len(client.get('/api/results', query_string={'seal_status': '匹配待确认'}).get_json()) == 2
+    assert len(client.get('/api/results', query_string={'seal_status': '需人工复核'}).get_json()) == 1
+    assert len(client.get('/api/results', query_string={'date_status': '匹配待确认'}).get_json()) == 8

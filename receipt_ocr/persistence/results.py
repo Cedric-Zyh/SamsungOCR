@@ -351,6 +351,10 @@ def _matches_filters(item: dict, filters: dict) -> bool:
         status = check.get('status') or '未识别'
         if status == '匹配' and not check.get('reliable'):
             status = '匹配待确认'
+        # Combine seal review states in the UI without rewriting saved evidence
+        # or changing the meaning of legacy, more specific filter values.
+        if key == 'seal' and wanted == '待确认' and status in {'匹配待确认', '需人工复核'}:
+            status = '待确认'
         if wanted and wanted != status:
             return False
     exact = {

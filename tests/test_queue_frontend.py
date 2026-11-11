@@ -83,7 +83,8 @@ assert.equal(w.dateReview('', '').draft, '');
 assert.equal(w.dateReview('2025-02-30', '').required, '');
 assert.equal(w.dateReview('2025-03-31', '2025-04-01').actual, '2025-04-01');
 assert.equal(w.checkStatus({seal_check:{status:'匹配',reliable:true}}, 'seal'), '匹配');
-assert.equal(w.checkStatus({seal_check:{status:'匹配',reliable:false}}, 'seal'), '匹配待确认');
+assert.equal(w.checkStatus({seal_check:{status:'匹配',reliable:false}}, 'seal'), '待确认');
+assert.equal(w.checkStatus({date_check:{status:'匹配',reliable:false}}, 'date'), '匹配待确认');
 assert.equal(w.checkStatus({}, 'seal'), '结果未加载');
 assert.equal(w.issues({date_check:{status:'匹配',reliable:true},seal_check:{status:'匹配',reliable:false}})[0].message, '客户印章比对匹配，但证据不足，仍需确认');
 '''

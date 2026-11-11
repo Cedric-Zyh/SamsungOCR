@@ -3,10 +3,10 @@ import {escapeHtml} from '../core/ui.mjs';
 import {normalizeReviewScope, reviewScopeKey, reviewScopeRequest} from './review_scope.mjs';
 
 export function createReviewQueue({
-  environment, ui, reviewState, api, services = createApiClients(api), ReceiptWorkbench, canLeaveReview, openReview, showReviewEmpty, showPage
+  environment, ui, reviewState, reviewNavigation, api, services = createApiClients(api), ReceiptWorkbench, canLeaveReview, openReview, showReviewEmpty
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
-  const {location, history, URLSearchParams, AbortController, document, window} = environment;
+  const {location, URLSearchParams, AbortController} = environment;
   const {$, $$, toast} = ui;
 
   function currentScope() {
@@ -117,7 +117,7 @@ export function createReviewQueue({
       result = await loadReviewQueue(false, {page:nextPage});
     }
     if (result && (reviewState.reviewIntent || 0) === intent && location.hash === originHash) {
-      showReviewEmpty(); history.replaceState(null, '', '#review'); renderReviewProgress();
+      showReviewEmpty(); reviewNavigation.empty(); renderReviewProgress();
     }
   }
 
@@ -130,9 +130,7 @@ export function createReviewQueue({
   async function startReviewScope(scope, {recordId} = {}) {
     const nextScope = normalizeReviewScope(scope);
     if (!canLeaveReview()) return false;
-    if (document?.body.dataset.activePage !== 'review') {
-      reviewState.reviewOrigin = {hash: /^#review/.test(location.hash) ? '#progress' : location.hash || '#progress', scroll:window?.scrollY || 0};
-    }
+    const returnContext = reviewNavigation.capture({origin: location.hash});
     reviewState.reviewIntent = (reviewState.reviewIntent || 0) + 1;
     reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
     reviewState.reviewSessionId = (reviewState.reviewSessionId || 0) + 1;
@@ -144,9 +142,7 @@ export function createReviewQueue({
     reviewState.reviewTask = nextScope.filters.task_id || '';
     reviewState.reviewDay = nextScope.filters.import_date || '';
     reviewState.current = null; showReviewEmpty({loading: true});
-    if (document?.body.dataset.activePage === 'review' || /^#review/.test(location.hash)) history.replaceState(null, '', '#review');
-    else (history.pushState || history.replaceState).call(history, null, '', '#review');
-    showPage?.('review'); renderReviewProgress();
+    reviewNavigation.enter({}, returnContext); renderReviewProgress();
     const intent = reviewState.reviewIntent;
     try {
       const result = await loadReviewQueue(false);

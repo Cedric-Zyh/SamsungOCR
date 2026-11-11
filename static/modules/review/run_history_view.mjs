@@ -22,6 +22,36 @@ export const runTime = value => {
 const count = value => Math.max(0, Math.floor(Number(value) || 0));
 const inputName = call => filenameParts(String(call.input_name || '').replaceAll('\\', '/')).name || '输入图片未记录';
 
+function callProvenance(data, calls) {
+  const runs = data.timeline?.version === 1 && Array.isArray(data.timeline.runs) ? data.timeline.runs : [];
+  const retained = data.incremental === true || calls.some(call => call._run?.retained === true)
+    || runs.some(run => run.kind === 'retained');
+  if (!retained) return {retained:false, note:''};
+  const memberships = new Map();
+  for (const run of runs) {
+    if (!['current','retained'].includes(run.kind)) continue;
+    for (const span of Array.isArray(run.spans) ? run.spans : []) {
+      if (span?.call_id == null) continue;
+      const id = String(span.call_id);
+      if (!memberships.has(id)) memberships.set(id,new Set());
+      memberships.get(id).add(run.kind);
+    }
+  }
+  const kinds = calls.map(call => {
+    if (call._run?.retained === true) return 'retained';
+    if (call._run?.retained === false) return 'current';
+    const membership = call.id == null ? null : memberships.get(String(call.id));
+    return membership?.size === 1 ? [...membership][0] : null;
+  });
+  // Missing or ambiguous legacy provenance must not turn into an invented split.
+  const complete = data.available === true && calls.length > 0 && calls.length === count(data.summary?.total)
+    && kinds.every(Boolean);
+  const previous = kinds.filter(kind => kind === 'retained').length;
+  return {retained:true, note:complete
+    ? `本次 ${calls.length - previous} 次 · 此前保留 ${previous} 次；全流程历时仅计算本次处理。`
+    : '包含此前保留的识别调用；全流程历时仅计算本次处理。'};
+}
+
 export function runTiming(data, context) {
   const total = validSeconds(data.processing_seconds);
   let initialization = validSeconds(data.model_initialization_seconds);
@@ -135,8 +165,10 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
   const selected = openKeys || new Set();
   const displayCount = name => available ? count(summary[name]) : '—';
   const status = STATUS[data.status] || (available ? '已记录' : '未记录');
-  const heading = `<div class="review-runs-summary"><div class="review-runs-stat"><span>实际调用</span><strong>${displayCount('total')}</strong><span>次</span></div><div class="review-runs-stat"><span>成功</span><strong>${displayCount('succeeded')}</strong><span>次</span></div><div class="review-runs-stat" data-state="${available && count(summary.failed) ? 'failed' : 'zero'}"><span>失败</span><strong>${displayCount('failed')}</strong><span>次</span></div></div>
-    <div class="review-runs-toolbar"><div class="review-runs-toolbar-label"><span>${data.incremental ? '当前结果采用的识别调用' : '仅最近一次处理'}</span><span class="review-calls-status" data-state="${escapeHtml(data.status || 'unknown')}">${status}</span></div><button type="button" class="text-button" data-runs-refresh${loading ? ' disabled' : ''}>${loading ? '正在读取…' : '刷新'}</button></div>
+  const provenance = callProvenance(data,calls);
+  const heading = `<div class="review-runs-summary"><div class="review-runs-stat"><span>${provenance.retained ? '记录调用' : '实际调用'}</span><strong>${displayCount('total')}</strong><span>次</span></div><div class="review-runs-stat"><span>成功</span><strong>${displayCount('succeeded')}</strong><span>次</span></div><div class="review-runs-stat" data-state="${available && count(summary.failed) ? 'failed' : 'zero'}"><span>失败</span><strong>${displayCount('failed')}</strong><span>次</span></div></div>
+    <div class="review-runs-toolbar"><div class="review-runs-toolbar-label"><span>${provenance.retained ? '当前结果采用的识别调用' : '仅最近一次处理'}</span><span class="review-calls-status" data-state="${escapeHtml(data.status || 'unknown')}">${status}</span></div><button type="button" class="text-button" data-runs-refresh${loading ? ' disabled' : ''}>${loading ? '正在读取…' : '刷新'}</button></div>
+    ${provenance.note ? `<p class="review-call-note">${escapeHtml(provenance.note)}</p>` : ''}
     ${error ? `<p class="review-call-error" role="alert">${escapeHtml(error)}</p>` : ''}`;
   const remoteTimings = remoteTimingDetails(data.remote_timings);
   const flow = timelineSummary(data);
@@ -146,7 +178,7 @@ export function renderRunHistory(data, {openKeys, imageKeys = new Set(), explana
   if (!available) return `${heading}${total}${timeline}${detailStart}${remoteTimings}<div class="review-calls-empty" role="status"><strong>本次识别调用明细未记录</strong><p>${escapeHtml(data.note || '此记录尚未采集逐次识别信息，重新识别后可查看。')}</p></div></div></details>`;
   const timing = runTiming(data, timingContext);
   return `${heading}${total}${timeline}${detailStart}<div class="review-call-times"><span title="本机处理记录，异步流程不使用相加值代替全流程历时">处理用时 <strong>${escapeHtml(runDuration(hasAsyncTiming(data) ? null : timing.recognition))}</strong></span></div>
-    <div class="review-model-initialization"><span>${data.incremental ? '保留记录的模型初始化' : '模型初始化'}</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : data.incremental ? '归属此前保留的识别流程' : '单独展示，已计入全流程历时'}</small></div>
+    <div class="review-model-initialization"><span>${data.incremental ? '本次模型初始化' : '模型初始化'}</span><strong>${escapeHtml(runDuration(timing.initialization))}</strong><small>${timing.initialization == null ? '此记录未单独采集，重新识别后可查看' : data.incremental && timing.initialization === 0 ? '本次处理无需初始化模型' : '单独展示，已计入全流程历时'}</small></div>
     ${remoteTimings}
     ${data.note ? `<p class="review-call-note">${escapeHtml(data.note)}</p>` : ''}
     <div class="review-call-groups">${sorted.length ? sorted.map(group => {

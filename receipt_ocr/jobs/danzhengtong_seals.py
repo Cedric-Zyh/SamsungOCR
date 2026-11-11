@@ -1,14 +1,17 @@
 """Persist and advance stamp subrequests independently of the page request."""
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 import hashlib
 import json
 import sqlite3
 from time import perf_counter
 
-from .danzhengtong_store import later, settings_identity, remote_state, aggregate_remote
+from .danzhengtong_store import later, settings_identity
+from ..domain.remote_tasks import (
+    remote_state, aggregate_remote, uncertain_submission, begin_upload,
+    begin_submission, accept_submission, fail_submission, finish_query,
+)
 from ..danzhengtong_errors import safe_error_text
 from ..persistence.database_clock import now_iso
 from ..persistence.recognition_calls import trace_timestamp
@@ -47,12 +50,7 @@ def skip_unsubmitted_shippers(state, source=None):
             child['status'] = 'waiting'
         else:
             call = child.get('call') or {}
-            phase = (call.get('transport') or {}).get('phase', '')
-            uncertain = (child.get('submission_unknown') or child.get('submission_started')
-                         or child.get('_submission_started') or child.get('submitted_at')
-                         or child.get('submission') or call.get('recognition_invoked')
-                         or call.get('submission_unknown') or phase in {'submitting', 'submit_finished'})
-            if uncertain:
+            if uncertain_submission(child, call):
                 child.update(status='unknown', error=child.get('error') or
                              '历史发货单位章提交状态待确认，保留原请求，不重复提交')
             else:
@@ -143,7 +141,7 @@ class SealRequests:
                               'started_at': trace_timestamp(), 'finished_at': '', 'complete': True,
                               '_unmeasured_phases': []}}
         child['call'] = call
-        child['status'] = 'uploading'
+        child.update(begin_upload())
         if not self._save_seals(task, state):
             return True
         phase, started_at, started = 'upload', trace_timestamp(), perf_counter()
@@ -151,7 +149,7 @@ class SealRequests:
             uploaded = client.upload_file(path)
             call = record_transport_phase(call, child, phase, perf_counter() - started, trace_timestamp(),
                                           started_at=started_at)
-            child.update(file_id=uploaded['fileId'], status='submitting', call=call)
+            child.update(begin_submission(), file_id=uploaded['fileId'], call=call)
             call['transport']['phase'] = 'submitting'
             # Mark the individual POST uncertain before it can reach the
             # provider. Recovery must never repeat it without an accepted UUID.
@@ -163,8 +161,8 @@ class SealRequests:
             call = record_transport_phase(call, child, phase, perf_counter() - started, trace_timestamp(),
                                           started_at=started_at)
             call.update(recognition_invoked=True, seconds=call['transport']['submit_seconds'])
-            child.update(req_uuid=body['data']['reqUuid'], submission=body, submitted_at=now_iso(),
-                         status='waiting', next_query_at=later(2), call=call)
+            child.update(accept_submission(next_query_at=later(2)), req_uuid=body['data']['reqUuid'],
+                         submission=body, submitted_at=now_iso(), call=call)
             # Persist accepted UUID before querying or considering another
             # image; only this database write is repeated on transient locks.
             while not self._stop.is_set():
@@ -177,9 +175,8 @@ class SealRequests:
         except Exception as exc:
             call = record_transport_phase(call, child, phase, perf_counter() - started, trace_timestamp(),
                                           started_at=started_at, terminal=True, status='failed')
-            unknown = phase == 'submit' and not getattr(exc, 'provider_rejected', False)
-            child.update(status='unknown' if unknown else 'failed', call=call,
-                         error=safe_error_text(exc, client.settings))
+            child.update(fail_submission(safe_error_text(exc, client.settings), submitted=phase == 'submit',
+                                         rejected=getattr(exc, 'provider_rejected', False)), call=call)
             self._finish_seal_step(task, state)
             return True
 
@@ -223,11 +220,10 @@ class SealRequests:
                 started_at=started_at, status='failed')
             measured['seconds'] = round(call.get('seconds', 0) + measured['transport']['spans'][-1]['seconds'], 4)
             child.update(error=safe_error_text(exc, client.settings), call=measured)
-        elapsed = (datetime.now().astimezone() - datetime.fromisoformat(child['submitted_at'])).total_seconds()
-        delay = 2 if elapsed < 60 else 30 if elapsed < 600 else 120
-        if child.get('error'):
-            delay = max(30, delay)
-        child.update(last_query_at=now_iso(), query_count=child.get('query_count', 0) + 1,
-                     next_query_at=later(delay) if child['status'] == 'waiting' else '')
+        child.update(finish_query(submitted_at=child['submitted_at'], observed_at=now_iso(),
+                                  completed=child['status'] == 'completed', error=child.get('error', '')),
+                     query_count=child.get('query_count', 0) + 1)
+        if not child['error']:
+            child.pop('error')
         self._finish_seal_step(task, state, last_query_at=now_iso(), query_count=task['query_count'] + 1)
         return True

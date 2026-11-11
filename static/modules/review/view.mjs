@@ -6,18 +6,16 @@ import {syncSampleDate} from './sample_annotations.mjs';
 export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor,
   renderProductTable, setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation,
   applyReviewMode, focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-  renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard}) {
+  renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard,
+  returnPresentation}) {
   const {$, $$} = ui;
   return function renderReview(item, id, mode) {
     $('#review-empty').classList.add('hidden'); $('#review-modal').classList.remove('hidden');
     $('#review-dialog').dataset.reviewMode = mode;
     $('#review-dialog-title').textContent = reviewState.sampleView ? '查看样单' : mode === 'view' ? '查看回单' : '人工复核';
-    const returnsToStatistics = reviewState.sampleView && $('#sample-statistics-dialog')?.open
-      && reviewState.reviewOrigin?.hash !== '#seal-center';
-    $('#review-dialog .review-dialog-close span').textContent = returnsToStatistics ? '返回统计' : '关闭';
-    $('#review-dialog .review-dialog-close').setAttribute('aria-label', returnsToStatistics ? '关闭查看样单，返回统计明细' : reviewState.reviewOrigin?.hash === '#seal-center'
-      ? `关闭查看${reviewState.sampleView ? '样单' : '回单'}，返回印章中心`
-      : reviewState.sampleView ? '关闭查看样单，返回样单中心' : '关闭人工复核，返回回单管理');
+    const returning = returnPresentation();
+    $('#review-dialog .review-dialog-close span').textContent = returning.text;
+    $('#review-dialog .review-dialog-close').setAttribute('aria-label', returning.label);
     $('#toggle-review-queue').classList.toggle('hidden', mode === 'view');
     $('#review-session-progress').classList.toggle('hidden', mode === 'view');
     $('.review-workspace').classList.toggle('view-mode', mode === 'view');

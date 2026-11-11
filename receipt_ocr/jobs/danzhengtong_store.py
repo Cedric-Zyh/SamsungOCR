@@ -9,6 +9,8 @@ from ..persistence.database_clock import now_iso
 
 from ..persistence.job_views import PENDING, LABELS, PUBLIC_KEYS, PUBLIC_COLUMNS, remote_public
 from ..persistence.result_versions import result_revision
+from ..domain.remote_tasks import remote_state, aggregate_remote, branch_due, next_remote_operation
+from ..domain.remote_runs import LocalAttempt, RemoteRunLink
 
 
 def later(seconds):
@@ -30,172 +32,25 @@ def settings_identity(settings):
             'account': hashlib.sha256(settings.app_id.encode()).hexdigest()}
 
 
-def branch_due(value, timestamp=None):
-    """Missing legacy schedules are due, never an instruction to submit again."""
-    if not value:
-        return True
-    try:
-        return datetime.fromisoformat(value) <= datetime.fromisoformat(timestamp or now_iso())
-    except (TypeError, ValueError):
-        return True
+def local_attachment(job, *, retaining_local=False, remote_only=False):
+    """Queued full runs attach to the upcoming claim, remote-only runs do not."""
+    options = json.loads(job['payload_json'])
+    upcoming = (job['status'] == 'queued' and not retaining_local and not remote_only
+                and options.get('_execution_scope') != 'danzhengtong')
+    return LocalAttempt(job['id'], int(job['attempt']) + int(upcoming))
 
 
-def _uncertain_submission(item, call):
-    return bool(item.get('submission_unknown') or item.get('submission_started') or item.get('_submission_started')
-                or item.get('submitted_at') or item.get('submission')
-                or call.get('recognition_invoked') or call.get('submission_unknown')
-                or (call.get('transport') or {}).get('phase') in {'submitting', 'submit_finished'})
+def retained_remote(remote, state):
+    return (remote['status'] in {'applied', 'conflict', 'failed', 'unknown', 'cancelled'}
+            or bool((state.get('retained_remote_result') or {}).get('finished_at')))
 
 
-def remote_state(task, *, recover=False):
-    """Upgrade a durable continuation without inventing another recognition POST."""
-    state = deepcopy(json.loads(task.get('seal_requests_json') or '{}'))
-    legacy_page = not state
-    if legacy_page:
-        # Empty JSON is the old single-scene protocol, including its seal text.
-        state = {'prepared': True, 'requests': [], 'page_required': True, 'seal_required': False}
-    state.setdefault('seal_required', True)
-    state.setdefault('prepared', False)
-    state.setdefault('requests', [])
-    state.setdefault('page_required', True)
-    page = state.get('page')
-    call = json.loads(task.get('recognition_call_json') or '{}')
-    if not isinstance(page, dict):
-        phase = (call.get('transport') or {}).get('phase', '')
-        if not state['page_required']:
-            status = 'skipped'
-        elif json.loads(task.get('result_json') or '{}'):
-            status = 'completed'
-        elif task.get('req_uuid'):
-            status = 'waiting'
-        elif task.get('status') == 'failed' and (legacy_page or call):
-            status = 'failed'
-        elif ((legacy_page and task.get('status') in {'unknown', 'submitting'}) or task.get('submitted_at')
-              or json.loads(task.get('submission_json') or '{}') or phase in {'submitting', 'submit_finished'}):
-            status = 'unknown'
-        else:
-            status = 'queued'
-        page = {'status': status, 'error': task.get('error_message', '') if status in {'failed', 'unknown'} else '',
-                'next_query_at': task.get('next_query_at', '') if status == 'waiting' else ''}
-        state['page'] = page
-    # A persisted UUID/result takes precedence over stale queued/submitting markers.
-    if task.get('req_uuid') and page.get('status') not in {'completed', 'skipped'}:
-        page['status'] = 'completed' if json.loads(task.get('result_json') or '{}') else 'waiting'
-    elif (page.get('status') in {'queued', 'uploading', 'waiting'} and not task.get('req_uuid')
-          and (_uncertain_submission(task, call) or page.get('status') == 'waiting')):
-        page.update(status='unknown', error=page.get('error') or '整页提交状态待确认，保留原请求，不重复提交')
-    if recover and page.get('status') == 'uploading':
-        page['status'] = 'queued'  # The recognition POST has not started.
-    if recover and page.get('status') == 'submitting' and not task.get('req_uuid'):
-        page.update(status='unknown', error='整页提交期间服务中断，受理状态待确认；请勿重复提交')
-    page.setdefault('next_query_at', '')
-    page.setdefault('error', '')
-    for child in state['requests']:
-        if child.get('req_uuid') and child.get('status') not in {'completed', 'received', 'skipped'}:
-            child['status'] = 'waiting'
-        elif (not child.get('req_uuid') and child.get('status') in {'queued', 'uploading', 'waiting'}
-              and (_uncertain_submission(child, child.get('call') or {}) or child.get('status') == 'waiting')):
-            child.update(status='unknown', error=child.get('error') or '印章提交状态待确认，保留原请求，不重复提交')
-        if recover and child.get('status') == 'uploading':
-            child['status'] = 'queued'
-        if recover and child.get('status') == 'submitting' and not child.get('req_uuid'):
-            child.update(status='unknown', error='印章提交期间服务中断，受理状态待确认；请勿重复提交')
-        child.setdefault('next_query_at', task.get('next_query_at', '') if child.get('status') == 'waiting' else '')
-    state['version'] = 2
-    return state
-
-
-def aggregate_remote(state):
-    """A parent's status/deadline summarizes independent branches, never gates them."""
-    page = state['page']
-    children = state['requests']
-    prepare_pending = state.get('seal_required') and not state['prepared']
-    branches = ([page] if state.get('page_required') else []) + children
-    queued = prepare_pending or any(item.get('status') in {'queued', 'uploading', 'submitting'} for item in branches)
-    waiting = [item for item in branches if item.get('status') == 'waiting']
-    state['complete'] = not queued and not waiting
-    success = any(item.get('status') in {'completed', 'received'} for item in branches)
-    unknown = any(item.get('status') == 'unknown' for item in branches)
-    failure = any(item.get('status') == 'failed' for item in branches)
-    status = ('queued' if queued else 'waiting' if waiting else
-              'unknown' if unknown and not success else
-              'failed' if failure and not success and state.get('page_required') else 'received')
-    due = min((item.get('next_query_at') or '' for item in waiting), default='')
-    errors = ([f"整页：{page['error']}"] if page.get('error') else [])
-    if state.get('preparation_error'):
-        errors.append('印章准备：' + state['preparation_error'])
-    errors.extend(f"印章{item.get('index', 0) + 1}：{item['error']}" for item in children if item.get('error'))
-    return {'status': status, 'next_query_at': due, 'error_message': '；'.join(errors)[:1200]}
-
-
-def next_remote_operation(task, state, control, *, timestamp=None, prefer_submit=False):
-    """Choose one ready operation while retaining the parent lease as sole writer."""
-    manual = bool(task.get('manual_query'))
-    queries = []
-    page = state['page']
-    if (state.get('page_required') and page.get('status') == 'waiting' and task.get('req_uuid')
-            and (manual or branch_due(page.get('next_query_at'), timestamp))):
-        queries.append((page.get('last_query_at') or '', 'page_query', None))
-    for index, child in enumerate(state['requests']):
-        if (child.get('status') == 'waiting' and child.get('req_uuid')
-                and (manual or branch_due(child.get('next_query_at'), timestamp))):
-            queries.append((child.get('last_query_at') or '', 'seal_query', index))
-    queries.sort(key=lambda item: item[0])
-    query = queries[0][1:] if queries and (manual or control['auto_query']) else None
-    submit = None
-    if not control['submit_paused'] and not manual:
-        if state.get('page_required') and page.get('status') == 'queued':
-            submit = ('page_submit', None)
-        elif state.get('seal_required') and not state['prepared']:
-            submit = ('seal_prepare', None)
-        else:
-            submit = next((('seal_submit', index) for index, child in enumerate(state['requests'])
-                           if child.get('status') == 'queued'), None)
-    return (submit or query) if prefer_submit else (query or submit)
 
 
 class DanzhengtongOperations:
     def initialize_danzhengtong(self, con):
-        con.executescript('''
-            CREATE TABLE IF NOT EXISTS danzhengtong_jobs (
-                id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES recognition_jobs(id) ON DELETE CASCADE,
-                active INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'queued',
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                submitted_at TEXT NOT NULL DEFAULT '', last_query_at TEXT NOT NULL DEFAULT '',
-                next_query_at TEXT NOT NULL DEFAULT '', lease_until TEXT NOT NULL DEFAULT '',
-                file_id TEXT NOT NULL DEFAULT '', req_uuid TEXT NOT NULL DEFAULT '',
-                source_hash TEXT NOT NULL DEFAULT '', environment_json TEXT NOT NULL DEFAULT '{}',
-                plan_json TEXT NOT NULL DEFAULT '{}',
-                submission_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}',
-                query_count INTEGER NOT NULL DEFAULT 0, error_message TEXT NOT NULL DEFAULT '',
-                result_id INTEGER, source_revision TEXT NOT NULL DEFAULT '',
-                manual_query INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_dzt_active ON danzhengtong_jobs(job_id) WHERE active=1;
-            CREATE INDEX IF NOT EXISTS idx_dzt_due ON danzhengtong_jobs(active,status,next_query_at);
-            CREATE TABLE IF NOT EXISTS danzhengtong_control (
-                id INTEGER PRIMARY KEY CHECK(id=1), submit_paused INTEGER NOT NULL DEFAULT 0,
-                auto_query INTEGER NOT NULL DEFAULT 1
-            );
-            INSERT OR IGNORE INTO danzhengtong_control(id) VALUES(1);
-            CREATE TRIGGER IF NOT EXISTS cancel_dzt_deleted_result AFTER DELETE ON results
-            BEGIN UPDATE danzhengtong_jobs SET active=0,status='cancelled',lease_until=''
-                WHERE result_id=OLD.id; END;
-            CREATE TRIGGER IF NOT EXISTS cancel_dzt_soft_deleted_result AFTER UPDATE OF deleted_at ON results
-            WHEN NEW.deleted_at<>''
-            BEGIN UPDATE danzhengtong_jobs SET active=0,status='cancelled',lease_until=''
-                WHERE result_id=NEW.id; END;
-        ''')
-        columns = {row['name'] for row in con.execute('PRAGMA table_info(danzhengtong_jobs)')}
-        if 'plan_json' not in columns:
-            con.execute("ALTER TABLE danzhengtong_jobs ADD COLUMN plan_json TEXT NOT NULL DEFAULT '{}'")
-        if 'recognition_call_json' not in columns:
-            con.execute("ALTER TABLE danzhengtong_jobs ADD COLUMN recognition_call_json TEXT NOT NULL DEFAULT '{}'")
-        if 'seal_requests_json' not in columns:
-            # An empty object identifies a legacy, single-scene continuation.
-            con.execute("ALTER TABLE danzhengtong_jobs ADD COLUMN seal_requests_json TEXT NOT NULL DEFAULT '{}'")
-        from .danzhengtong_schedule import initialize_schedule
-        initialize_schedule(con)
+        from .danzhengtong_schema import initialize_remote_jobs
+        initialize_remote_jobs(con)
 
     remote_public = staticmethod(remote_public)
 
@@ -211,7 +66,7 @@ class DanzhengtongOperations:
             item['danzhengtong'] = rows.get(item['id'])
         return items
 
-    def ensure_remote(self, con, job, *, resubmit=False, plan=None):
+    def ensure_remote(self, con, job, *, resubmit=False, plan=None, independent=False):
         existing = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1', (job['id'],)).fetchone()
         if existing and not resubmit:
             return existing['id']
@@ -220,8 +75,9 @@ class DanzhengtongOperations:
         if resubmit:
             con.execute('UPDATE danzhengtong_jobs SET active=0 WHERE job_id=?', (job['id'],))
         timestamp, remote_id = now_iso(), uuid.uuid4().hex
+        saved = con.execute('SELECT payload_json FROM recognition_jobs WHERE id=?', (job['id'],)).fetchone()
+        job = {**dict(job), 'payload_json': saved['payload_json']}
         if plan is None:
-            saved = con.execute('SELECT payload_json FROM recognition_jobs WHERE id=?', (job['id'],)).fetchone()
             plan = scope_plan(json.loads(saved['payload_json']))
         result_id = job['result_id'] or job['target_result_id']
         revision = ''
@@ -239,6 +95,20 @@ class DanzhengtongOperations:
                     # upload the same remote request again. Transfer its durable
                     # continuation, including a POST whose reply is still in flight.
                     state = remote_state(dict(previous))
+                    from ..persistence.async_recognition_calls import combined_remote_call
+                    recorded = combined_remote_call(dict(previous), job['filename']) or {}
+                    timing = recorded.get('transport') or {}
+                    retained = state.get('retained_remote_result') or {}
+                    completed = (timing.get('applied_at') if previous['status'] in {'applied', 'conflict'} else
+                                 retained.get('finished_at') if retained.get('job_id') == previous['job_id'] else None)
+                    if completed:
+                        # Applying this same result to another local retry will
+                        # update applied_at; preserve its original completion.
+                        state['retained_remote_result'] = {'job_id': job['id'], 'finished_at': completed}
+                    link = RemoteRunLink.from_json(state.get('run_link'))
+                    if link is not None:
+                        state['run_link'] = link.attach(local_attachment(job),
+                            completed=retained_remote(previous, state)).to_json()
                     aggregate = aggregate_remote(state)
                     con.execute('''UPDATE danzhengtong_jobs SET job_id=?,source_revision=?,status=?,
                         next_query_at=?,seal_requests_json=? WHERE id=?''',
@@ -250,12 +120,39 @@ class DanzhengtongOperations:
         seals = {'version': 2, 'prepared': not seal_required, 'requests': [],
                  'seal_required': seal_required, 'page_required': page_required,
                  'page': {'status': 'queued' if page_required else 'skipped', 'error': '', 'next_query_at': ''}}
+        retains_local = resubmit or independent and job['status'] in {'succeeded', 'failed'}
+        seals['run_link'] = RemoteRunLink.create(remote_id,
+            local_attachment(job, retaining_local=retains_local,
+                             remote_only=independent and job['status'] == 'queued' and not job['start_requested']),
+            retains_local=retains_local,
+            replaces_remote_id=existing['id'] if resubmit and existing else '').to_json()
+        if retains_local:
+            # This is a new provider run reusing the job's local evidence. Keep
+            # its provenance on the remote attempt, not on the reusable job.
+            seals['retained_regular_job_id'] = job['id']
+            seals['retained_regular_attempt'] = job['attempt']
         con.execute('''INSERT INTO danzhengtong_jobs
             (id,job_id,created_at,updated_at,result_id,source_revision,plan_json,seal_requests_json) VALUES(?,?,?,?,?,?,?,?)''',
             (remote_id, job['id'], timestamp, timestamp, result_id, revision, json.dumps(plan, ensure_ascii=False),
              json.dumps(seals, ensure_ascii=False)))
         self._log(con, job['id'], job['task_id'], 'dzt_queued', '单证通已加入提交队列', status='queued')
         return remote_id
+
+    def bind_remote_run(self, con, job, attempt):
+        """Attach a local retry without calling or resubmitting its remote lane."""
+        remote = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                             (job['id'],)).fetchone()
+        if remote is None:
+            return
+        state = json.loads(remote['seal_requests_json'] or '{}')
+        link = RemoteRunLink.from_json(state.get('run_link'))
+        if link is None:
+            return  # Legacy ownership remains conservative; do not invent it.
+        attached = link.attach(LocalAttempt(job['id'], attempt), completed=retained_remote(remote, state))
+        if attached != link:
+            state['run_link'] = attached.to_json()
+            con.execute('UPDATE danzhengtong_jobs SET seal_requests_json=? WHERE id=?',
+                        (json.dumps(state, ensure_ascii=False), remote['id']))
 
     def remote_control(self, changes=None):
         with self.database.connect() as con:
@@ -300,7 +197,7 @@ class DanzhengtongOperations:
                     payload['_independent_dzt'] = True
                     con.execute('UPDATE recognition_jobs SET payload_json=? WHERE id=?',
                                 (json.dumps(payload, ensure_ascii=False), job['id']))
-                    self.ensure_remote(con, job, resubmit=action == 'resubmit')
+                    self.ensure_remote(con, job, resubmit=action == 'resubmit', independent=True)
                     if job['status'] == 'queued' and not job['start_requested']:
                         payload['_execution_scope'] = 'danzhengtong'
                         con.execute('UPDATE recognition_jobs SET payload_json=?,start_requested=1 WHERE id=?',
@@ -393,12 +290,26 @@ class DanzhengtongOperations:
         if set(changes) - allowed:
             raise ValueError('无效的单证通任务属性')
         changes['updated_at'] = now_iso()
+        assignments, values = [], []
+        for key, value in changes.items():
+            if key == 'seal_requests_json':
+                # A local retry may attach this accepted remote request while
+                # its network operation is in flight. The worker owns branch
+                # progress, but must not overwrite the newer run association.
+                assignments.append("""seal_requests_json=CASE
+                    WHEN json_type(seal_requests_json,'$.run_link')='object'
+                    THEN json_set(?,'$.run_link',json_extract(seal_requests_json,'$.run_link'))
+                    ELSE ? END""")
+                values.extend((value, value))
+            else:
+                assignments.append(key + '=?')
+                values.append(value)
         with self.database.connect() as con:
-            values = list(changes.values()) + [claimed['id'], claimed['lease_until']]
-            updated = con.execute(f"UPDATE danzhengtong_jobs SET {','.join(key+'=?' for key in changes)} WHERE id=? AND lease_until=? AND active=1",
-                                  values).rowcount == 1
+            updated = con.execute(f"UPDATE danzhengtong_jobs SET {','.join(assignments)} WHERE id=? AND lease_until=? AND active=1",
+                                  [*values, claimed['id'], claimed['lease_until']]).rowcount == 1
             if updated:
-                self.database.sync_remote_recognition_calls(con, claimed['job_id'])
+                owner = con.execute('SELECT job_id FROM danzhengtong_jobs WHERE id=?', (claimed['id'],)).fetchone()
+                self.database.sync_remote_recognition_calls(con, owner['job_id'])
             return updated
 
     def save_branch(self, con, job, result_id, snapshot, result):

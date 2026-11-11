@@ -3,12 +3,12 @@ import {localToday} from '../core/ui.mjs';
 import {confirmInline} from '../core/inline_confirm.mjs';
 
 export function createImports({
-  environment, ui, importsState, recordsState, progressState = {}, api, services = createApiClients(api), ReceiptImport, readRecognitionPlan, readAcceptancePolicy,
+  environment, ui, importsState, recordsState, api, services = createApiClients(api), ReceiptImport, readRecognitionPlan, readAcceptancePolicy,
   usesRemotePlan, updateRecognitionPlan, loadDailyResults, showQueuedRetry, closeModal,
-  syncStartRecognition = () => {}, flushSettings = async () => {}, openManagedRecords = null
+  syncStartRecognition = () => {}, flushSettings = async () => {}, onTaskCreated = () => {}
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
-  const {document, window, location, localStorage, FormData} = environment;
+  const {document, window, FormData} = environment;
   const {$, $$, toast} = ui;
   const fileInput = $('#file-input'), folderInput = $('#folder-input'), dropZone = $('#drop-zone');
 
@@ -72,16 +72,9 @@ export function createImports({
         }
         importsState.taskId = task.id;
         importsState.taskImportDate = (task.created_at || '').slice(0, 10) || localToday();
-        progressState.workFilters = null;
-        progressState.workFilter = 'processing';
-        progressState.workVisibleLimit = 50;
-        progressState.dailyReady = false;
         $('#import-dialog').close();
-        $('#progress-date').value = importsState.taskImportDate;
-        if (openManagedRecords) openManagedRecords(importsState.taskImportDate);
-        else location.hash = 'progress';
+        onTaskCreated({taskId: task.id, day: importsState.taskImportDate});
         setBatchStep(2);
-        try { localStorage.setItem('receipt-progress-date', importsState.taskImportDate); } catch (_) {}
         await runPool(group.map((item, index) => async () => {
           const job = task.items[index];
           importsState.uploadingJobs.add(job.id);

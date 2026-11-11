@@ -7,7 +7,7 @@ from ..application.requests import StageRequest
 from ..imaging.detection import detect_seal_regions
 from ..providers.catalog import backend_label
 from ..domain.parsing import compare_seal_text
-from ..domain.parsing.parsing_seals import compare_seal_text_strict
+from ..domain.check_comparison import compare_machine_seals
 from ..domain.documents.layout import (
     _exclude_printed_footer_rows_from_seal_context,
     _find_signature_requirement_row,
@@ -228,8 +228,8 @@ def recognize(context: DocumentContext, request: StageRequest, recognize_seals) 
             # type hide a conflicting company-name character from the same
             # seal.  Exact text still wins; otherwise any wrong/extra/reordered
             # character takes precedence over an omission-only fragment.
-            seal_check = compare_seal_text_strict(
-                requirement, seal_texts, mismatch_over_partial=True
+            seal_check = compare_machine_seals(
+                requirement, seal_texts, local=True
             )
             if kind == "receipt":
                 seal_check = _apply_code_stamp_business_id(

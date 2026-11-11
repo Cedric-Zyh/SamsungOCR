@@ -338,6 +338,218 @@ def test_incremental_wall_range_excludes_retained_run_and_preserves_its_provenan
     assert '_run' not in original['calls'][0] or 'retained' not in original['calls'][0]['_run']
 
 
+def _save_remote_timeline(runtime, job_id, *, offset=86400):
+    call = timeline_remote()
+    for key in ('started_at', 'finished_at', 'result_received_at', 'applied_at'):
+        call['transport'][key] = (datetime.fromisoformat(call['transport'][key])
+                                  + timedelta(seconds=offset)).isoformat()
+    with runtime.store.database.connect() as con:
+        row = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1', (job_id,)).fetchone()
+        state = json.loads(row['seal_requests_json'])
+        state.update(prepared=True, page_required=True, seal_required=False, requests=[],
+                     page={'status': 'completed'})
+        con.execute('''UPDATE danzhengtong_jobs SET status='applied',req_uuid='saved-request',
+            recognition_call_json=?,seal_requests_json=? WHERE id=?''',
+            (json.dumps(call), json.dumps(state), row['id']))
+
+
+def _save_local_timeline(runtime, job, *, offset=0):
+    snapshot = timeline_local()
+    for key in ('started_at', 'finished_at'):
+        snapshot[key] = (datetime.fromisoformat(snapshot[key]) + timedelta(seconds=offset)).isoformat()
+    snapshot['calls'][0].update(run_id='local-run', started_at=snapshot['started_at'],
+                                finished_at=snapshot['finished_at'])
+    with runtime.store.database.connect() as con:
+        con.execute('UPDATE latest_recognition_calls SET snapshot_json=?,started_at=? WHERE filename=?',
+                    (json.dumps(snapshot), snapshot['started_at'], job['filename']))
+        con.execute('UPDATE recognition_jobs SET started_at=?,finished_at=? WHERE id=?',
+                    (snapshot['started_at'], snapshot['finished_at'], job['id']))
+    return snapshot
+
+
+def test_remote_resubmit_separates_saved_local_run_and_repairs_legacy_combined_trace(runtime):
+    job_id = start(runtime, mixed=True)
+    job = finish_regular(runtime)
+    local = _save_local_timeline(runtime, job)
+    runtime.store.remote_action([job_id], 'resubmit')
+    with runtime.store.database.connect() as con:
+        state = json.loads(con.execute('SELECT seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                                       (job_id,)).fetchone()[0])
+    assert state['retained_regular_job_id'] == job_id
+    assert state['retained_regular_attempt'] == job['attempt']
+    _save_remote_timeline(runtime, job_id)
+    # Reproduce the pre-fix saved state: old local calls and tomorrow's remote
+    # attempt were already persisted as one non-incremental 24-hour run.
+    with runtime.store.database.connect() as con:
+        remote = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1', (job_id,)).fetchone()
+        state = json.loads(remote['seal_requests_json'])
+        state.pop('retained_regular_job_id')
+        state.pop('retained_regular_attempt')
+        state.pop('run_link', None)  # Recreate a save from before explicit run ownership.
+        con.execute('UPDATE danzhengtong_jobs SET seal_requests_json=? WHERE id=?',
+                    (json.dumps(state), remote['id']))
+        polluted = merge_remote_snapshot(local, remote_call(dict(remote), job['filename']))
+        assert polluted['processing_seconds'] == 86414
+        saved = json.dumps(polluted)
+        con.execute('UPDATE latest_recognition_calls SET snapshot_json=? WHERE filename=?', (saved, job['filename']))
+    detail = runtime.store.database.latest_recognition_calls(job['result_id'])
+    assert detail['incremental'] is True
+    assert detail['processing_seconds'] == detail['timeline']['elapsed_seconds'] == 13
+    active, retained = detail['timeline']['runs']
+    assert active['kind'] == 'current' and active['started_at'] == '2026-01-02T00:00:01.000000+00:00'
+    assert retained['kind'] == 'retained' and retained['elapsed_seconds'] == 6
+    assert detail['calls'][0]['_run']['retained'] is True
+    assert detail['summary']['total'] == 2
+    with runtime.store.database.connect() as con:
+        assert con.execute('SELECT snapshot_json FROM latest_recognition_calls WHERE filename=?',
+                           (job['filename'],)).fetchone()[0] == saved
+
+
+def test_first_remote_attempt_delayed_by_queue_remains_one_shared_run(runtime):
+    job_id = start(runtime, mixed=True)
+    job = finish_regular(runtime)
+    _save_local_timeline(runtime, job)
+    with runtime.store.database.connect() as con:
+        con.execute("UPDATE danzhengtong_jobs SET created_at='2026-01-01T00:00:00+00:00' WHERE job_id=?", (job_id,))
+    # Clicking submit on an already queued attempt must not turn its waiting
+    # time into a new run; ensure_remote returns the original remote row.
+    runtime.store.remote_action([job_id], 'submit')
+    _save_remote_timeline(runtime, job_id)
+    detail = runtime.store.database.latest_recognition_calls(job['result_id'])
+    assert detail['incremental'] is False
+    assert detail['timeline']['elapsed_seconds'] == 86414
+    assert len(detail['timeline']['runs']) == 1
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_first_independent_remote_submission_after_completion_retains_local_run(runtime, legacy):
+    job_id = start(runtime, mixed=True, mode='local')
+    job = finish_regular(runtime)
+    _save_local_timeline(runtime, job)
+    runtime.store.remote_action([job_id], 'submit')
+    _save_remote_timeline(runtime, job_id)
+    if legacy:
+        with runtime.store.database.connect() as con:
+            row = con.execute('SELECT id,seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                              (job_id,)).fetchone()
+            state = json.loads(row['seal_requests_json'])
+            state.pop('retained_regular_job_id')
+            state.pop('retained_regular_attempt')
+            state.pop('run_link', None)
+            con.execute('UPDATE danzhengtong_jobs SET seal_requests_json=?,created_at=? WHERE id=?',
+                        (json.dumps(state), '2026-01-02T00:00:00+00:00', row['id']))
+    detail = runtime.store.database.latest_recognition_calls(job['result_id'])
+    assert detail['incremental'] is True
+    assert detail['timeline']['elapsed_seconds'] == 13
+    assert [run['kind'] for run in detail['timeline']['runs']] == ['current', 'retained']
+
+
+@pytest.mark.parametrize('scope', ['page', 'seal'])
+def test_remote_attempt_transferred_to_new_local_job_does_not_retain_that_new_local_run(runtime, scope):
+    job_id = start(runtime, mixed=True)
+    first = finish_regular(runtime)
+    _save_local_timeline(runtime, first)
+    runtime.store.remote_action([job_id], 'resubmit')
+    _save_remote_timeline(runtime, job_id)
+    with runtime.store.database.connect() as con:
+        con.execute("UPDATE danzhengtong_jobs SET created_at='2026-01-02T00:00:00+00:00' WHERE job_id=? AND active=1",
+                    (job_id,))
+        if scope == 'seal':
+            row = con.execute('SELECT id,recognition_call_json,seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                              (job_id,)).fetchone()
+            state = json.loads(row['seal_requests_json'])
+            state.update(page_required=False, seal_required=True, page={'status': 'skipped'},
+                         requests=[{'index': 0, 'status': 'completed', 'req_uuid': 'saved-seal',
+                                    'call': json.loads(row['recognition_call_json'])}])
+            con.execute("UPDATE danzhengtong_jobs SET recognition_call_json='{}',req_uuid='',seal_requests_json=? WHERE id=?",
+                        (json.dumps(state), row['id']))
+    options = json.loads(runtime.store.get(job_id)['payload_json'])
+    task = runtime.store.create_retries('retry-local', [first['result_id']], {first['result_id']: options})
+    next_job = finish_regular(runtime)
+    assert next_job['id'] == task['items'][0]['id']
+    _save_local_timeline(runtime, next_job, offset=172800)
+    detail = runtime.store.database.latest_recognition_calls(next_job['result_id'])
+    assert detail['incremental'] is False
+    assert not detail['calls'][0].get('_run', {}).get('retained')
+    assert all(run['kind'] == 'current' for run in detail['timeline']['runs'])
+    assert detail['timeline']['elapsed_seconds'] == 6
+    # Reapplying the retained result updates its save timestamp. It must not
+    # reattach yesterday's upload interval to the new local run afterward.
+    with runtime.store.database.connect() as con:
+        row = con.execute('SELECT id,recognition_call_json,seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                          (next_job['id'],)).fetchone()
+        state = json.loads(row['seal_requests_json'])
+        assert state['retained_remote_result'] == {'job_id': next_job['id'], 'finished_at': '2026-01-02T00:00:14+00:00'}
+        call = json.loads(row['recognition_call_json']) if scope == 'page' else state['requests'][0]['call']
+        call['transport']['applied_at'] = '2026-01-03T00:00:10+00:00'
+        con.execute("UPDATE danzhengtong_jobs SET status='applied',recognition_call_json=?,seal_requests_json=? WHERE id=?",
+                    (json.dumps(call) if scope == 'page' else '{}', json.dumps(state), row['id']))
+    applied = runtime.store.database.latest_recognition_calls(next_job['result_id'])
+    assert applied['timeline']['elapsed_seconds'] == 6
+    assert len(applied['calls']) == 1
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_new_local_attempt_on_same_job_does_not_inherit_remote_resubmit_provenance(runtime, legacy):
+    job_id = start(runtime, mixed=True)
+    first = finish_regular(runtime)
+    _save_local_timeline(runtime, first)
+    runtime.store.remote_action([job_id], 'resubmit')
+    _save_remote_timeline(runtime, job_id)
+    with runtime.store.database.connect() as con:
+        row = con.execute('SELECT id,seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                          (job_id,)).fetchone()
+        state = json.loads(row['seal_requests_json'])
+        if legacy:
+            state.pop('retained_regular_job_id')
+            state.pop('retained_regular_attempt')
+            state.pop('run_link', None)
+        con.execute('UPDATE danzhengtong_jobs SET seal_requests_json=?,created_at=? WHERE id=?',
+                    (json.dumps(state), '2026-01-02T00:00:00+00:00', row['id']))
+    runtime.store.start_jobs([job_id], 'local')
+    latest = finish_regular(runtime)
+    assert latest['id'] == job_id and latest['attempt'] == first['attempt'] + 1
+    local = _save_local_timeline(runtime, latest, offset=172800)
+    detail = runtime.store.database.latest_recognition_calls(latest['result_id'])
+    assert detail['incremental'] is False
+    assert not detail['calls'][0].get('_run', {}).get('retained')
+    assert all(run['kind'] == 'current' for run in detail['timeline']['runs'])
+    assert detail['timeline']['elapsed_seconds'] == 6
+    assert len(detail['calls']) == 1
+    with runtime.store.database.connect() as con:
+        remote = con.execute('SELECT * FROM danzhengtong_jobs WHERE job_id=? AND active=1', (job_id,)).fetchone()
+        polluted = merge_remote_snapshot(local, remote_call(dict(remote), latest['filename']))
+        assert polluted['processing_seconds'] > 86400
+        con.execute('UPDATE latest_recognition_calls SET snapshot_json=? WHERE filename=?',
+                    (json.dumps(polluted), latest['filename']))
+    repaired = runtime.store.database.latest_recognition_calls(latest['result_id'])
+    assert repaired['processing_seconds'] == repaired['timeline']['elapsed_seconds'] == 6
+    assert len(repaired['calls']) == 1
+
+
+def test_pending_remote_continuation_is_kept_when_a_new_local_attempt_finishes(runtime):
+    job_id = start(runtime, mixed=True)
+    first = finish_regular(runtime)
+    runtime.store.remote_action([job_id], 'resubmit')
+    _save_remote_timeline(runtime, job_id)
+    with runtime.store.database.connect() as con:
+        row = con.execute('SELECT id,recognition_call_json,seal_requests_json FROM danzhengtong_jobs WHERE job_id=? AND active=1',
+                          (job_id,)).fetchone()
+        call, state = json.loads(row['recognition_call_json']), json.loads(row['seal_requests_json'])
+        for key in ('finished_at', 'result_received_at', 'applied_at'):
+            call['transport'].pop(key)
+        state['page']['status'] = 'waiting'
+        con.execute("UPDATE danzhengtong_jobs SET status='waiting',recognition_call_json=?,seal_requests_json=?,created_at=? WHERE id=?",
+                    (json.dumps(call), json.dumps(state), '2026-01-02T00:00:00+00:00', row['id']))
+    runtime.store.start_jobs([job_id], 'local')
+    latest = finish_regular(runtime)
+    _save_local_timeline(runtime, latest, offset=172800)
+    detail = runtime.store.database.latest_recognition_calls(latest['result_id'])
+    assert len(detail['calls']) == 2
+    assert detail['timeline']['elapsed_seconds'] is None
+    assert any(span.get('method') == 'danzhengtong' for run in detail['timeline']['runs'] for span in run['spans'])
+
+
 def test_incomplete_local_or_remote_completion_cannot_claim_finished_wall_time():
     local = timeline_local()
     local['finished_at'] = ''

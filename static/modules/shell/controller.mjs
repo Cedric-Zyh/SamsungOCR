@@ -69,7 +69,6 @@ export function createApplication(environment, options = {}) {
     ui,
     importsState,
     recordsState,
-    progressState,
     api,
     services,
     ReceiptImport,
@@ -80,7 +79,7 @@ export function createApplication(environment, options = {}) {
     updateRecognitionPlan: (...args) => recognition_plan.updateRecognitionPlan(...args),
     loadDailyResults: (...args) => progress.loadDailyResults(...args),
     syncStartRecognition: (...args) => progress.syncStartRecognition?.(...args),
-    openManagedRecords,
+    onTaskCreated: (...args) => progress.showImportedTask(...args),
     showQueuedRetry: (...args) => progress.showQueuedRetry(...args),
     closeModal: (...args) => review.closeModal(...args)
   });
@@ -90,10 +89,29 @@ export function createApplication(environment, options = {}) {
     importsState,
     services
   });
-  const review = createReview({
+  const navigation = createNavigation({
     environment,
     ui,
     navigationState,
+    recordsState,
+    reportState,
+    reviewState,
+    canLeaveReview: (...args) => review.canLeaveReview(...args),
+    dismissReview: (...args) => review.dismissReview(...args),
+    openReview: (...args) => review.openReview(...args),
+    showReviewEmpty: (...args) => review.showReviewEmpty(...args),
+    showImportDialog: (...args) => imports.showImportDialog(...args),
+    loadReviewQueue: (...args) => review_queue.loadReviewQueue(...args),
+    loadDailyResults: (...args) => progress.loadDailyResults(...args),
+    loadRecords: (...args) => records.loadRecords(...args),
+    loadReport: (...args) => report.loadReport(...args),
+    loadSamples: () => sample_center.load(),
+    loadSealCenter: (...args) => seal_center.load(...args)
+  });
+  const review = createReview({
+    environment,
+    ui,
+    reviewNavigation: navigation.reviewDialog,
     reviewState,
     api,
     services,
@@ -114,9 +132,7 @@ export function createApplication(environment, options = {}) {
       ? records.getReviewScope('filtered')
       : {kind: 'day', label: `${$('#progress-date').value || ''} · 当天全部`, filters: {import_date: $('#progress-date').value || ''}},
     refreshVisibleResults,
-    retryOne: (...args) => imports.retryOne(...args),
-    showPage: (...args) => navigation.showPage(...args),
-    routePage: (...args) => navigation.routePage(...args)
+    retryOne: (...args) => imports.retryOne(...args)
   });
   const review_evidence = createReviewEvidence({
     environment,
@@ -129,6 +145,7 @@ export function createApplication(environment, options = {}) {
     previewRegion: (...args) => review.previewRegion(...args)
   });
   const review_queue = createReviewQueue({
+    reviewNavigation: navigation.reviewDialog,
     environment,
     ui,
     reviewState,
@@ -137,8 +154,7 @@ export function createApplication(environment, options = {}) {
     services,
     canLeaveReview: (...args) => review.canLeaveReview(...args),
     openReview: (...args) => review.openReview(...args),
-    showReviewEmpty: (...args) => review.showReviewEmpty(...args),
-    showPage: (...args) => navigation.showPage(...args)
+    showReviewEmpty: (...args) => review.showReviewEmpty(...args)
   });
   const result_preview = createResultPreview({environment, ui, services, ReceiptWorkbench,
     enterReview: id => review_queue.startReviewScope({kind: 'selected', ids: [id], label: '当前单据'}, {recordId: id})});
@@ -176,25 +192,6 @@ export function createApplication(environment, options = {}) {
     flushSettings: () => recognition_plan.flushSettings(),
     openResult: (id, options) => review.openReview(id, {sample: true, ...options}),
     openOriginal: (...args) => records.openOriginalPreview(...args)});
-  const navigation = createNavigation({
-    environment,
-    ui,
-    navigationState,
-    recordsState,
-    reportState,
-    reviewState,
-    canLeaveReview: (...args) => review.canLeaveReview(...args),
-    dismissReview: (...args) => review.dismissReview(...args),
-    openReview: (...args) => review.openReview(...args),
-    showReviewEmpty: (...args) => review.showReviewEmpty(...args),
-    showImportDialog: (...args) => imports.showImportDialog(...args),
-    loadReviewQueue: (...args) => review_queue.loadReviewQueue(...args),
-    loadDailyResults: (...args) => progress.loadDailyResults(...args),
-    loadRecords: (...args) => records.loadRecords(...args),
-    loadReport: (...args) => report.loadReport(...args),
-    loadSamples: () => sample_center.load(),
-    loadSealCenter: (...args) => seal_center.load(...args)
-  });
 
   function openManagedRecords(day) {
     records.openDayRecords(day);

@@ -157,6 +157,19 @@ def test_excluded_shipper_only_trace_cannot_be_reintroduced_from_old_saved_candi
     assert updated['seal_check']['candidates'] == []
 
 
+@pytest.mark.parametrize('marker', [{'pending': True}, {'error': 'failed'}, {'mode': 'mock'},
+                                    {'simulated': True}])
+def test_inactive_child_request_is_not_evidence_even_if_parent_and_child_status_completed(marker):
+    current = saved_result('客户甲收货专用章')
+    for trace in (current['danzhengtong_seal'],
+                  current['recognition_variants']['seal'][0]['details']['danzhengtong_seal']):
+        trace['requests'][0].update(marker)
+    updated = refresh_provider_result(current)
+    assert updated['seal_check']['recognized'] == ''
+    assert updated['seal_check']['candidates'] == []
+    assert updated['seal_check']['reliable'] is False
+
+
 @pytest.mark.parametrize('refresh', [refresh_printed_fields_result, refresh_provider_result])
 def test_reselected_requirement_chooses_another_physical_stamp_and_its_own_attributes(refresh):
     old, new = '客户甲收货专用章', '客户乙收发货专用章'

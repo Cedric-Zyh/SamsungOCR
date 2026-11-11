@@ -1,6 +1,8 @@
 """Choose each printed field from usable provider evidence independently."""
 
 from copy import deepcopy
+from collections.abc import Mapping
+from .saved_evidence import variant_details
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from math import isfinite
@@ -71,12 +73,10 @@ def _valid_format(name, value):
 def _candidates(variants, name):
     candidates = []
     for variant in variants:
-        if not isinstance(variant, dict) or inactive(variant):
+        if not isinstance(variant, Mapping) or inactive(variant):
             continue
-        details = variant.get("result")
-        if not isinstance(details, dict):
-            details = variant.get("details") or {}
-        if not isinstance(details, dict) or inactive(details):
+        details = variant_details(variant)
+        if not isinstance(details, Mapping) or inactive(details):
             continue
         statuses = details.get("recognition_status") or {}
         stage_status = statuses.get("fields") if isinstance(statuses, dict) else None

@@ -4,25 +4,27 @@ const {createImports} = require('../static/modules/imports/imports.mjs');
 const ReceiptImport = require('../static/modules/core/import_files.mjs').ReceiptImport;
 
 function harness({legacy = false, failUpload = false, failSetup = false, groupSize = 5000} = {}) {
-  const nodes = new Map(), requests = [], notices = [], startStates = [];
+  const nodes = new Map(), requests = [], notices = [], startStates = [], createdTasks = [];
   const $ = selector => {
+    assert.notEqual(selector, '#progress-date', 'imports must not own the workbench date control');
     if (!nodes.has(selector)) nodes.set(selector, {value:'', disabled:false, textContent:'', close(){},
       classList:{add(){},remove(){},toggle(){}}, addEventListener(){}});
     return nodes.get(selector);
   };
-  const importsState = {batchRunning:false,ocrBackend:'vision',sealRecognitionMode:'qingtong'}, progressState = {};
+  const importsState = {batchRunning:false,ocrBackend:'vision',sealRecognitionMode:'qingtong'};
   let taskNumber = 0;
   const plan = {fields:['danzhengtong'],date:['danzhengtong'],seal:['qingtong','danzhengtong']};
   const controller = createImports({
     environment:{document:{},window:{confirm(){throw Error('unexpected confirmation');}},location:{hash:''},
       localStorage:{setItem(){}}, FormData:class {constructor(){this.values=[];} append(...entry){this.values.push(entry);}}},
-    ui:{$,$$:()=>[],toast:message=>notices.push(message)}, importsState, progressState, recordsState:{},
+    ui:{$,$$:()=>[],toast:message=>notices.push(message)}, importsState, recordsState:{},
     ReceiptImport:{...ReceiptImport,batches:items=>Array.from({length:Math.ceil(items.length/groupSize)},
       (_,index)=>items.slice(index*groupSize,(index+1)*groupSize))},
     readRecognitionPlan:()=>plan, usesRemotePlan:()=>true,updateRecognitionPlan(){
       if(failSetup) { failSetup=false; throw Error('UI setup failed'); }
     },
     syncStartRecognition:()=>startStates.push({uploading:importsState.batchRunning,scanning:importsState.importScanning}),
+    onTaskCreated: event => createdTasks.push(event),
     loadDailyResults:async()=>{},
     api:async(url,options)=>{
       requests.push({url,options});
@@ -33,11 +35,12 @@ function harness({legacy = false, failUpload = false, failSetup = false, groupSi
             ...(!legacy ? {start_requested:false,status:'awaiting_upload'} : {})}))};
       }
       assert.match(url,/^\/api\/jobs\/job-\d-\d\/upload$/);
+      assert.equal(createdTasks.at(-1).taskId, `task-${taskNumber}`, 'announce the held task before uploading its files');
       if(failUpload) throw Error('upload interrupted');
       return {status:'ready',start_requested:false};
     },
   });
-  return {controller,importsState,progressState,requests,notices,startStates,$,plan};
+  return {controller,importsState,createdTasks,requests,notices,startStates,$,plan};
 }
 
 test('remote-config import uploads locally without a popup or starting recognition',async()=>{
@@ -45,7 +48,7 @@ test('remote-config import uploads locally without a popup or starting recogniti
   await h.controller.runBatch([{name:'receipt.jpg'}],[],'导入回单');
   assert.deepEqual(h.requests.map(request=>request.url),['/api/tasks','/api/jobs/job-1-0/upload']);
   assert.deepEqual(h.requests[0].options.json.recognition_config,h.plan);
-  assert.equal(h.progressState.workFilter,'processing');
+  assert.deepEqual(h.createdTasks,[{taskId:'task-1',day:'2026-09-11'}]);
   assert.equal(h.importsState.batchRunning,false);
   assert.equal(h.importsState.uploadingJobs.size,0);
   assert(h.startStates.some(state=>state.uploading));
@@ -57,6 +60,7 @@ test('an old auto-start backend receives no image bytes',async()=>{
   const h=harness({legacy:true});
   await assert.rejects(h.controller.runBatch([{name:'receipt.jpg'}],[],'导入回单'),/尚未支持“导入后开始”/);
   assert.deepEqual(h.requests.map(request=>request.url),['/api/tasks']);
+  assert.deepEqual(h.createdTasks,[]);
   assert.equal(h.importsState.batchRunning,false);
   assert.equal(h.$('#choose-file').disabled,false);
 });
@@ -66,6 +70,7 @@ test('all import groups stay staged and none starts automatically',async()=>{
   await h.controller.runBatch([{name:'1.jpg'},{name:'2.jpg'},{name:'3.jpg'}],[],'文件夹');
   assert.equal(h.requests.filter(request=>request.url==='/api/tasks').length,2);
   assert.equal(h.requests.filter(request=>request.url.endsWith('/upload')).length,3);
+  assert.deepEqual(h.createdTasks,[{taskId:'task-1',day:'2026-09-11'},{taskId:'task-2',day:'2026-09-11'}]);
   assert(!h.requests.some(request=>request.url.endsWith('/start')));
   assert.match(h.notices.at(-1),/已导入 3 张/);
 });

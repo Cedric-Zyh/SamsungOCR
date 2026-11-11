@@ -652,3 +652,19 @@ test('queue completions notify the state owner without discarding the newly load
   assert.equal(h.requests.filter(row => row.url.startsWith('/api/daily-results?')).length, reads);
   assert.deepEqual(notifications, [1]);
 });
+
+test('an imported task enters its day through the workbench-owned command without starting it', () => {
+  const h = harness(), saved = [];
+  h.environment.localStorage.setItem = (...entry) => saved.push(entry);
+  Object.assign(h.state.progress, {workFilters:['failed'],workFilter:'failed',workVisibleLimit:200,dailyReady:true});
+  h.controller.showImportedTask({taskId:'held-import',day:'2026-11-11'});
+  assert.equal(h.$('#progress-date').value,'2026-11-11');
+  assert.equal(h.state.progress.workFilters,null);
+  assert.equal(h.state.progress.workFilter,'processing');
+  assert.equal(h.state.progress.workVisibleLimit,50);
+  assert.equal(h.state.progress.dailyReady,false);
+  assert.deepEqual(h.managedRecords,['2026-11-11']);
+  assert.deepEqual(saved,[['receipt-progress-date','2026-11-11']]);
+  assert.equal(h.$('#task-drawer').open,undefined);
+  assert(!h.requests.some(request=>request.options?.method));
+});

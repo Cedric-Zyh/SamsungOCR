@@ -97,3 +97,16 @@ receipt_ocr/
 环形展开的起点可能切断公司名称，因此环形结果还会保留原始 OCR，并生成循环位移候选。候选优先选择完整公司后缀（如“有限公司”）位于末尾的顺序，再用签章要求中的公司名做软匹配排序；签章要求不会补写 OCR 中没有出现的字符。证据中同时保存 `unwrapped_raw_text`、`unwrapped_text`、`ring_reorder.seam_offset` 和排序原因。
 
 印章 OCR 只返回各输入图自己的原始读数。公司环形文字和中心章型文字分别记录，不在识别阶段补字、纠错或拼接；签章要求比对在后续判定层完成。
+
+
+## 2026-11-11：判定、运行与迁移所有权
+
+机器回放和历史刷新统一经过 `application/saved_checks.py`，基础日期／严格印章规则位于 `domain/check_comparison.py`，人工确认保留在 `review.py`。`domain/saved_evidence.py` 集中处理来源选择、typed Mapping 和旧 JSON 格式；独立印章的空／失败来源不能回退为整页成功。
+
+远程状态规则位于 `domain/remote_tasks.py`，任务关联位于 `domain/remote_runs.py`。Worker 处理网络请求，Store 处理租约与事务；`seal_requests_json.run_link` 明确新任务归属及复用来源。调用记录读取与展示分别由 SQL facade、纯投影和旧数据兼容模块承担。
+
+正式资源由 `web/runtime.ApplicationRuntime` 拥有，`application/configured_recognition.py` 显式组合业务配置与识别服务。Web 保留兼容别名，但资源启动／停止由 runtime 管理；停止超时不释放所有权，关闭中拒绝 HTTP 新请求。`application/retries.py` 共用重试准备与执行流程。
+
+`schema_migrations` 按组件记录连续版本。receipt、local queue、remote queue 分别定义升级步骤，所有版本登记和结构更改处于同一事务。变更触发器时追加迁移并显式重建；不可只修改 `CREATE ... IF NOT EXISTS`。历史导入格式的兼容修复与每次启动任务恢复不混入版本判断。
+
+前端导入通过事件交给工作台命令；复核导航由 `shell/review_dialog.mjs` 统一管理，复核功能自己负责编辑、请求代次和证据清理。详见 `docs/结构优化长任务-20261111.md`。

@@ -47,10 +47,13 @@ class ReturnedImageWorker:
     def wake(self):
         self._wake.set()
 
+    def is_alive(self):
+        return bool(self._thread is not None and self._thread.is_alive())
+
     def stop(self, timeout=5):
         self._stop.set()
         self._wake.set()
-        if self._thread:
+        if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout)
 
     def _next(self):

@@ -111,7 +111,8 @@ function harness({hash = '#records', loaded = true} = {}) {
   $('[data-page="records"]').append(table);
   const behavior = {api: async () => { throw Error('Unexpected request'); }, renderHistory: async () => {}, loadReviewQueue: async () => {}, loadSealCenter: async () => {}};
   let navigation;
-  const review = createReview({environment, ui, navigationState: state.navigation, reviewState: state.review,
+  const reviewNavigation = new Proxy({}, {get: (_target, name) => (...args) => navigation.reviewDialog[name](...args)});
+  const review = createReview({environment, ui, reviewNavigation, reviewState: state.review,
     api: (...args) => behavior.api(...args), ReceiptWorkbench, fieldSchema: {printed: [], handwritten: []},
     fieldEditor: () => '', renderProductTable() {}, renderArtifacts() {},
     renderHistory: (...args) => behavior.renderHistory(...args), renderGroundTruth: async () => {}, ensureReviewScope() {},
@@ -132,7 +133,7 @@ function harness({hash = '#records', loaded = true} = {}) {
   };
   navigation = createNavigation(options);
   return {document, window, location, historyCalls, nodes, $, dialog, opener, table,
-    state, review, navigation, options, loads, notices, opened, environment, ui, behavior};
+    state, review, navigation, reviewNavigation, options, loads, notices, opened, environment, ui, behavior};
 }
 
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -159,7 +160,7 @@ for (const sample of [false, true]) {
     assert.equal(h.location.hash, sample ? '#sample-view/41' : '#view/41');
     assert.equal(h.state.review.sampleView, sample);
     assert.equal(h.state.review.reviewMode, 'view');
-    assert.equal(h.state.review.reviewOrigin.hash, '#seal-center');
+    assert.equal(h.state.navigation.reviewOrigin.hash, '#seal-center');
     assert.equal(h.dialog.open, true);
     assert.equal(h.$('[data-page="seal-center"]').classList.contains('hidden'), false);
     assert.equal(h.$('[data-page="records"]').classList.contains('hidden'), true);
@@ -219,7 +220,7 @@ test('sample viewing outside the seal archive keeps the existing samples backdro
   h.navigation.showPage('samples');
   h.behavior.api = async () => ({id: 41, filename: 'sample.jpg', fields: {}});
   await h.review.openReview(41, {sample: true, mode: 'view'});
-  assert.equal(h.state.review.reviewOrigin.hash, '#samples');
+  assert.equal(h.state.navigation.reviewOrigin.hash, '#samples');
   assert.equal(h.$('[data-page="samples"]').classList.contains('hidden'), false);
   assert.equal(h.$('[data-page="seal-center"]').classList.contains('hidden'), true);
   assert.equal(h.$('[data-nav="samples"]').getAttribute('aria-current'), 'page');
@@ -230,7 +231,7 @@ test('sample viewing outside the seal archive keeps the existing samples backdro
 });
 
 test('review opens above the records page, keeps the records navigation selected, and mounts feedback inside the dialog', () => {
-  const h = harness(); h.state.review.reviewOrigin = {hash: '#records', scroll: 75};
+  const h = harness(); h.state.navigation.reviewOrigin = {hash: '#records', scroll: 75};
   h.navigation.showPage('review');
   assert.equal(h.dialog.open, true);
   assert.equal(h.document.body.dataset.activePage, 'review');
@@ -263,7 +264,7 @@ test('browser Back preserves unsaved edits and restores the review URL without c
 
 test('accepted navigation closes the dialog, invalidates pending review work and restores the record position and feedback host', () => {
   const h = harness(); h.state.review.current = {id: 41};
-  h.state.review.reviewOrigin = {hash: '#records', scroll: 75};
+  h.state.navigation.reviewOrigin = {hash: '#records', scroll: 75};
   Object.assign(h.state.review, {reviewIntent: 10, reviewRequest: 20, queueRequest: 30});
   const controller = h.state.review.reviewQueueController = new AbortController();
   h.navigation.showPage('review');
@@ -281,6 +282,37 @@ test('accepted navigation closes the dialog, invalidates pending review work and
   assert.equal(h.$('#toast').parentElement, h.document.body);
   assert.equal(h.document.body.classList.contains('review-dialog-open'), false);
   assert.deepEqual(h.loads, [{background: true}]);
+});
+
+test('explicit close cleans the review once and keeps its return context in the shell', () => {
+  const h = harness();
+  h.state.review.current = {id:41};
+  h.navigation.reviewDialog.accept(h.navigation.reviewDialog.capture());
+  Object.assign(h.state.review,{reviewIntent:10,reviewRequest:20,queueRequest:30});
+  h.navigation.showPage('review');
+  h.review.closeModal();
+  assert.equal(h.state.review.reviewIntent,11);
+  assert.equal(h.state.review.reviewRequest,21);
+  assert.equal(h.state.review.queueRequest,31);
+  assert.equal(h.state.review.current,null);
+  assert.equal(h.state.review.reviewOrigin,undefined);
+  assert.equal(h.state.navigation.reviewOrigin,null);
+  assert.equal(h.location.hash,'#records');
+  assert.equal(h.document.activeElement,h.opener);
+});
+
+test('a dismissed detail request cannot install its return context after navigation', async () => {
+  const h = harness({hash:'#seal-center'});
+  h.navigation.showPage('seal-center');
+  let resolve;
+  h.behavior.api = () => new Promise(done => { resolve = done; });
+  const opening = h.review.openReview(41,{sample:true,origin:'#seal-center'});
+  assert.equal(h.state.navigation.reviewOrigin,undefined);
+  h.location.hash='#records'; h.navigation.routePage();
+  resolve({id:41,filename:'late.jpg',fields:{}}); await opening;
+  assert.equal(h.state.navigation.reviewOrigin,undefined);
+  assert.equal(h.state.review.current,null);
+  assert.equal(h.dialog.open,false);
 });
 
 test('direct review URLs load a records backdrop and close to records when there is no prior list page', async () => {
@@ -322,7 +354,7 @@ test('closing while receipt detail is loading prevents its late response from re
 
 test('closing a loading queue invalidates the session and prevents a late queue response from opening a receipt', async () => {
   const h = harness(); let resolve;
-  const queue = createReviewQueue({environment: h.environment, ui: h.ui, reviewState: h.state.review,
+  const queue = createReviewQueue({reviewNavigation: h.reviewNavigation,environment: h.environment, ui: h.ui, reviewState: h.state.review,
     ReceiptWorkbench: {issues: () => [], nextReview: rows => rows[0]},
     api: () => new Promise(done => { resolve = done; }),
     canLeaveReview: () => h.review.canLeaveReview(), openReview: h.options.openReview,
@@ -341,7 +373,7 @@ for (const recordId of [41, undefined]) {
   test(`initial ${recordId ? 'selected receipt' : 'next receipt'} detail failure replaces loading with a dismissible error`, async () => {
     const h = harness(); h.review.initialize();
     h.behavior.api = async () => { throw Error('回单详情暂时无法读取'); };
-    const queue = createReviewQueue({environment: h.environment, ui: h.ui, reviewState: h.state.review,
+    const queue = createReviewQueue({reviewNavigation: h.reviewNavigation,environment: h.environment, ui: h.ui, reviewState: h.state.review,
       ReceiptWorkbench: {issues: () => [], nextReview: rows => rows[0]},
       api: async () => ({items: [{id: 41, filename: '41.jpg'}], total: 1, page: 1, page_size: 100}),
       canLeaveReview: () => h.review.canLeaveReview(), openReview: id => h.review.openReview(id),
@@ -401,7 +433,7 @@ test('sample arrows follow source order, stop at both ends, and preserve one mod
   assert.equal(h.dialog.classList.contains('has-sample-browse'), true);
   assert.equal(h.$('#review-browse-prev').disabled, false);
   assert.equal(h.$('#review-browse-next').disabled, false);
-  const origin = h.state.review.reviewOrigin, historyLength = h.historyCalls.length;
+  const origin = h.state.navigation.reviewOrigin, historyLength = h.historyCalls.length;
   await h.$('#review-browse-next').emit('click');
   assert.equal(h.state.review.current.id, 41);
   assert.equal(h.location.hash, '#sample-view/41');
@@ -414,7 +446,7 @@ test('sample arrows follow source order, stop at both ends, and preserve one mod
   assert.equal(h.state.review.current.id, 43);
   assert.equal(h.$('#review-browse-prev').disabled, true);
   assert.equal(h.dialog.showCount, 1);
-  assert.equal(h.state.review.reviewOrigin, origin);
+  assert.equal(h.state.navigation.reviewOrigin, origin);
   assert(h.historyCalls.slice(historyLength).every(([method]) => method === 'replace'));
   h.review.closeModal();
   assert.equal(h.location.hash, '#samples');

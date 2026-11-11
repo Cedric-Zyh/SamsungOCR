@@ -162,3 +162,32 @@ def test_missing_standard_keeps_the_full_receipt_gate_while_fixing_text_comparis
     updated = refresh_seal_contact_results(current)
     assert updated['seal_check']['status'] == '匹配'
     assert updated['overall'] == '需人工复核' and updated['review_status'] == '待复核'
+
+
+@pytest.mark.parametrize('trace', [{},
+    {'mode': 'real', 'simulated': False, 'status': 'failed'},
+    {'mode': 'real', 'simulated': False, 'status': 'completed', 'error': 'query failed'},
+    {'mode': 'mock', 'simulated': True, 'status': 'completed'}])
+@pytest.mark.parametrize('location', ['variant', 'document'])
+def test_independent_seal_failure_never_borrows_completed_page_evidence(trace, location):
+    current = saved_result()
+    target = current['recognition_variants']['seal'][-1]['details'] if location == 'variant' else current
+    target['danzhengtong_seal'] = deepcopy(trace)
+    assert refresh_seal_contact_results(current) == current
+
+
+@pytest.mark.parametrize('container', ['details', 'result'])
+def test_completed_independent_seal_evidence_repairs_without_a_page_trace(container):
+    current = saved_result()
+    current.pop('danzhengtong')
+    remote = current['recognition_variants']['seal'][-1]
+    details = remote.pop('details')
+    details['danzhengtong_seal'] = details.pop('danzhengtong')
+    remote[container] = details
+    before = deepcopy(current)
+    updated = refresh_seal_contact_results(current)
+    assert updated['recognition_variants']['seal'][-1][container]['seal_check']['status'] == '匹配'
+    assert updated['seal_check']['status'] == '匹配'
+    assert updated['recognition_variants']['seal'][-1][container]['danzhengtong_seal'] == details['danzhengtong_seal']
+    assert refresh_seal_contact_results(updated) == updated
+    assert current == before

@@ -1,6 +1,7 @@
 """Shared evidence quality rules for choosing recognized field candidates."""
 
 from math import isfinite
+from collections.abc import Mapping
 
 
 _INACTIVE = {
@@ -13,7 +14,7 @@ _INACTIVE = {
 
 
 def inactive(evidence):
-    if not isinstance(evidence, dict):
+    if not isinstance(evidence, Mapping):
         return False
     return bool(
         evidence.get("error")

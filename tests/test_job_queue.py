@@ -244,6 +244,7 @@ def test_start_is_atomic_and_does_not_authorize_unuploaded_or_other_jobs(store):
 def test_existing_queue_migration_keeps_already_authorized_jobs_running(store):
     job = queued(store)
     with store.database.connect() as con:
+        con.execute("DELETE FROM schema_migrations WHERE component='recognition_jobs'")
         con.execute('DROP TRIGGER require_recognition_start')
         con.execute('DROP INDEX idx_jobs_start')
         con.execute('ALTER TABLE recognition_jobs DROP COLUMN start_requested')

@@ -68,10 +68,14 @@ class JobWorker:
         if self.remote:
             self.remote.wake()
 
+    def is_alive(self):
+        return bool((self._thread is not None and self._thread.is_alive())
+                    or (self.remote is not None and self.remote.is_alive()))
+
     def stop(self, timeout=5):
         self._stop.set()
         self._wake.set()
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout)
         if self.remote:
             self.remote.stop(timeout)

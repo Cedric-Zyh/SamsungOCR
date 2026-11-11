@@ -79,6 +79,10 @@ def old_hotline_sample(samples, suffix='维修热线:82533861'):
 def test_persisted_hotline_refresh_keeps_evidence_and_updates_all_sample_views(samples, suffix):
     _, client = samples
     service, item, before = old_hotline_sample(samples, suffix)
+    # Legacy page-only assembly projects absent variant keys as null. This is
+    # not an independent request and must retain the original page evidence.
+    assert seal_variant(before, 'danzhengtong')['details']['danzhengtong_seal'] is None
+    assert 'danzhengtong_seal' not in before
     _, original_before = raw_result(service, item['result_id'])
     remote_before = service.store.remote_detail(item['job_id'])
     history_before = service.database.history(item['result_id'])
@@ -163,3 +167,27 @@ def test_hotline_refresh_preserves_reviewed_pending_and_superseded_records(sampl
     assert service.database.history(item['result_id']) == history_before
     assert service.store.remote_detail(item['job_id']) == remote_before
     assert service.store.get(item['job_id']) == job_before
+
+
+@pytest.mark.parametrize('trace', [None, {}, {'mode': 'real', 'simulated': False, 'status': 'failed',
+                                      'error': 'independent seal request failed'}])
+@pytest.mark.parametrize('location', ['variant', 'document'])
+def test_persisted_hotline_refresh_does_not_borrow_page_success_for_independent_failure(samples, trace, location):
+    service, item, current = old_hotline_sample(samples)
+    if trace is None and location == 'variant':
+        # Variant null is the old public projection's absent-scene placeholder.
+        # A dedicated check marker still forbids borrowing a page result.
+        seal_variant(current, 'danzhengtong')['details']['seal_check'].update(
+            model_id='independent-test', candidates=[])
+    target = seal_variant(current, 'danzhengtong')['details'] if location == 'variant' else current
+    target['danzhengtong_seal'] = deepcopy(trace)
+    with service.database.connect() as con:
+        con.execute('UPDATE results SET result_json=? WHERE id=?',
+                    (json.dumps(current, ensure_ascii=False), item['result_id']))
+    before = raw_result(service, item['result_id'])
+    history_before = service.database.history(item['result_id'])
+    remote_before = service.store.remote_detail(item['job_id'])
+    assert refresh_sample_seal_contacts(service.store) == 0
+    assert raw_result(service, item['result_id']) == before
+    assert service.database.history(item['result_id']) == history_before
+    assert service.store.remote_detail(item['job_id']) == remote_before

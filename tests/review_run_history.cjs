@@ -140,6 +140,56 @@ test('supplementary calls explain retained methods without claiming they ran aga
   assert.match(html,/title="调用耗时合计"><small>识别累计<\/small> 未记录/);
 });
 
+test('a next-day remote rerun separates its two calls and clock from forty retained calls', () => {
+  const before = '2026-11-09T17:24:37.590109+08:00', beforeEnd = '2026-11-09T17:24:51.612061+08:00';
+  const start = '2026-11-10T15:30:00.130213+08:00', end = '2026-11-10T15:30:40.531909+08:00';
+  const old = Array.from({length:40},(_,index) => call(index+1,{started_at:before,finished_at:beforeEnd,
+    _run:{id:'old',retained:true}}));
+  const fresh = [41,42].map(id => call(id,{method:'danzhengtong',started_at:start,finished_at:end}));
+  const bars = fresh.flatMap(item => [
+    {id:`remote-${item.id}`,call_id:item.id,lane:'danzhengtong_page',kind:'lifecycle',started_at:start,finished_at:end},
+    {id:`upload-${item.id}`,call_id:item.id,lane:'danzhengtong_page',kind:'request',started_at:start,finished_at:end},
+  ]);
+  const recorded = {version:1,elapsed_seconds:40.4017,started_at:start,finished_at:end,runs:[
+    {id:'current',kind:'current',elapsed_seconds:40.4017,started_at:start,finished_at:end,spans:bars},
+    {id:'old',kind:'retained',elapsed_seconds:14.022,started_at:before,finished_at:beforeEnd,
+      spans:old.map(item => ({...item,lane:'local_page',kind:'recognition',call_id:item.id}))},
+  ]};
+  const data = response([...old,...fresh],{incremental:true,processing_seconds:40.4017,
+    summary:{total:42,succeeded:42,failed:0},started_at:start,finished_at:end,timeline:recorded});
+  const original = structuredClone(data);
+  const html = renderRunHistory(data);
+  assert.match(html,/记录调用<\/span><strong>42<\/strong>/);
+  assert.match(html,/本次 2 次 · 此前保留 40 次/);
+  assert.match(html,/全流程历时<\/span><strong>40.4 秒/);
+  assert.match(html,/流程历时 <strong>14.02 秒/);
+  assert.equal((html.match(/class="run-timeline-axis"/g)||[]).length,2);
+  assert.match(html,/本次模型初始化<\/span><strong>0 秒/);
+  assert.match(html,/本次处理无需初始化模型/);
+  assert.doesNotMatch(html,/保留记录的模型初始化|79562|仅最近一次处理/);
+  assert.deepEqual(data,original);
+});
+
+test('retained-call counts require reliable provenance and count calls rather than timeline phases', () => {
+  const saved = call(1,{_run:{retained:true}}), remote = call(2,{method:'danzhengtong'});
+  const data = response([saved,remote],{incremental:true,summary:{total:2,succeeded:2,failed:0},timeline:timeline({runs:[
+    {id:'new',kind:'current',spans:[timelineSpan('old-id','seal',0,1,{call_id:1}),
+      timelineSpan('new','danzhengtong',0,2,{call_id:2})]},
+  ]})});
+  // Explicit retained provenance wins over a legacy reused timeline ID.
+  assert.match(renderRunHistory(data),/本次 1 次 · 此前保留 1 次/);
+  for (const value of [
+    {...data,timeline:undefined},
+    {...data,summary:{total:3,succeeded:3,failed:0}},
+    {...data,timeline:timeline({runs:[...data.timeline.runs,
+      {id:'old',kind:'retained',spans:[timelineSpan('ambiguous','seal',0,1,{call_id:2})]}]})},
+  ]) {
+    const html = renderRunHistory(value);
+    assert.match(html,/包含此前保留的识别调用；全流程历时仅计算本次处理/);
+    assert.doesNotMatch(html,/本次 \d+ 次 · 此前保留 \d+ 次/);
+  }
+});
+
 test('remote service timings are visible above the unchanged recognition groups', () => {
   const html = renderRunHistory(response([call(1,{stage:'routing'}),call(2,{stage:'date'}),call(3)], {
     image_processing:imageProcessing(),remote_timings:[

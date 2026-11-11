@@ -21,13 +21,13 @@ const optionalStageReasons = new Set([
 ]);
 
 export function createReview({
-  environment, ui, navigationState, reviewState, api, services = createApiClients(api), ReceiptWorkbench, fieldSchema, fieldEditor,
+  environment, ui, reviewNavigation, reviewState, api, services = createApiClients(api), ReceiptWorkbench, fieldSchema, fieldEditor,
   renderProductTable, renderArtifacts, renderHistory, renderGroundTruth, loadReviewQueue,
-  continueReview, refreshVisibleResults, retryOne, showPage, routePage,
+  continueReview, refreshVisibleResults, retryOne,
   startReviewScope, markReviewSaved, getReviewScope, ensureReviewScope, retrySample
 }) {
   services = services && typeof services === 'object' ? services : createApiClients(api);
-  const {document, window, location, history} = environment;
+  const {document, window, location} = environment;
   const {$, $$, toast} = ui;
   const reviewImage = createReviewImage({environment, ui, reviewState});
   const reviewPreview = createReviewPreview({environment, ui});
@@ -118,7 +118,8 @@ export function createReview({
     ui, reviewState, ReceiptWorkbench, fieldSchema, fieldEditor, renderProductTable,
     setupDateConfirmation, setupSealConfirmation, setupSignatureConfirmation, applyReviewMode,
     focusReviewImage, reviewImage, reviewPreview, setReviewImage, focusReviewIssue,
-    renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard
+    renderArtifacts, canLeaveReview, retryOne, submitReview, saveSampleAnnotations, setReviewDirty, syncReviewReadiness, renderStandard,
+    returnPresentation: () => reviewNavigation.presentation()
   });
   function renderReview(item, id, mode) {
     runHistory.clear();
@@ -207,41 +208,33 @@ export function createReview({
       if (element.matches('input,textarea')) element.focus({preventScroll:true});
     }
   }
-  function currentReviewHash() {
-    return `#${reviewState.sampleView ? 'sample-view' : reviewState.reviewMode === 'view' ? 'view' : 'review'}/${reviewState.current.id}`;
-  }
   async function openReview(id, {mode = 'review', sample = false, preview = false, origin = '', browseIds = [], imageGroup = '', isCurrent, onOpened} = {}) {
     mode = sample || mode === 'view' ? 'view' : 'review';
     if (!canLeaveReview({discard:false})) {
-      if (reviewState.current && document.body.dataset.activePage === 'review') history.replaceState(null, '', currentReviewHash());
+      if (reviewState.current && document.body.dataset.activePage === 'review') reviewNavigation.restoreCurrent();
       return;
     }
     reviewState.reviewIntent = (reviewState.reviewIntent || 0) + 1;
     const editVersion = reviewState.reviewEditVersion;
-    if (document.body.dataset.activePage !== 'review') {
-      reviewState.reviewOrigin = {hash: origin || (sample ? '#samples' : '#records'), scroll: window.scrollY};
-    }
+    const returnContext = reviewNavigation.capture({sample, origin});
     const originHash = location.hash;
     const requestId = reviewState.reviewRequest = (reviewState.reviewRequest || 0) + 1;
     const item = await (sample ? services.samples.get(id) : services.records.get(id));
     if (requestId !== reviewState.reviewRequest || location.hash !== originHash || (isCurrent && !isCurrent())) return;
     if (reviewState.reviewSaving || reviewState.reviewEditVersion !== editVersion) {
-      if (reviewState.current) history.replaceState(null, '', currentReviewHash());
+      if (reviewState.current) reviewNavigation.restoreCurrent();
       toast('加载期间有新的修改，已保留当前回单，请保存后再切换。', 'warning');
       return;
     }
     if (!sample) ensureReviewScope(item);
     reviewState.sampleView = sample;
     reviewState.current = item; reviewState.reviewDirty = false; reviewState.reviewMode = mode;
+    reviewNavigation.accept(returnContext);
     const replaceFocusedForm = $('#review-content').contains?.(document.activeElement);
     renderReview(item, id, mode);
     if (sample && (imageGroup || preview)) focusReviewImage(imageGroup || 'page');
     sampleBrowse.setContext(sample ? browseIds : []);
-    // Switching receipts stays inside a single modal history entry.
-    const route = `${sample ? 'sample-view' : mode}/${id}`;
-    if (document.body.dataset.activePage === 'review' || /^#(review|view|sample-view)\//.test(location.hash)) history.replaceState(null, '', `#${route}`);
-    else history.pushState(null, '', `#${route}`);
-    showPage('review');
+    reviewNavigation.enter({id, mode, sample});
     if (replaceFocusedForm) {
       $('#review-title').setAttribute('tabindex', '-1');
       $('#review-title').focus({preventScroll: true});
@@ -301,12 +294,7 @@ export function createReview({
   }
   function closeModal() {
     if (!canLeaveReview()) return;
-    const target = reviewState.reviewOrigin?.hash === '#seal-center' ? '#seal-center'
-      : reviewState.sampleView ? '#samples' : '#records';
-    dismissReview();
-    history.replaceState(null, '', target);
-    navigationState.restoreScroll = reviewState.reviewOrigin?.scroll || 0;
-    routePage();
+    reviewNavigation.close();
   }
 
   async function openBatchReview() {

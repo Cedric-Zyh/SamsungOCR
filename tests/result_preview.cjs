@@ -27,11 +27,26 @@ test('preview uses stored comparison policy, including multiple acceptable conta
   assert.equal(resultPreviewModel(item,ReceiptWorkbench).attention.length,0);
   item.seal_check.reliable=false;
   const model=resultPreviewModel(item,ReceiptWorkbench);
-  assert.equal(model.rows[1].status,'匹配待确认');
+  assert.equal(model.rows[1].status,'待确认');
   assert.equal(model.attention.length,1);
   assert.equal(model.rows[2].status,'匹配');
   item.date_check={status:'未执行'};
   assert.equal(resultPreviewModel(item,ReceiptWorkbench).rows[0].actual,'未执行');
+});
+test('seal review states share a pending label while preserving the original evidence',()=>{
+  for (const status of ['匹配', '匹配待确认', '需人工复核']) {
+    const item=record();
+    item.seal_check={status,reliable:false,recognized:'测试公司',message:'文字与形状尚未共同确认'};
+    const before=JSON.stringify(item);
+    const model=resultPreviewModel(item,ReceiptWorkbench);
+    assert.equal(model.rows[1].status,'待确认');
+    assert.match(renderResultPreview(model),/待确认/);
+    assert.equal(JSON.stringify(item),before);
+  }
+  for (const status of ['部分匹配', '不匹配', '未识别', '未执行']) {
+    const item=record();item.seal_check={status,reliable:false};
+    assert.equal(resultPreviewModel(item,ReceiptWorkbench).rows[1].status,status);
+  }
 });
 test('missing results are explicit and text is escaped without rendering images',()=>{
   const item=record();delete item.date_check;

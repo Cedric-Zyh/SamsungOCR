@@ -5,31 +5,27 @@ import hashlib
 import os
 import sys
 import threading
-import time
-import uuid
+import atexit
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 
-from receipt_ocr.application.analyzer import ReceiptAnalyzer
-from receipt_ocr.application import RecognitionService, resolve_recognition_options
+from receipt_ocr.application import RecognitionService
+from receipt_ocr.application.retries import ResultRetryService, MissingRetrySource, InvalidRetrySelection
 from receipt_ocr.application.document_service import DocumentRecognitionService
 from receipt_ocr.review import (
     apply_human_edits as _apply_human_edits,
     confirmation_error as _confirmation_error,
     prepare_review_payload,
 )
-from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS, PRINTED_FIELDS, HANDWRITTEN_FIELDS, derive_signature_check, recognition_fields
+from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS, PRINTED_FIELDS, HANDWRITTEN_FIELDS, derive_signature_check
 from receipt_ocr.persistence.database import (
     DEFAULT_RECOGNITION_SETTINGS,
     DEFAULT_RETENTION_DAYS,
     Database,
     now_iso,
 )
-from receipt_ocr.jobs.store import JobStore
-from receipt_ocr.jobs.worker import JobWorker
-from receipt_ocr.jobs.service import ReceiptJobService
 from receipt_ocr.evaluation import (
     build_ground_truth_entry,
     evaluate_backends,
@@ -40,13 +36,12 @@ from receipt_ocr.evaluation import (
 )
 from receipt_ocr.providers.catalog import backend_catalog, backend_label, default_backend, ocr_engine
 from receipt_ocr.recognition.seal.reading_policy import describe_secondary_read
-from receipt_ocr.recognition.seal.reference.matcher import SealReferenceMatcher
 from receipt_ocr.recognition.seal.providers.qingtong import render_selected_seal
 from receipt_ocr.recognition.seal.api import (
     SEAL_RECOGNITION_MODES,
 )
 from receipt_ocr.recognition.seal.orientation import SEAL_ORIENTATION_MODES
-from receipt_ocr.runtime import build_runtime_paths
+from receipt_ocr.runtime import RuntimePaths, build_runtime_paths
 from receipt_ocr.storage import ReceiptFileStore
 from receipt_ocr.web.maintenance import StorageMaintenance
 from .dependencies import QueueDependencies, RecognitionDependencies, ResultDependencies, ReviewDependencies
@@ -59,7 +54,8 @@ from receipt_ocr.web import remote_settings
 from receipt_ocr.web.local_models import local_models_handler
 from receipt_ocr.web import seal_standards as standard_handlers
 from receipt_ocr.domain.seal_standards import apply_standard_check
-from receipt_ocr.recognition.seal.postprocess.name_correction import company_name_correction_scope
+from receipt_ocr.application.configured_recognition import ConfiguredRecognition
+from .runtime import ApplicationRuntime
 from receipt_ocr.web.settings import normalize_recognition_settings as _normalize_recognition_settings
 
 
@@ -109,18 +105,17 @@ def asset_url(filename: str) -> str:
     return url_for('static', filename=filename, v=version)
 
 
-analyzer = ReceiptAnalyzer()
-database = Database(DATABASE_PATH)
-seal_reference_matcher = SealReferenceMatcher(ARTIFACT_DIR)
-recognition_service = RecognitionService(analyzer, seal_reference_matcher)
-_initialized = False
-_initialization_lock = threading.Lock()
-_retention_cleanup_lock = threading.Lock()
-_last_retention_cleanup = 0.0
-job_store = JobStore(database)
+application_runtime = ApplicationRuntime(RUNTIME_PATHS, logger=app.logger)
+# Stable compatibility names for existing scripts and HTTP dependency factories.
+# The runtime owns their construction, initialization, worker and shutdown.
+analyzer = application_runtime.analyzer
+database = application_runtime.database
+seal_reference_matcher = application_runtime.matcher
+recognition_service = application_runtime.recognition
+job_store = application_runtime.job_store
 job_worker = None
-
-
+_initialized = False
+_initialization_lock = threading.RLock()
 
 
 def _queue_dependencies():
@@ -205,54 +200,38 @@ def _purge_expired_data() -> dict:
 
 
 def _maybe_purge_expired_data() -> None:
-    """Keep a long-running server within the retention window without scanning on every request."""
-    global _last_retention_cleanup
-    now = time.monotonic()
-    if now - _last_retention_cleanup < 3600:
-        return
-    with _retention_cleanup_lock:
-        now = time.monotonic()
-        if now - _last_retention_cleanup < 3600:
-            return
-        _purge_expired_data()
-        _last_retention_cleanup = now
+    application_runtime.maybe_purge()
 
 
 def initialize(*, start_worker: bool = True) -> None:
-    global _initialized, job_store, job_worker, _last_retention_cleanup
-    if job_worker is not None:
-        raise RuntimeError('后台任务已启动，请勿重复初始化服务')
-    for directory in (UPLOAD_DIR, PREVIEW_DIR, ARTIFACT_DIR, EXPORT_DIR):
-        directory.mkdir(parents=True, exist_ok=True)
-    database.initialize()
-    from receipt_ocr.persistence.seal_standard_images import migrate_standard_images
-    migrate_standard_images(database,
-        history_databases=(database.path.parent / 'sample-center' / 'results.db',))
-    remote_settings.restore(database)
-    saved_qingtong = database.get_json_setting('qingtong_credentials', None)
-    if isinstance(saved_qingtong, dict):
-        analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
-    job_store = JobStore(database)
-    job_store.initialize()
-    _purge_expired_data()
-    _last_retention_cleanup = time.monotonic()
-    database.recover_interrupted_tasks()
-    database.enforce_uncertain_review_queue()
-    seal_reference_matcher.refresh(
-        database, load_ground_truth(GROUND_TRUTH_PATH)
-    )
-    _initialized = True
-    if start_worker and app.config['BACKGROUND_WORKER']:
-        service = ReceiptJobService(_configured_analyze,
-            data_dir=DATA_DIR, upload_dir=UPLOAD_DIR, preview_dir=PREVIEW_DIR, artifact_dir=ARTIFACT_DIR)
-        job_worker = JobWorker(job_store, service, logger=app.logger)
-        job_worker.start()
+    with _initialization_lock:
+        global application_runtime, recognition_service, _initialized, job_store, job_worker
+        paths = RuntimePaths(RESOURCE_DIR, DATA_DIR, STORAGE_DIR, UPLOAD_DIR, PREVIEW_DIR,
+            ARTIFACT_DIR, EXPORT_DIR, database.path, GROUND_TRUTH_PATH)
+        runtime = application_runtime
+        if (runtime.paths != paths or runtime.database is not database
+                or runtime.analyzer is not analyzer or runtime.matcher is not seal_reference_matcher
+                or runtime.recognition is not recognition_service):
+            if runtime.job_worker is not None and not runtime.closed:
+                raise RuntimeError('后台任务已启动，不能替换正在使用的运行环境')
+            runtime.close()
+            # Rebind the default service if a caller supplied a different matcher.
+            if recognition_service is runtime.recognition:
+                recognition_service = RecognitionService(analyzer, seal_reference_matcher)
+            application_runtime = ApplicationRuntime(paths, database=database, analyzer=analyzer,
+                matcher=seal_reference_matcher, recognition=recognition_service, logger=app.logger)
+        application_runtime.initialize(start_worker=start_worker and app.config['BACKGROUND_WORKER'])
+        job_store = application_runtime.job_store
+        job_worker = application_runtime.job_worker
+        _initialized = application_runtime.initialized
 
 
 def ensure_initialized() -> None:
     # Importing this module must not recover tasks or write to the real DB.
     # WSGI/Flask CLI initialize on their first request; direct launch below
     # initializes before accepting requests.
+    if application_runtime.closed or application_runtime.stopping:
+        abort(503, description='服务正在关闭，请重新启动后再试')
     if not _initialized:
         with _initialization_lock:
             if not _initialized:
@@ -261,23 +240,9 @@ def ensure_initialized() -> None:
 
 
 def _configured_analyze(*args, recognition_config=None, previous_fields=None, **kwargs):
-    # Other windows may have saved new credentials since this worker started.
-    remote_settings.restore(database)
-    saved_qingtong = database.get_json_setting('qingtong_credentials', None)
-    if isinstance(saved_qingtong, dict):
-        analyzer.seal_api.api_key = saved_qingtong.get('api_key', '')
-    from receipt_ocr.recognition.seal.layout_settings import seal_layout_settings_scope
-    standards = database.list_seal_standards()
-    with company_name_correction_scope(standards), seal_layout_settings_scope(standards):
-        result = recognition_service.recognize(
-            *args,
-            recognition_config=recognition_config,
-            previous_fields=previous_fields,
-            **kwargs,
-        )
-    requirement = (result.get("fields") or {}).get("签章要求", "")
-    return apply_standard_check(result, database.get_seal_standard(requirement))
-
+    # Compatibility entry point also supports explicitly replaced dependencies.
+    return ConfiguredRecognition(database, analyzer, recognition_service, remote_settings.restore).recognize(
+        *args, recognition_config=recognition_config, previous_fields=previous_fields, **kwargs)
 
 
 
@@ -576,113 +541,54 @@ def result_ground_truth(result_id: int):
 
 
 
+def _retry_service():
+    return ResultRetryService(database, _document_service(), _source_for_record,
+        analyzer.seal_api.enabled, job_store, DATA_DIR)
+
+
 def retry_result(result_id: int):
     payload = request.get_json(silent=True) or {}
     if payload.get('background'):
         return _enqueue_result_retries([result_id], payload)
+    service = _retry_service()
     try:
-        current = database.get_result(result_id)
+        prepared = service.prepare(result_id, payload)
     except KeyError:
         abort(404)
-    source = _source_for_record(current)
-    if not source or not source.is_file():
-        return jsonify({"error": "原始图片不存在，无法重新识别"}), 409
-    payload = request.get_json(silent=True) or {}
-    try:
-        options = resolve_recognition_options(
-            settings=database.get_json_setting("recognition_defaults"),
-            recognition_config=payload.get("recognition_config", current.get("recognition_config")),
-            ocr_backend=payload.get("ocr_backend") or current.get("ocr_backend"),
-            seal_recognition_mode=(
-                payload.get("seal_recognition_mode")
-                or current.get("seal_recognition_mode")
-                or (current.get("seal_check") or {}).get("recognition_mode")
-            ),
-            api_enabled=analyzer.seal_api.enabled,
-        )
+    except MissingRetrySource:
+        return jsonify(error='原始图片不存在，无法重新识别'), 409
     except (ValueError, RuntimeError) as exc:
-        return jsonify({"error": str(exc)}), 400
-    result, preview_name = _document_service().recognize(
-        source,
-        recognition_config=options.recognition_config,
-        previous_fields=recognition_fields(current),
-        filename=current["filename"], created_at=current["created_at"],
-        ocr_backend=options.ocr_backend,
-        seal_recognition_mode=options.seal_recognition_mode,
-    )
-    return jsonify(database.replace_after_retry(result_id, result, preview_name))
+        return jsonify(error=str(exc)), 400
+    return jsonify(service.execute(result_id, prepared))
 
 
 def bulk_review():
     return review_handlers.bulk_review(_review_dependencies())
 
 
-
 def bulk_retry():
     payload = request.get_json(silent=True) or {}
     if payload.get('background'):
         return _enqueue_result_retries(payload.get('ids'), payload)
+    service = _retry_service()
     output = []
-    for raw_id in payload.get("ids", []):
+    for raw_id in payload.get('ids', []):
         result_id = int(raw_id)
         try:
-            current = database.get_result(result_id)
-            source = _source_for_record(current)
-            if not source or not source.is_file():
-                raise FileNotFoundError("原始图片不存在")
-            options = resolve_recognition_options(
-                settings=database.get_json_setting("recognition_defaults"),
-                recognition_config=payload.get("recognition_config", current.get("recognition_config")),
-                ocr_backend=payload.get("ocr_backend") or current.get("ocr_backend"),
-                seal_recognition_mode=(
-                    payload.get("seal_recognition_mode")
-                    or current.get("seal_recognition_mode")
-                    or (current.get("seal_check") or {}).get("recognition_mode")
-                ),
-                api_enabled=analyzer.seal_api.enabled,
-            )
-            result, preview_name = _document_service().recognize(
-                source,
-                recognition_config=options.recognition_config,
-                previous_fields=recognition_fields(current),
-                filename=current["filename"], created_at=current["created_at"],
-                ocr_backend=options.ocr_backend,
-                seal_recognition_mode=options.seal_recognition_mode,
-            )
-            output.append({"id": result_id, "ok": True, "result": database.replace_after_retry(result_id, result, preview_name)})
+            prepared = service.prepare(result_id, payload)
+            output.append({'id': result_id, 'ok': True, 'result': service.execute(result_id, prepared)})
         except Exception as exc:
-            output.append({"id": result_id, "ok": False, "error": str(exc)})
+            output.append({'id': result_id, 'ok': False, 'error': str(exc)})
     return jsonify(output)
 
 
 def _enqueue_result_retries(ids, payload):
-    if (not isinstance(ids, list) or not ids or len(ids) > 2000 or
-        any(type(i) is not int or i <= 0 for i in ids)):
-        return jsonify(error='请选择有效的回单记录'), 400
-    ids = list(dict.fromkeys(ids))
-    options = {}
     try:
-        for result_id in ids:
-            current = database.get_result(result_id)
-            source = _source_for_record(current)
-            if source is None or not source.is_file():
-                return jsonify(error=f"原始图片不存在：{current['filename']}"), 409
-            resolved = resolve_recognition_options(
-                settings=database.get_json_setting("recognition_defaults"),
-                recognition_config=payload.get('recognition_config', current.get('recognition_config')),
-                ocr_backend=payload.get('ocr_backend') or current.get('ocr_backend'),
-                seal_recognition_mode=(
-                    payload.get('seal_recognition_mode')
-                    or current.get('seal_recognition_mode')
-                    or 'local'
-                ),
-                api_enabled=analyzer.seal_api.enabled,
-            )
-            options[result_id] = {
-                **resolved.as_dict(),
-                '_stored_name': f'sample:{source.name}' if source.parent.resolve() == DATA_DIR.resolve() else current['stored_name'],
-            }
-        task = job_store.create_retries(uuid.uuid4().hex, ids, options)
+        task = _retry_service().enqueue(ids, payload)
+    except InvalidRetrySelection as exc:
+        return jsonify(error=str(exc)), 400
+    except MissingRetrySource as exc:
+        return jsonify(error=f'原始图片不存在：{exc.filename_label}'), 409
     except KeyError:
         return jsonify(error='选中的回单不存在'), 404
     except (ValueError, RuntimeError) as exc:
@@ -891,6 +797,14 @@ register_routes(app, {
     'files': files,
 }, before_request=ensure_initialized)
 
+def shutdown() -> bool:
+    app.extensions['sample_runtime'].close()
+    return application_runtime.close()
+
+
+atexit.register(shutdown)
+
+
 def run() -> None:
     """Start the local Flask server."""
     # Werkzeug's reloader parent must not keep an old queue worker alive while
@@ -905,9 +819,7 @@ def run() -> None:
             debug=os.getenv("FLASK_DEBUG", "0") == "1",
         )
     finally:
-        app.extensions['sample_runtime'].close()
-        if job_worker is not None:
-            job_worker.stop()
+        shutdown()
 
 
 if __name__ == "__main__":

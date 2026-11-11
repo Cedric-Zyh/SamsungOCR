@@ -8,12 +8,13 @@ from .domain.printed_field_selection import canonical_printed_field, select_prin
 from .domain.issues import issue
 from .persistence.issue_migration import OPTIONAL_STAGE_REASONS, migrate_issues
 from .domain.fields.schema import PRINTED_FIELDS, derive_signature_check
-from .domain.parsing import compare_dates, parse_date
-from .domain.parsing.parsing_seals import compare_seal_text_strict
 from .provider_field_policy import DZT_LAYOUT_REASONS, accept_real_dzt_fields
-from receipt_ocr.recognition.seal.providers.qingtong import compare_qingtong_seal
 from .domain.seal_provider_selection import combine_seal_provider_checks
 from .domain.review_policy import has_human_edits
+from .domain.saved_evidence import (SavedStageEvidence,
+                                    provider_trace as _provider_trace,
+                                    completed_real_trace as _live_trace)
+from .application.saved_checks import refresh_provider_check, recompare_requirement
 
 
 REFRESH_ACTION = "识别规则更新"
@@ -28,112 +29,15 @@ _RESOLVED_REASONS = {
 }
 
 
-def _live_trace(trace):
-    return (isinstance(trace, dict) and trace.get("simulated") is False
-            and trace.get("mode") == "real" and trace.get("status") == "completed")
-
-
-def _provider_trace(result, stage, details=None):
-    """Keep the independent seal scene separate from full-page evidence.
-
-    An explicitly saved empty or failed seal trace must not fall through to
-    the page trace merely because that trace happened to complete.
-    """
-    details = details or {}
-    if stage == "seal":
-        for saved in (details, result):
-            if "danzhengtong_seal" in saved:
-                return saved.get("danzhengtong_seal") or {}
-        for saved in (details, result):
-            check = saved.get("seal_check") or {}
-            if check.get("model_id") and isinstance(check.get("candidates"), list):
-                return {}  # An incomplete dedicated save cannot borrow page evidence.
-    return details.get("danzhengtong") or result.get("danzhengtong") or {}
-
-
-def _dedicated_seal_check(check, requirement, trace):
-    """Recompare each physical stamp on its own; never join their strings."""
-    if not (isinstance(trace.get("requests"), list)
-            or (trace.get("model_id") and trace.get("model_id") == check.get("model_id"))):
-        return None
-    from .danzhengtong_seal import normalize_seal_result
-
-    candidates, metadata = [], []
-    saved = check.get("candidates") or []
-    for request in trace.get("requests") or []:
-        if not isinstance(request, dict) or request.get("simulated") is True:
-            continue
-        if (request.get("region") or {}).get("role") == "发货单位章":
-            continue
-        if request.get("status") not in {"completed", "received"}:
-            continue
-        commit = (request.get("result") or {}).get("commitResult")
-        if not isinstance(commit, dict):
-            continue
-        normalized = normalize_seal_result(commit)
-        fields = normalized["fields"]
-        position = len(candidates)
-        original = next((item for item in saved if isinstance(item, dict)
-                         and request.get("index") is not None and item.get("index") == request["index"]),
-                        saved[position] if position < len(saved) and isinstance(saved[position], dict) else {})
-        candidates.append({**deepcopy(original), "index": request.get("index", original.get("index", position)),
-                           "text": fields["收货客户印章"], "color": fields["印章颜色"],
-                           "type": fields["印章类型"]})
-        metadata.append(normalized["metadata"])
-    # Saved per-stamp candidates remain usable when an older dedicated save
-    # omitted its child traces. The selected display string is not a candidate
-    # source, and full-page commitResult is deliberately never read here.
-    if not candidates and "requests" not in trace:
-        candidates = [deepcopy(item) for item in saved if isinstance(item, dict)
-                      and isinstance(item.get("text"), str)
-                      and item.get("role") != "发货单位章"
-                      and (item.get("region") or {}).get("role") != "发货单位章"]
-    rebuilt = compare_seal_text_strict(requirement, [item["text"] for item in candidates])
-    selected = next((index for index, item in enumerate(candidates)
-                     if item["text"] == rebuilt.get("recognized")), 0)
-    item = candidates[selected] if candidates else {}
-    rebuilt.update(recognition_mode="danzhengtong", model_id=trace.get("model_id") or check.get("model_id", ""),
-                   provider_color=item.get("color", ""), provider_seal_type=item.get("type", ""),
-                   candidates=candidates)
-    if metadata:
-        rebuilt["provider_metadata"] = deepcopy(metadata[selected])
-    elif item.get("text") != check.get("recognized"):
-        rebuilt["provider_metadata"] = {}
-    return rebuilt
+def _check_evidence(check, stage, method, trace, details=None):
+    # Compatibility for callers that already selected a provider trace.
+    payload = {**(details or {}), f"{stage}_check": check,
+               "danzhengtong_seal" if stage == "seal" else "danzhengtong": trace}
+    return SavedStageEvidence.from_variant(stage, {"method": method, "result": payload})
 
 
 def _refresh_check(check, stage, method, fields, trace):
-    if not check or check.get("status") in {"未执行", "识别失败"}:
-        return check
-    if stage == "seal" and method == "qingtong":
-        external = check.get("api") or {}
-        if external.get("ok") is not True or not isinstance(external.get("response"), dict):
-            return check
-        rebuilt = compare_qingtong_seal(check.get("requirement") or fields.get("签章要求", ""), external)
-        return {**check, **rebuilt}
-    if method != "danzhengtong" or not _live_trace(trace) or check.get("simulated") is True:
-        return check
-    commit = (trace.get("result") or {}).get("commitResult") or {}
-    if stage == "date":
-        item = commit.get("签收日期") or {}
-        text = item.get("value") if isinstance(item, dict) else None
-        text = check.get("raw_text", check.get("actual", "")) if text is None else str(text)
-        rebuilt = compare_dates(canonical_printed_field("要求到货", check.get("required") or fields.get("要求到货", "")),
-                                parse_date(canonical_printed_field("要求到货", text)))
-        rebuilt.update(reliable=rebuilt["status"] in {"匹配", "不匹配"}, raw_text=text)
-    else:
-        dedicated = _dedicated_seal_check(check, check.get("requirement") or fields.get("签章要求", ""), trace)
-        if dedicated is not None:
-            dedicated.update(simulated=False, backend="单证通", source="单证通")
-            return {**check, **dedicated}
-        item = commit.get("收货客户印章") or {}
-        text = item.get("value") if isinstance(item, dict) else None
-        text = check.get("recognized", "") if text is None else str(text)
-        rebuilt = compare_seal_text_strict(check.get("requirement") or fields.get("签章要求", ""),
-                                           [text] if text else [])
-        rebuilt["recognition_mode"] = "danzhengtong"
-    rebuilt.update(simulated=False, backend="单证通", source="单证通")
-    return {**check, **rebuilt}
+    return refresh_provider_check(_check_evidence(check, stage, method, trace), fields)
 
 
 def _method(check):
@@ -149,14 +53,15 @@ def _refresh_document_fields(result):
     variants = (result.get("recognition_variants") or {}).get("fields") or []
     candidates = []
     for variant in variants:
-        if variant.get("method") != "danzhengtong" or variant.get("error"):
+        evidence = SavedStageEvidence.from_variant("fields", variant, result)
+        if evidence.method != "danzhengtong" or not evidence.active:
             continue
-        details = variant.get("details") or {}
+        details = evidence.details
         metadata = details.get("field_metadata") or {}
         if any(meta.get("simulated") is True for meta in metadata.values()):
             continue
         candidates.append((details.get("fields") or {},
-                           details.get("danzhengtong") or result.get("danzhengtong") or {}))
+                           evidence.trace))
     if (not variants and "danzhengtong" in ((result.get("recognition_config") or {}).get("fields") or [])
             and (result.get("recognition_status") or {}).get("fields") not in {"未执行", "识别失败"}):
         # Older saves may lack variants. Require both the selected field stage
@@ -238,49 +143,8 @@ def _printed_conflict(item):
             or (item.get("code") == "provider_conflict" and item.get("scope") == "fields"))
 
 
-def _recompare_printed_requirement(check, stage, method, fields, trace, acceptance):
-    """Recompare saved observations without treating an old verdict as evidence."""
-    copied = deepcopy(check)
-    requirement = fields.get("要求到货" if stage == "date" else "签章要求", "")
-    if stage == "date":
-        requirement = canonical_printed_field("要求到货", requirement)
-    copied["required" if stage == "date" else "requirement"] = requirement
-    if not check or check.get("status") in {"未执行", "识别失败"} or check.get("execution_status") == "skipped":
-        return copied
-    live_dzt = method == "danzhengtong" and _live_trace(trace) and check.get("simulated") is not True
-    if live_dzt:
-        if stage == "seal":
-            dedicated = _dedicated_seal_check(check, requirement, trace)
-            if dedicated is not None:
-                return {**copied, **dedicated}
-        commit = (trace.get("result") or {}).get("commitResult") or {}
-        item = commit.get("签收日期" if stage == "date" else "收货客户印章") or {}
-        value = item.get("value") if isinstance(item, dict) else None
-        if value is not None:
-            text = str(value)
-            if stage == "date":
-                rebuilt = compare_dates(requirement, parse_date(canonical_printed_field("要求到货", text)))
-                rebuilt.update(reliable=rebuilt["status"] in {"匹配", "不匹配"}, raw_text=text)
-            else:
-                rebuilt = compare_seal_text_strict(requirement, [text] if text else [])
-            return {**copied, **rebuilt}
-    external = check.get("api") or {}
-    if (stage == "seal" and method == "qingtong" and external.get("ok") is True
-            and isinstance(external.get("response"), dict) and not check.get("simulated")):
-        return {**copied, **compare_qingtong_seal(requirement, external,
-                         match_mode=acceptance.get("seal_match_mode", "any"))}
-    if (stage == "seal" and check.get("comparison_policy") in {"strict_text", "strict_information_fields"}
-            and check.get("recognized") and not check.get("simulated")
-            and method not in {"danzhengtong", "qingtong"}):
-        rebuilt = compare_seal_text_strict(requirement, [check["recognized"]])
-        rebuilt["reliable"] = bool(rebuilt.get("reliable") and check.get("reliable") is True)
-        return {**copied, **rebuilt}
-    # Historical local dates may have inherited digits from the old required
-    # date.  Without independent saved OCR evidence they cannot prove a match
-    # against the newly selected business requirement.
-    copied.update(status="需人工复核", reliable=False,
-                  message="比对依据已更新，需重新核对" + ("签收日期" if stage == "date" else "客户印章"))
-    return copied
+def _recompare_printed_requirement(check, stage, method, fields, trace, acceptance, details=None):
+    return recompare_requirement(_check_evidence(check, stage, method, trace, details), fields, acceptance)
 
 
 def _refresh_printed_dependency(result, stage):
@@ -292,15 +156,12 @@ def _refresh_printed_dependency(result, stage):
     saved = (result.get("recognition_variants") or {}).get(stage) or []
     variants = []
     for variant in saved:
-        details = variant.get("details") or {}
-        check = details.get(key) or {}
-        if variant.get("error"):
-            variants.append({"method": variant.get("method", ""), "error": variant["error"]})
-        elif check:
-            method = variant.get("method", "")
-            rebuilt = _recompare_printed_requirement(check, stage, method, fields,
-                _provider_trace(result, stage, details), acceptance)
-            variants.append({"method": method, "result": {key: rebuilt}})
+        evidence = SavedStageEvidence.from_variant(stage, variant, result)
+        if not evidence.active:
+            variants.append({"method": evidence.method, "error": variant.get("error") or "未完成识别"})
+        elif evidence.check:
+            rebuilt = recompare_requirement(evidence, fields, acceptance)
+            variants.append({"method": evidence.method, "result": {key: rebuilt}})
     successful = [variant for variant in variants if "result" in variant]
     if successful:
         combined, decision_variants, primary = select_variants(stage, successful, acceptance)
@@ -315,8 +176,16 @@ def _refresh_printed_dependency(result, stage):
         apply_match_mode(result, stage, variants, successful, combined, acceptance)
     else:
         old = result.get(key) or {}
-        result[key] = _recompare_printed_requirement(old, stage, _method(old), fields,
-                                                    _provider_trace(result, stage), acceptance)
+        if saved:
+            # An aggregate is not another independent reading. If its saved
+            # sources are inactive, the record-level trace cannot revive it.
+            required_key, field = ("required", "要求到货") if stage == "date" else ("requirement", "签章要求")
+            result[key] = {**deepcopy(old), required_key: fields.get(field, ""),
+                           "status": "需人工复核", "reliable": False,
+                           "message": "比对依据已更新，保存的识别来源尚不可用"}
+        else:
+            result[key] = _recompare_printed_requirement(old, stage, _method(old), fields,
+                                                        _provider_trace(result, stage), acceptance)
         apply_match_mode(result, stage, variants, successful, None, acceptance)
 
 
@@ -406,13 +275,12 @@ def refresh_provider_result(current):
         variants = (result.get("recognition_variants") or {}).get(stage) or []
         successful = []
         for variant in variants:
-            details = variant.get("details") or {}
-            old = details.get(key) or {}
-            if variant.get("error") or not old or old.get("status") == "未执行":
+            evidence = SavedStageEvidence.from_variant(stage, variant, result)
+            details, old = evidence.details, evidence.check
+            if not evidence.active or not old:
                 continue
-            method = variant.get("method", "")
-            provider_trace = _provider_trace(result, stage, details)
-            new = _refresh_check(old, stage, method, fields, provider_trace)
+            method, provider_trace = evidence.method, evidence.trace
+            new = refresh_provider_check(evidence, fields)
             if new != old:
                 refreshed.add(stage)
                 details[key] = new
@@ -437,7 +305,7 @@ def refresh_provider_result(current):
             elif any(not check.get("reliable") for check in decision_checks):
                 primary["reliable"] = False
             result[key] = primary
-        elif not successful:
+        elif not successful and not variants:
             method = _method(old)
             provider_trace = _provider_trace(result, stage)
             new = _refresh_check(old, stage, method, fields, provider_trace)

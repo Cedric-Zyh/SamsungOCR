@@ -51,8 +51,8 @@ const ReceiptWorkbench = (() => {
   function checkStatus(record, key) {
     const check = key === 'signature' ? signatureCheck(record) : record[`${key}_check`];
     if (!check) return '结果未加载';
-    if (check.status === '匹配' && !check.reliable) return '匹配待确认';
-    return check.status || '未识别';
+    const status = check.status === '匹配' && !check.reliable ? '匹配待确认' : check.status || '未识别';
+    return key === 'seal' && ['匹配待确认', '需人工复核'].includes(status) ? '待确认' : status;
   }
   function dateValue(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return '';

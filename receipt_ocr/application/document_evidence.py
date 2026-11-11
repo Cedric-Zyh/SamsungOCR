@@ -7,6 +7,8 @@ from ..domain.results import StageOutcome
 from ..domain.stages import STAGES
 from ..domain.printed_field_selection import select_printed_fields
 from ..domain.date_selection import select_date_variant
+from ..domain.saved_evidence import SavedStageEvidence
+from .saved_checks import recompare_requirement
 
 
 def stage_outcomes(results):
@@ -48,24 +50,17 @@ def evaluate_document_evidence(results, previous_fields, config, *, recompare=Fa
     fields = selected_document_fields(outcomes["fields"], previous_fields)
     if not recompare or preserve_provider_checks:
         return outcomes, fields
-    from ..review import _review_date, _review_seal
-    from ..recognition.seal.providers.qingtong import compare_qingtong_seal
-
     for stage in ("date", "seal"):
         for index, outcome in enumerate(outcomes[stage]):
-            if not outcome.has_result or outcome.method == "danzhengtong":
+            evidence = SavedStageEvidence.from_variant(stage, outcome)
+            if not outcome.has_result or not evidence.active:
                 continue
             key = f"{stage}_check"
-            check = outcome.payload.get(key, {})
-            if stage == "date":
-                updated = _review_date(check, fields, {"要求到货": check.get("required", "")}, {})
-            elif check.get("requirement", "") == fields.get("签章要求", ""):
+            check = evidence.check
+            field, required_key = ("要求到货", "required") if stage == "date" else ("签章要求", "requirement")
+            if check.get(required_key, "") == fields.get(field, ""):
                 continue
-            elif outcome.method == "qingtong" and check.get("api"):
-                updated = compare_qingtong_seal(fields.get("签章要求", ""), check["api"],
-                    (config.get("acceptance") or {}).get("seal_match_mode", "any"))
-            else:
-                updated = _review_seal(check, fields, {"签章要求": check.get("requirement", "")}, {})
+            updated = recompare_requirement(evidence, fields, config.get("acceptance") or {})
             payload = {**outcome.payload, key: updated}
             outcomes[stage][index] = replace(outcome, payload=payload)
     return outcomes, fields

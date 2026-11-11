@@ -167,6 +167,7 @@ def test_existing_database_adds_schedule_without_resubmitting_accepted_requests(
     set_page(runtime, job_id, 'waiting')
     # Remove only the new projection to recreate the preceding database schema.
     with runtime.store.database.connect() as con:
+        con.execute("DELETE FROM schema_migrations WHERE component='danzhengtong_jobs'")
         con.execute('DROP TRIGGER invalidate_dzt_dispatch')
         for kind in ('dirty', 'submit', 'query', 'apply', 'manual'):
             con.execute(f'DROP INDEX idx_dzt_dispatch_{kind}')

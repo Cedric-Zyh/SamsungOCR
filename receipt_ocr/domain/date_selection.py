@@ -1,14 +1,9 @@
 """Select one existing date observation without altering provider evidence."""
 from copy import deepcopy
 
-from .evidence_selection import inactive
 from .parsing.parsing_dates import parse_date
 from .printed_field_selection import canonical_printed_field
-
-
-def _details(variant):
-    details = variant.get('result')
-    return details if isinstance(details, dict) else variant.get('details') or {}
+from .saved_evidence import SavedStageEvidence, variant_details as _details
 
 
 def _check(variant):
@@ -20,9 +15,8 @@ def _parsed(value):
 
 
 def _usable(variant):
-    details, check = _details(variant), _check(variant)
-    return bool(check) and not any(inactive(value) for value in
-                                  (variant, details, check, details.get('danzhengtong')))
+    evidence = SavedStageEvidence.from_variant('date', variant)
+    return bool(evidence.check) and evidence.active
 
 
 def select_date_variant(variants, *, required_date=None):

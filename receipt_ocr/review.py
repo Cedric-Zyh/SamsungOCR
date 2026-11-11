@@ -5,8 +5,8 @@ from copy import deepcopy
 from .domain.decision import decide_overall
 from .domain.issues import issue, active_issues
 from .domain.fields.schema import derive_signature_check, project_fields
-from .domain.parsing import LOW_CONFIDENCE_THRESHOLD, compare_dates, compare_seal_text, parse_date, product_table_text
-from .domain.parsing.parsing_seals import compare_seal_text_strict
+from .domain.parsing import LOW_CONFIDENCE_THRESHOLD, compare_seal_text, parse_date, product_table_text
+from .domain.check_comparison import STRICT_SEAL_POLICIES, compare_machine_date, compare_machine_seals
 
 
 def confirmation_error(result, review_status, final_result):
@@ -44,7 +44,7 @@ def _review_date(previous, fields, old_fields, payload):
     if not (changed or confirmed or required_changed):
         return deepcopy(previous)
     parsed = parse_date(actual)
-    check = {**deepcopy(previous), **compare_dates(fields.get("要求到货", ""), parsed)}
+    check = {**deepcopy(previous), **compare_machine_date(fields.get("要求到货", ""), actual)}
     if changed or confirmed:
         check.update(confidence=1.0 if parsed else 0.0, reliable=bool(parsed),
                      source="人工复核", human_confirmed=bool(parsed))
@@ -59,10 +59,13 @@ def _review_seal(previous, fields, old_fields, payload):
     confirmed = isinstance(human_match, bool) and (bool(text) or human_match is False)
     if not (changed or required_changed or confirmed):
         return deepcopy(previous)
-    compare = (compare_seal_text_strict if previous.get("dual_check")
-               or previous.get("recognition_mode") == "danzhengtong"
-               or previous.get("backend") == "单证通" else compare_seal_text)
-    check = {**deepcopy(previous), **compare(fields.get("签章要求", ""), [text] if text else [])}
+    remote = (previous.get("dual_check") or previous.get("recognition_mode") == "danzhengtong"
+              or previous.get("backend") == "单证通")
+    strict = remote or previous.get("comparison_policy") in STRICT_SEAL_POLICIES
+    comparison = (compare_machine_seals(fields.get("签章要求", ""), [text] if text else [], local=not remote,
+                                        reliable=True if changed or confirmed else previous.get("reliable") is True)
+                  if strict else compare_seal_text(fields.get("签章要求", ""), [text] if text else []))
+    check = {**deepcopy(previous), **comparison}
     check.pop("human_confirmed_match", None)
     if confirmed:
         check.update(status="匹配" if human_match else "不匹配", score=1.0,

@@ -41,6 +41,16 @@ export function createProgress({
   const drawer = createTaskDrawer({environment, ui, progressState, renderWorkbenchRows, openManagedRecords});
   const dzt = createDanzhengtongControls({environment, ui, services, progressState, recordsState, refresh: () => loadDailyResults()});
 
+  function showImportedTask({day}) {
+    progressState.workFilters = null;
+    progressState.workFilter = 'processing';
+    progressState.workVisibleLimit = WORK_PAGE_SIZE;
+    progressState.dailyReady = false;
+    $('#progress-date').value = day;
+    try { localStorage.setItem('receipt-progress-date', day); } catch (_) {}
+    openManagedRecords(day);
+  }
+
   async function showQueuedRetry(task) {
     $('#progress-date').value = (task.created_at || '').slice(0, 10) || localToday();
     try { localStorage.setItem('receipt-progress-date', $('#progress-date').value); } catch (_) {}
@@ -474,5 +484,5 @@ export function createProgress({
 
   }
 
-  return {initialize, drawer, showQueuedRetry, renderTask, renderWorkbenchRows, renderQueueControl, syncStartRecognition, startRecognition, loadDailyResults, changeProcessingDay, shiftProcessingDay};
+  return {initialize, drawer, showImportedTask, showQueuedRetry, renderTask, renderWorkbenchRows, renderQueueControl, syncStartRecognition, startRecognition, loadDailyResults, changeProcessingDay, shiftProcessingDay};
 }

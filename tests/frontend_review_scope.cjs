@@ -3,6 +3,7 @@ const test = require('node:test');
 const {createReviewQueue} = require('../static/modules/review/review_queue.mjs');
 const {normalizeReviewScope, reviewScopeRequest} = require('../static/modules/review/review_scope.mjs');
 const workbench = require('../static/modules/core/workbench.mjs').ReceiptWorkbench;
+const {createReviewDialog} = require('../static/modules/shell/review_dialog.mjs');
 
 const row = id => ({id, filename:`${id}.jpg`, fields:{客户名称:'甲客户'}, review_status:'待复核'});
 const page = (items, total=items.length, number=1) => ({items,total,page:number,page_size:100});
@@ -21,8 +22,11 @@ function harness() {
     api:async(url) => {requests.push(url);return options.response(url);},response:()=>page([row(1)]),
     canLeaveReview:()=>options.leaveAllowed !== false,openReview:async id=>{opened.push(id);state.current=row(id);},
     showReviewEmpty:()=>{state.current=null;},showPage:page=>{environment.document.body.dataset.activePage=page;}};
+  const navigationState = {};
+  options.reviewNavigation = createReviewDialog({environment,ui:options.ui,navigationState,reviewState:state,
+    recordsState:{},showPage:options.showPage});
   const queue = createReviewQueue(options);
-  return {queue,state,$,requests,opened,options,environment};
+  return {queue,state,navigationState,$,requests,opened,options,environment};
 }
 
 test('filtered scope snapshots every filter and retains it through paging, refresh and next', async () => {
@@ -43,7 +47,7 @@ test('filtered scope snapshots every filter and retains it through paging, refre
   }
   assert.equal(h.$('#review-scope-label').textContent,'客户：甲客户');
   assert.equal(h.opened[0],101);
-  assert.equal(h.state.reviewOrigin.hash,'#records');
+  assert.equal(h.navigationState.reviewOrigin.hash,'#records');
 });
 
 test('selected scope uses server IDs on every page and an empty selection is explicit', async () => {

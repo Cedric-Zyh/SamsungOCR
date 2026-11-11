@@ -2,6 +2,8 @@
 from datetime import datetime
 import json
 
+from ..domain.remote_tasks import remote_state, aggregate_remote, next_submission
+
 
 LIVE = "active=1 AND status NOT IN ('applied','conflict','cancelled')"
 SOURCE_COLUMNS = (
@@ -20,7 +22,7 @@ def deadline(value):
         return 0.0
 
 
-def initialize_schedule(con):
+def initialize_schedule(con, *, rebuild=False):
     columns = {row['name'] for row in con.execute('PRAGMA table_info(danzhengtong_jobs)')}
     additions = {
         'dispatch_version': 'INTEGER NOT NULL DEFAULT 0',
@@ -32,6 +34,9 @@ def initialize_schedule(con):
     for name, definition in additions.items():
         if name not in columns:
             con.execute(f'ALTER TABLE danzhengtong_jobs ADD COLUMN {name} {definition}')
+    if rebuild:
+        con.execute('DROP TRIGGER IF EXISTS invalidate_dzt_dispatch')
+        con.execute('UPDATE danzhengtong_jobs SET dispatch_dirty=1,dispatch_version=dispatch_version+1')
     changed = ' OR '.join(f'OLD.{key} IS NOT NEW.{key}' for key in SOURCE_COLUMNS)
     con.execute(f'''CREATE TRIGGER IF NOT EXISTS invalidate_dzt_dispatch
         AFTER UPDATE OF {','.join(SOURCE_COLUMNS)} ON danzhengtong_jobs
@@ -51,7 +56,6 @@ def initialize_schedule(con):
 
 
 def normalized_task(task):
-    from .danzhengtong_store import remote_state, aggregate_remote
     state = remote_state(task)
     aggregate = aggregate_remote(state)
     if task['status'] == 'received' and aggregate['status'] == 'received':
@@ -60,13 +64,11 @@ def normalized_task(task):
 
 
 def projection(task, state):
-    from .danzhengtong_store import next_remote_operation
     if task['status'] == 'received':
         return 0, None, deadline(task['next_query_at'])
     if task['status'] not in {'queued', 'waiting'}:
         return 0, None, None
-    submit = next_remote_operation({**task, 'manual_query': 0}, state,
-        {'submit_paused': False, 'auto_query': False}, prefer_submit=True)
+    submit = next_submission(state)
     queries = []
     page = state['page']
     if state.get('page_required') and page.get('status') == 'waiting' and task.get('req_uuid'):

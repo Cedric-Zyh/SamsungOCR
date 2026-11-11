@@ -1,6 +1,5 @@
 """One short request at a time; waiting never occupies the regular OCR worker."""
 from dataclasses import replace
-from datetime import datetime
 import hashlib
 import json
 import logging
@@ -8,7 +7,11 @@ import sqlite3
 import threading
 from time import perf_counter
 
-from .danzhengtong_store import later, scope_plan, settings_identity, aggregate_remote
+from .danzhengtong_store import later, scope_plan, settings_identity
+from ..domain.remote_tasks import (
+    aggregate_remote, begin_upload, begin_submission, accept_submission,
+    fail_submission, fail_operation, finish_query,
+)
 from ..persistence.database_clock import now_iso
 from ..persistence.recognition_calls import trace_timestamp
 from ..persistence.async_recognition_calls import remote_call, record_transport_phase
@@ -39,10 +42,14 @@ class DanzhengtongWorker(SealRequests):
     def wake(self):
         self._wake.set()
 
+    def is_alive(self):
+        return bool((self._thread is not None and self._thread.is_alive())
+                    or self.images.is_alive())
+
     def stop(self, timeout=5):
         self._stop.set()
         self._wake.set()
-        if self._thread:
+        if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout)
         self.images.stop(timeout)
 
@@ -84,14 +91,12 @@ class DanzhengtongWorker(SealRequests):
                 state = seal_state(task)
                 if operation.startswith('page_'):
                     page = state['page']
-                    page.update(status='waiting' if task.get('req_uuid') else
-                                'unknown' if page.get('status') == 'submitting' else 'failed',
-                                error=error, next_query_at=later(30) if task.get('req_uuid') else '')
+                    page.update(fail_operation(page, req_uuid=task.get('req_uuid'),
+                                               error=error, retry_at=later(30)))
                 elif task.get('_child_index') is not None:
                     child = state['requests'][task['_child_index']]
-                    child.update(status='waiting' if child.get('req_uuid') else
-                                 'unknown' if child.get('status') == 'submitting' else 'failed',
-                                 error=error, next_query_at=later(30) if child.get('req_uuid') else '')
+                    child.update(fail_operation(child, req_uuid=child.get('req_uuid'),
+                                                error=error, retry_at=later(30)))
                 else:
                     state.update(prepared=True, preparation_error=error)
                 self._finish_seal_step(task, state)
@@ -147,7 +152,7 @@ class DanzhengtongWorker(SealRequests):
                 'recognition_invoked': False, 'transport': transport,
                 **RecognitionCalls(source).input_metadata(source)}
         call['input_name'] = job['filename']
-        page.update(status='uploading', error='')
+        page.update(begin_upload())
         if not self._save_seals(task, state, environment_json=json.dumps(settings_identity(client.settings)),
                                 source_hash=digest, recognition_call_json=json.dumps(call, ensure_ascii=False)):
             return
@@ -162,13 +167,13 @@ class DanzhengtongWorker(SealRequests):
                                           trace_timestamp(), terminal=True,
                                           started_at=upload_started_at, status='failed')
             call['error'] = f'上传失败（{type(exc).__name__}）'
-            page.update(status='failed', error=safe_error_text(exc, client.settings), next_query_at='')
+            page.update(fail_submission(safe_error_text(exc, client.settings), submitted=False))
             self._finish_page(task, state, recognition_call_json=json.dumps(call, ensure_ascii=False))
             return
         call = record_transport_phase(call, task, 'upload', perf_counter() - upload_started, trace_timestamp(),
                                       started_at=upload_started_at)
         call['transport']['phase'] = 'submitting'
-        page['status'] = 'submitting'
+        page.update(begin_submission())
         if not self._save_seals(task, state, file_id=uploaded['fileId'], status='submitting',
                                 recognition_call_json=json.dumps(call, ensure_ascii=False)):
             return
@@ -194,8 +199,8 @@ class DanzhengtongWorker(SealRequests):
                     'input_name': job['filename'], 'seconds': submit_seconds if measured else None}
             call = record_transport_phase(call, task, 'submit', submit_seconds, submit_finished_at, terminal=True,
                                           started_at=submit_started_at, status='failed')
-            page.update(status='failed' if getattr(exc, 'provider_rejected', False) else 'unknown',
-                        error=safe_error_text(exc, client.settings), next_query_at='')
+            page.update(fail_submission(safe_error_text(exc, client.settings), submitted=True,
+                                        rejected=getattr(exc, 'provider_rejected', False)))
             self._finish_page(task, state, recognition_call_json=json.dumps(call, ensure_ascii=False))
             return
         call = {**call, **captured.snapshot()['calls'][0], 'recognition_invoked': True,
@@ -203,7 +208,7 @@ class DanzhengtongWorker(SealRequests):
         call = record_transport_phase(call, task, 'submit', submit_seconds, submit_finished_at,
                                       started_at=submit_started_at)
         # Persist the provider's accepted ID before doing any GET or local work.
-        page.update(status='waiting', error='', next_query_at=later(2))
+        page.update(accept_submission(next_query_at=later(2)))
         self._finish_page(task, state, req_uuid=body['data']['reqUuid'],
                           submission_json=json.dumps(body, ensure_ascii=False), submitted_at=now_iso(),
                           recognition_call_json=json.dumps(call, ensure_ascii=False))
@@ -251,7 +256,8 @@ class DanzhengtongWorker(SealRequests):
             if commit is not None and not isinstance(commit, dict):
                 raise ValueError('单证通查询返回的 commitResult 格式错误')
             if commit:
-                page.update(status='completed', error='', next_query_at='', last_query_at=now_iso())
+                page.update(finish_query(submitted_at=task['submitted_at'],
+                                         observed_at=now_iso(), completed=True))
                 self._finish_seal_step(task, state, result_json=json.dumps(data, ensure_ascii=False),
                     last_query_at=now_iso(), query_count=task['query_count'] + 1,
                     recognition_call_json=measured_call(terminal=True))
@@ -259,10 +265,8 @@ class DanzhengtongWorker(SealRequests):
             error = ''
         except Exception as exc:
             error = safe_error_text(exc, getattr(locals().get('client'), 'settings', None))
-        elapsed = (datetime.now().astimezone() - datetime.fromisoformat(task['submitted_at'])).total_seconds()
-        delay = 2 if elapsed < 60 else 30 if elapsed < 600 else 120
-        page.update(status='waiting', error=error, last_query_at=now_iso(),
-                    next_query_at=later(max(30, delay) if error else delay))
+        page.update(finish_query(submitted_at=task['submitted_at'], observed_at=now_iso(),
+                                 completed=False, error=error))
         self._finish_seal_step(task, state, last_query_at=now_iso(),
             query_count=task['query_count'] + int(started is not None), recognition_call_json=measured_call())
 

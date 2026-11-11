@@ -1,9 +1,15 @@
 """Protect saved human decisions when refreshing machine evidence."""
 
+from .saved_evidence import variant_details
+
 def has_human_edits(result):
     """Skip the whole record when any saved human decision could be affected."""
     if (result.get("review_status") in {"确认通过", "确认不通过"}
             or result.get("human_note") or result.get("page_review_override")):
+        return True
+    if any(has_human_edits(variant_details(variant))
+           for variants in (result.get("recognition_variants") or {}).values()
+           for variant in variants):
         return True
     checks = [result.get(key) or {} for key in ("date_check", "seal_check", "signature_check")]
     metadata = list((result.get("field_metadata") or {}).values())

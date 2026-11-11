@@ -1,6 +1,8 @@
 """Select usable handwriting evidence without confusing absence with disagreement."""
 
 from copy import deepcopy
+from collections.abc import Mapping
+from .saved_evidence import variant_details
 
 from .fields.schema import HANDWRITTEN_FIELDS
 from .evidence_selection import inactive as _inactive, confidence as _confidence, choose_candidate
@@ -21,12 +23,10 @@ def canonical_handwriting_fields(result):
 def _candidates(variants, name):
     candidates = []
     for variant in variants:
-        if not isinstance(variant, dict) or _inactive(variant):
+        if not isinstance(variant, Mapping) or _inactive(variant):
             continue
-        details = variant.get("result")
-        if not isinstance(details, dict):
-            details = variant.get("details") or {}
-        if not isinstance(details, dict) or _inactive(details):
+        details = variant_details(variant)
+        if not isinstance(details, Mapping) or _inactive(details):
             continue
         if _inactive(details.get("danzhengtong")) or _inactive(details.get("handwriting_check")):
             continue

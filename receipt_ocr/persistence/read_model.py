@@ -26,18 +26,21 @@ def summary_expression(source: str) -> str:
     return "json_patch('{}', json_object(" + ", ".join(pairs) + "))"
 
 
-def initialize_read_model(connection) -> None:
+def initialize_read_model(connection, *, rebuild=False) -> None:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(results)")}
     if "summary_json" not in columns:
         connection.execute("ALTER TABLE results ADD COLUMN summary_json TEXT NOT NULL DEFAULT ''")
     expression = summary_expression("NEW.result_json")
     for event in ("INSERT", "UPDATE OF result_json"):
         name = "insert" if event == "INSERT" else "update"
+        if rebuild:
+            connection.execute(f"DROP TRIGGER IF EXISTS results_summary_{name}")
         connection.execute(f"""CREATE TRIGGER IF NOT EXISTS results_summary_{name}
             AFTER {event} ON results BEGIN
                 UPDATE results SET summary_json={expression} WHERE id=NEW.id;
             END""")
-    connection.execute(f"UPDATE results SET summary_json={summary_expression('result_json')} WHERE summary_json=''")
+    condition = "" if rebuild else " WHERE summary_json=''"
+    connection.execute(f"UPDATE results SET summary_json={summary_expression('result_json')}{condition}")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_results_import_day ON results(substr(created_at,1,10),id) WHERE deleted_at=''")
 
 
