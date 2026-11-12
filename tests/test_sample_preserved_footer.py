@@ -18,6 +18,7 @@ from test_danzhengtong_jobs import COMMIT
 
 
 FOOTER_WARNING = '签收页脚尚未确认，请核对本页或关联续页'
+DOCUMENT_WARNING = '文档版式仍需人工核对'
 
 
 def receipt_result(present=True):
@@ -190,9 +191,9 @@ def damaged_applied_footer(samples):
         result = json.loads(row['result_json'])
         result['review_issues'].extend([
             issue('footer_unconfirmed', 'document', FOOTER_WARNING),
-            issue('provider_conflict', 'handwriting', '签名来源存在独立分歧'),
+            issue('review_required', 'document', DOCUMENT_WARNING),
         ])
-        result['review_reasons'].extend([FOOTER_WARNING, '签名来源存在独立分歧'])
+        result['review_reasons'].extend([FOOTER_WARNING, DOCUMENT_WARNING])
         result.update(overall='需人工复核', final_result='需人工复核', review_status='待复核')
         payload = json.dumps(result, ensure_ascii=False)
         con.execute("""UPDATE results SET result_json=?,original_result_json=?,
@@ -215,7 +216,8 @@ def test_historical_footer_repair_is_local_audited_and_idempotent(samples):
     repaired = service.database.get_result(item['result_id'])
     assert not footer_issues(repaired)
     assert FOOTER_WARNING not in repaired['review_reasons']
-    assert '签名来源存在独立分歧' in repaired['review_reasons']
+    assert DOCUMENT_WARNING in repaired['review_reasons']
+    assert issue('review_required', 'document', DOCUMENT_WARNING) in repaired['review_issues']
     assert repaired['overall'] == '需人工复核'
     assert repaired['fields'] == before['fields']
     assert repaired['recognition_variants'] == before['recognition_variants']
@@ -225,7 +227,7 @@ def test_historical_footer_repair_is_local_audited_and_idempotent(samples):
         original = json.loads(con.execute('SELECT original_result_json FROM results WHERE id=?',
                                          (item['result_id'],)).fetchone()[0])
     assert not footer_issues(original)
-    assert '签名来源存在独立分歧' in original['review_reasons']
+    assert DOCUMENT_WARNING in original['review_reasons']
     branch = json.loads(service.store.get(item['job_id'])['branch_snapshot_json'])
     assert branch['snapshot']['context']['has_footer'] is True
     assert service.store.remote_detail(item['job_id']) == remote_before
@@ -276,7 +278,8 @@ def test_historical_repair_replays_legacy_ocr_only_when_footer_is_supported(samp
     assert result['signature_footer']['anchor'] == observations[0]
     assert result['fields'] == before['fields']
     assert result['recognition_variants'] == before['recognition_variants']
-    assert '签名来源存在独立分歧' in result['review_reasons']
+    assert DOCUMENT_WARNING in result['review_reasons']
+    assert issue('review_required', 'document', DOCUMENT_WARNING) in result['review_issues']
     repaired_branch = json.loads(service.store.get(item['job_id'])['branch_snapshot_json'])
     assert repaired_branch['snapshot']['context']['has_footer'] is True
     assert repaired_branch['base']['signature_footer'] == result['signature_footer']
