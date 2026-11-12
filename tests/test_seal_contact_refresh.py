@@ -102,13 +102,13 @@ def test_non_target_or_untrusted_evidence_is_never_refreshed(change):
     assert refresh_seal_contact_results(current) == current
 
 
-@pytest.mark.parametrize('mode,status', [('any', '匹配'), ('all', '部分匹配'), ('none', '未核对')])
+@pytest.mark.parametrize('mode,status', [('any', '匹配'), ('all', '部分匹配'), ('none', '匹配')])
 def test_acceptance_modes_are_retained(mode, status):
     current = saved_result()
     current['recognition_config']['acceptance']['seal_match_mode'] = mode
     updated = refresh_seal_contact_results(current)
     assert updated['seal_check']['status'] == status
-    if mode != 'any':
+    if mode == 'all':
         assert updated['review_issues'] == current['review_issues']
         assert updated['overall'] == current['overall']
 

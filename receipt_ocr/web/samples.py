@@ -5,7 +5,7 @@ from werkzeug.exceptions import NotFound
 from receipt_ocr.api.revisions import review_revision, with_review_revision
 from receipt_ocr.recognition.seal.providers.qingtong import render_selected_seal
 from receipt_ocr.samples.runtime import SampleRuntime
-from receipt_ocr.samples.service import SampleNotFound
+from receipt_ocr.samples.service import SampleNotFound, SampleUnavailable
 from receipt_ocr.samples.library import LibraryConflict
 from receipt_ocr.samples.company_marks import MarkConflict
 from receipt_ocr.samples.requirement_groups import classify_requirements
@@ -18,17 +18,22 @@ def register_sample_routes(app, get_dependencies):
     bp = Blueprint("samples", __name__)
     runtime = SampleRuntime(get_dependencies)
     app.extensions['sample_runtime'] = runtime
-    center = runtime.get
+    def center():
+        return app.extensions['sample_runtime'].get()
 
     @bp.errorhandler(SampleNotFound)
     def missing_sample(error):
         return NotFound()
 
+    @bp.errorhandler(SampleUnavailable)
+    def unavailable_sample(error):
+        return jsonify(error=str(error)), 503
+
     @bp.get("/api/samples")
     def listing():
         service = center()
         if app.config["BACKGROUND_WORKER"]:
-            service.worker.start()
+            service.start_worker()
         response = jsonify(service.listing(request.args.get('revision')))
         response.headers['Cache-Control'] = 'no-store'
         return response
@@ -129,10 +134,12 @@ def register_sample_routes(app, get_dependencies):
                                  settings=settings, api_enabled=dependencies.seal_api_enabled)
         except LibraryConflict as exc:
             return jsonify(error=str(exc)), 409
+        except SampleUnavailable:
+            raise
         except (ValueError, RuntimeError) as exc:
             return jsonify(error=str(exc)), 400
         if app.config["BACKGROUND_WORKER"] and result["accepted"]:
-            service.worker.start()
+            service.start_worker()
         return jsonify(result), 202
 
     @bp.get('/api/samples/tasks/<task_id>')
@@ -226,5 +233,5 @@ def register_sample_routes(app, get_dependencies):
     from .bootstrap_data import register_bootstrap_routes
     register_bootstrap_routes(bp, get_dependencies, center)
     from .danzhengtong_jobs import register_danzhengtong_routes
-    register_danzhengtong_routes(bp, lambda: center().store, lambda: center().worker.start(), prefix='/api/samples')
+    register_danzhengtong_routes(bp, lambda: center().store, lambda: center().start_worker(), prefix='/api/samples')
     app.register_blueprint(bp)

@@ -93,7 +93,7 @@ def test_schema_upgrade_leaves_older_standard_unmarked(app_store):
     assert db.get_seal_standard(saved['requirement'])['horizontal_text']=='unmarked'
 
 
-def test_web_recognition_uses_saved_layout_snapshot_before_running_the_recognizer(app_store,monkeypatch):
+def test_web_recognition_uses_saved_layout_snapshot_before_running_the_recognizer(bind_application_runtime, app_store,monkeypatch):
     from types import SimpleNamespace
     from receipt_ocr.web import application as web
     db,client,add,_=app_store
@@ -104,8 +104,8 @@ def test_web_recognition_uses_saved_layout_snapshot_before_running_the_recognize
         with seal_requirement_layout(saved['requirement']):
             seen.append(explicit_horizontal_text_policy('round'))
         return db.get_result(ident)
-    monkeypatch.setattr(web.remote_settings,'restore',lambda *args:None)
-    monkeypatch.setattr(web,'recognition_service',SimpleNamespace(recognize=recognize))
+    runtime = bind_application_runtime(recognition=SimpleNamespace(recognize=recognize))
+    monkeypatch.setattr(runtime.configured_recognition,'restore_remote_settings',lambda *args:None)
     web._configured_analyze('unused-input')
     assert seen[0]['setting']=='absent' and seen[0]['standard_id']==saved['id']
     with seal_requirement_layout(saved['requirement']):

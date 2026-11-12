@@ -18,7 +18,7 @@ def _contact_names(value):
         return []
     # The extractor uses 、; accept common separators too for old records or
     # manually edited values.
-    parts = re.split(r"[、,，/／;；|]+", text)
+    parts = re.split(r"[、,，/／;；|｜]+", text)
     return [part.strip() for part in parts if part.strip()]
 
 
@@ -29,7 +29,8 @@ def derive_signature_check(fields, previous=None):
     evidence; this helper only compares one pair of recognized fields.
     Preserve an explicit human choice or saved policy aggregation while the
     two source fields are unchanged. Reading a result must not replace a
-    skipped or multi-provider check with this single pair's comparison.
+    multi-provider check with this single pair's comparison. A legacy skipped
+    check must be recomputed even when excluded from the overall decision.
     """
     fields = fields or {}
     contact = str(fields.get("仓库联系人") or "").strip()
@@ -44,7 +45,7 @@ def derive_signature_check(fields, previous=None):
     if (prior.get("contact") == contact
             and prior.get("receiver") == receiver
             and isinstance(prior.get("reliable"), bool)
-            and ((mode == "none" and status == "未核对")
+            and ((mode == "none" and status in {"匹配", "不匹配", "未识别"})
                  or (mode in ("any", "all") and status in ("匹配", "不匹配", "需人工复核")))):
         return {**prior, "contact": contact, "receiver": receiver}
     normalized = lambda value: "".join(str(value).split())

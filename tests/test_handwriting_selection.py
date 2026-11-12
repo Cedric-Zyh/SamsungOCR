@@ -63,7 +63,7 @@ def test_same_name_ignores_extra_fields_missing_empty_keys_and_whitespace():
 
 
 @pytest.mark.parametrize("strong_method,weak_method", [
-    ("danzhengtong", "paddle_v6"), ("paddle_v6", "danzhengtong"),
+    ("danzhengtong", "paddle_v6"), ("paddle_v6", "other_local"),
 ])
 def test_explicit_low_confidence_guess_cannot_override_clearer_result(strong_method, weak_method):
     weak = variant(weak_method, "郭豪", confidence=.5, low_confidence=True)
@@ -73,6 +73,27 @@ def test_explicit_low_confidence_guess_cannot_override_clearer_result(strong_met
     assert selected["fields"]["仓库接收人"] == "郭亮"
     assert not selected["conflict"]
     assert weak["result"]["handwriting_metadata"]["仓库接收人"]["low_confidence"] is True
+
+
+@pytest.mark.parametrize('saved', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_conflicting_receiver_prefers_danzhengtong_over_local_confidence_and_votes(saved, reverse):
+    variants = [variant('paddle_v6', '赵立新', confidence=.99),
+                variant('other_local', '赵立新', confidence=.98),
+                variant('danzhengtong', '赵建新', confidence=.4, low_confidence=True, source='单证通')]
+    if reverse:
+        variants.reverse()
+    if saved:
+        variants = [saved_variant(item) for item in variants]
+    before = deepcopy(variants)
+    selected = select_handwriting(variants)
+    assert selected['fields']['仓库接收人'] == '赵建新'
+    assert selected['selected_method'] == 'danzhengtong'
+    assert selected['metadata']['仓库接收人']['source'] == '单证通'
+    assert selected['metadata']['仓库接收人']['low_confidence'] is True
+    assert not selected['conflict']
+    assert '优先采用单证通' in selected['reason']
+    assert variants == before
 
 
 @pytest.mark.parametrize("first,second", [(.90, .94), (.64, .65), (.84, .85)])

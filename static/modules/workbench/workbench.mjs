@@ -1,5 +1,6 @@
 import {createWorkbenchSummary} from './summary.mjs';
 import {createDailyQuery} from './query.mjs';
+import {createDailyQueryView} from './query_view.mjs';
 import {createApiClients} from '../core/api.mjs';
 import {localToday} from '../core/ui.mjs';
 import {createImportCalendar} from '../imports/import_calendar.mjs';
@@ -32,14 +33,24 @@ export function createProgress({
     selectDate: day => { $('#progress-date').value = day; changeProcessingDay(); }});
 
   const {renderTask, renderOverview} = createWorkbenchSummary({environment, ui, progressState, ReceiptWorkbench});
-  const {loadDailyResults} = createDailyQuery({
+  const queryView = createDailyQueryView({
     environment, ui, progressState, importsState,
-    services, calendar, selected, viewState, pageSize: WORK_PAGE_SIZE,
-    ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
-    renderQueueControl, renderTask, renderWorkbenchRows, onResultsChanged, onQueueChanged
+    selected, viewState, pageSize: WORK_PAGE_SIZE,
+    syncSelection, syncStartRecognition, renderQueueControl, renderTask, renderWorkbenchRows
+  });
+  const dailyQuery = createDailyQuery({
+    progressState, services, ReceiptQueue, ReceiptWorkbench,
+    onStateChange: queryView.render, onResultsChanged, onQueueChanged
   });
   const drawer = createTaskDrawer({environment, ui, progressState, renderWorkbenchRows, openManagedRecords});
   const dzt = createDanzhengtongControls({environment, ui, services, progressState, recordsState, refresh: () => loadDailyResults()});
+
+  async function loadDailyResults(options = {}) {
+    const day = $('#progress-date').value || localToday();
+    $('#progress-date').value = day;
+    calendar.sync();
+    return dailyQuery.load(day, {...options, isCurrent: () => $('#progress-date').value === day});
+  }
 
   function showImportedTask({day}) {
     progressState.workFilters = null;

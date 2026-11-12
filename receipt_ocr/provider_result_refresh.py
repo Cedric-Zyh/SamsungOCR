@@ -1,6 +1,7 @@
 """Reapply provider comparison rules to saved machine evidence without OCR calls."""
 
 from copy import deepcopy
+from .domain.decision_provenance import track_machine_refresh
 
 from .domain.decision import apply_signature_match_mode, finalize_result
 from .domain.handwriting_selection import select_handwriting
@@ -92,6 +93,7 @@ def _handwriting_conflict(item):
             or (item.get("code") == "provider_conflict" and item.get("scope") == "handwriting"))
 
 
+@track_machine_refresh('handwriting_refresh', ('evidence_selection', 'overall_decision'))
 def refresh_handwriting_result(current):
     """Repair only saved receiver selection, leaving provider evidence intact.
 
@@ -189,6 +191,7 @@ def _refresh_printed_dependency(result, stage):
         apply_match_mode(result, stage, variants, successful, None, acceptance)
 
 
+@track_machine_refresh('printed_fields_refresh', ('date_comparison', 'seal_comparison', 'evidence_selection', 'overall_decision'))
 def refresh_printed_fields_result(current):
     """Select saved printed fields independently; preserve raw provider evidence."""
     result = deepcopy(current)
@@ -261,6 +264,7 @@ def refresh_printed_fields_result(current):
     return finalize_result(result)
 
 
+@track_machine_refresh('provider_refresh', ('date_comparison', 'seal_comparison', 'evidence_selection', 'overall_decision'))
 def refresh_provider_result(current):
     """Return a copy with refreshed provider decisions; preserve all human records."""
     if has_human_edits(current):

@@ -33,6 +33,30 @@ test('preview uses stored comparison policy, including multiple acceptable conta
   item.date_check={status:'未执行'};
   assert.equal(resultPreviewModel(item,ReceiptWorkbench).rows[0].actual,'未执行');
 });
+test('excluded signature mismatch remains visible while the receipt passes without review attention',()=>{
+  const item=record();
+  item.fields['仓库接收人']='赵建新';
+  item.recognition_config={acceptance:{date_match_mode:'any',seal_match_mode:'any',signature_match_mode:'none'}};
+  item.signature_check={status:'未核对',reliable:true,source:'按设置跳过',match_mode:'none'};
+  const model=resultPreviewModel(item,ReceiptWorkbench);
+  assert.equal(model.status,'已通过');
+  assert.equal(model.rows[2].status,'不匹配');
+  assert.equal(model.rows[2].included,false);
+  assert.equal(model.attention.length,0);
+  assert.doesNotMatch(renderResultPreview(model),/均匹配|项待确认|不计入整单判定/);
+});
+test('excluded date and seal mismatches do not put a passed receipt back in the review list',()=>{
+  for(const key of ['date','seal']) {
+    const item=record();
+    item.recognition_config={acceptance:{[`${key}_match_mode`]:'none'}};
+    item[`${key}_check`].status='不匹配';
+    assert.equal(ReceiptWorkbench.category(item),'passed');
+    assert.equal(ReceiptWorkbench.issues(item).some(issue=>issue.target===key),false);
+    assert.equal(resultPreviewModel(item,ReceiptWorkbench).attention.length,0);
+    item.recognition_config.acceptance[`${key}_match_mode`]='any';
+    assert.equal(ReceiptWorkbench.category(item),'review');
+  }
+});
 test('seal review states share a pending label while preserving the original evidence',()=>{
   for (const status of ['匹配', '匹配待确认', '需人工复核']) {
     const item=record();

@@ -56,6 +56,11 @@ def test_screenshot_record_differences_in_width_missing_and_empty_values_are_not
     ("实收数量", 0, "0.0"),
     ("拒收数量", "０", "0"),
     ("客户名称", "客户 甲", "客户甲"),
+    ("仓库联系人", "赵立新、张小虎", "赵立新/张小虎"),
+    ("仓库联系人", "赵立新、张小虎", "赵立新／张小虎"),
+    ("仓库联系人", "赵立新、张小虎", "赵立新， 张小虎"),
+    ("仓库联系人", "赵立新、张小虎", "赵立新;张小虎"),
+    ("仓库联系人", "赵立新、张小虎", "赵立新｜张小虎"),
 ])
 def test_equivalent_formats_compare_equal_without_changing_raw_evidence(name, first, second):
     variants = [variant("one", {name: first}), variant("two", {name: second})]
@@ -69,6 +74,12 @@ def test_equivalent_formats_compare_equal_without_changing_raw_evidence(name, fi
 def test_meaningful_seal_symbols_are_not_removed_by_normalization():
     assert canonical_printed_field("签章要求", "收货章①") != canonical_printed_field("签章要求", "收货章1")
     assert canonical_printed_field("签章要求", "收货章(04)") != canonical_printed_field("签章要求", "收货章04")
+
+
+def test_contact_normalization_keeps_real_name_differences_and_other_field_symbols():
+    assert canonical_printed_field("仓库联系人", "赵立新、张小虎") != canonical_printed_field("仓库联系人", "赵建新/张小虎")
+    assert canonical_printed_field("仓库联系人", "赵立新、张小虎") != canonical_printed_field("仓库联系人", "赵立新张小虎")
+    assert canonical_printed_field("客户名称", "甲/乙") != canonical_printed_field("客户名称", "甲、乙")
 
 
 @pytest.mark.parametrize("name,bad,good", [
@@ -150,3 +161,44 @@ def test_provider_specific_ratio_does_not_decide_between_different_values():
     ])
     assert output["conflicts"] == ["客户名称"]
     assert "confidence" not in output["metadata"]["客户名称"]
+
+
+@pytest.mark.parametrize('convert', [lambda values: values, lambda values: [saved(v) for v in values]])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_conflicting_printed_fields_prefer_danzhengtong_over_confidence_and_local_agreement(convert, reverse):
+    local_fields = {'仓库联系人': '赵立新、张小虎', '客户名称': '本地客户', '要求到货': '2026-09-19',
+                    '签章要求': '本地客户收货章', '合计数量': '26', '实收数量': '25', '拒收数量': '1'}
+    remote_fields = {'仓库联系人': '赵建新/张小虎', '客户名称': '单证通客户', '要求到货': '2026-09-20',
+                     '签章要求': '单证通客户收货章', '合计数量': '27', '实收数量': '27', '拒收数量': '0'}
+    variants = [variant('paddle_v6', local_fields, {name: {'confidence': .99} for name in local_fields}),
+                variant('other_local', local_fields, {name: {'confidence': .98} for name in local_fields}),
+                variant('danzhengtong', remote_fields, {name: {'source': '单证通', 'low_confidence': False} for name in remote_fields})]
+    if reverse:
+        variants.reverse()
+    variants = convert(variants)
+    before = deepcopy(variants)
+    selected = select_printed_fields(variants)
+    assert selected['fields'] == remote_fields
+    assert not selected['conflicts']
+    for name in remote_fields:
+        assert selected['selections'][name]['selected_method'] == 'danzhengtong'
+        assert '优先采用单证通' in selected['selections'][name]['reason']
+        assert selected['metadata'][name]['source'] == '单证通'
+    assert variants == before
+
+
+@pytest.mark.parametrize('state', ['empty', 'failed', 'pending', 'simulated', 'invalid_format'])
+def test_unusable_danzhengtong_field_falls_back_to_a_valid_local_value(state):
+    local = variant('paddle_v6', {'要求到货': '2026-09-20'})
+    remote = variant('danzhengtong', {'要求到货': '2026-09-21'})
+    if state == 'empty':
+        remote['result']['fields']['要求到货'] = ''
+    elif state == 'failed':
+        remote['error'] = '查询失败'
+    elif state == 'invalid_format':
+        remote['result']['fields']['要求到货'] = '2026-02-30'
+    else:
+        remote['result'][state] = True
+    selected = select_printed_fields([local, remote])
+    assert selected['fields']['要求到货'] == '2026-09-20'
+    assert selected['selections']['要求到货']['selected_method'] == 'paddle_v6'

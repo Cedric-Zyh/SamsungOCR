@@ -1,4 +1,6 @@
 """Sample business operations and owned runtime resources."""
+from threading import RLock
+
 from receipt_ocr.api.revisions import with_review_revision
 from receipt_ocr.domain.fields.schema import derive_signature_check
 from receipt_ocr.domain.seal_standards import apply_standard_check
@@ -20,8 +22,15 @@ class SampleNotFound(KeyError):
     """The requested sample source or saved result no longer exists."""
 
 
+class SampleUnavailable(RuntimeError):
+    """The sample owner is closing and cannot accept or restart work."""
+
+
 class SampleCenter:
     def __init__(self, dependencies: SampleDependencies):
+        self._lifecycle_lock = RLock()
+        self.stopping = False
+        self.closed = False
         self.dependencies = dependencies
         self.database = Database(dependencies.database.path.parent / "sample-center" / "results.db")
         self.database.path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +106,9 @@ class SampleCenter:
         for name in names:
             self.source(name)
         options = sample_execution_options(settings, mode, api_enabled=api_enabled)
-        return self.store.enqueue(names, options, settings)
+        with self._lifecycle_lock:
+            self._require_open()
+            return self.store.enqueue(names, options, settings)
 
     def history(self):
         with self.database.connect() as con:
@@ -112,5 +123,29 @@ class SampleCenter:
         rows = self.database.history(result_id) + self.database.ground_truth_history(name)
         return sorted(rows, key=lambda row: (row['changed_at'], row['id']), reverse=True)
 
-    def close(self):
-        self.worker.stop()
+    def _require_open(self):
+        if self.stopping or self.closed:
+            raise SampleUnavailable('样单后台任务正在停止，请稍后重新启动服务')
+
+    def start_worker(self):
+        with self._lifecycle_lock:
+            self._require_open()
+            try:
+                self.worker.start()
+            except BaseException:
+                self.stopping = True
+                self.worker.stop()
+                if not self.worker.is_alive():
+                    self.stopping = False
+                raise
+
+    def close(self) -> bool:
+        with self._lifecycle_lock:
+            if self.closed:
+                return True
+            self.stopping = True
+            self.worker.stop()
+            if self.worker.is_alive():
+                return False
+            self.closed = True
+            return True

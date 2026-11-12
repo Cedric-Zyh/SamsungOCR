@@ -449,17 +449,16 @@ def test_deleted_jobs_are_not_resurrected_in_daily_progress(store):
 
 
 @pytest.fixture
-def web_queue(store, tmp_path, monkeypatch):
+def web_queue(bind_application_runtime, store, tmp_path, monkeypatch):
     from receipt_ocr.web import application as web
+    paths = {}
     for name, child in [('UPLOAD_DIR', 'uploads'), ('PREVIEW_DIR', 'previews'),
                          ('ARTIFACT_DIR', 'artifacts'), ('DATA_DIR', 'data')]:
         directory = tmp_path / child
         directory.mkdir()
-        monkeypatch.setattr(web, name, directory)
-    monkeypatch.setattr(web, 'database', store.database)
-    monkeypatch.setattr(web, 'job_store', store)
-    monkeypatch.setattr(web, 'job_worker', None)
-    monkeypatch.setattr(web, 'analyzer', SimpleNamespace(seal_api=SimpleNamespace(enabled=False)))
+        paths[name.lower()] = directory
+    bind_application_runtime(database=store.database, job_store=store,
+        analyzer=SimpleNamespace(seal_api=SimpleNamespace(enabled=False)), **paths)
     return web
 
 
@@ -473,7 +472,7 @@ def test_http_upload_waits_for_start_and_finishes_without_browser(web_queue, mon
     service = ReceiptJobService(analyze, data_dir=web.DATA_DIR,
         upload_dir=web.UPLOAD_DIR, preview_dir=web.PREVIEW_DIR, artifact_dir=web.ARTIFACT_DIR)
     worker = JobWorker(web.job_store, service)
-    monkeypatch.setattr(web, 'job_worker', worker)
+    monkeypatch.setattr(web.application_runtime, 'job_worker', worker)
     try:
         worker.start()
         with web.app.test_client() as client:
@@ -899,7 +898,7 @@ def test_result_retry_uses_shared_settings_over_historical_plan(web_queue, monke
         output = result()
         output['recognition_config'] = kwargs['recognition_config']
         return output, 'preview.jpg'
-    monkeypatch.setattr(web_queue, '_document_service', lambda: SimpleNamespace(recognize=recognize))
+    monkeypatch.setattr(web_queue, '_document_service', lambda **kwargs: SimpleNamespace(recognize=recognize))
     response = web_queue.app.test_client().post(f'/api/results/{record_id}/retry', json={
         'background': background, 'ocr_backend': 'retired_backend',
         'recognition_config': {'fields': ['retired_backend']},

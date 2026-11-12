@@ -82,17 +82,18 @@ def test_empty_receivers_with_extra_quantity_keys_do_not_disagree():
     assert refresh_handwriting_result(updated) == updated
 
 
-def test_true_unresolved_name_disagreement_keeps_structured_handwriting_issue():
+def test_saved_receiver_disagreement_prefers_danzhengtong_and_preserves_local_evidence():
     current = saved_handwriting_result()
     paddle = current["recognition_variants"]["handwriting"][0]
     paddle["details"]["handwriting_fields"] = {"仓库接收人": "李明"}
     paddle["details"]["handwriting_metadata"] = {
         "仓库接收人": {"value": "李明", "source": "OCR", "low_confidence": False}}
     updated = refresh_provider_result(current)
-    assert CONFLICT in updated["review_reasons"]
-    assert any(item["code"] == "provider_conflict" and item["scope"] == "handwriting"
-               for item in updated["review_issues"])
-    assert updated["fields"]["仓库接收人"] in {"李明", "郭亮"}
+    assert CONFLICT not in updated["review_reasons"]
+    assert updated["handwriting_selection"]["conflict"] is False
+    assert updated["handwriting_selection"]["selected_method"] == "danzhengtong"
+    assert updated["fields"]["仓库接收人"] == "郭亮"
+    assert updated["recognition_variants"] == current["recognition_variants"]
     assert updated["final_result"] == "需人工复核"
     assert refresh_provider_result(updated) == updated
 
@@ -119,7 +120,7 @@ def test_missing_saved_handwriting_evidence_leaves_receiver_untouched():
     assert refresh_provider_result(current) == current
 
 
-@pytest.mark.parametrize("mode, status", [("none", "未核对"), ("any", "匹配"), ("all", "需人工复核")])
+@pytest.mark.parametrize("mode, status", [("none", "匹配"), ("any", "匹配"), ("all", "需人工复核")])
 @pytest.mark.parametrize("refresh", [refresh_handwriting_result, refresh_provider_result])
 def test_saved_selection_preserves_signature_match_mode_and_is_idempotent(mode, status, refresh):
     current = saved_handwriting_result()

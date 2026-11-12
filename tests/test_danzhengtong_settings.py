@@ -8,10 +8,10 @@ from receipt_ocr.web import remote_settings
 
 
 @pytest.fixture
-def client(monkeypatch, tmp_path):
+def client(bind_application_runtime, monkeypatch, tmp_path):
     db = Database(tmp_path / 'settings.db')
     db.initialize()
-    monkeypatch.setattr(web, 'database', db)
+    bind_application_runtime(database=db)
     monkeypatch.setattr(dzt, '_software_settings', dzt.Settings())
     return web.app.test_client()
 

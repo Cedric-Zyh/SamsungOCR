@@ -303,11 +303,9 @@ def test_cannot_apply_response_to_a_different_image_version(runtime):
     assert '图片版本' in runtime.store.remote_detail(job_id)['error_message']
 
 
-def test_remote_status_survives_management_list_hydration_and_api_queries(runtime, monkeypatch):
+def test_remote_status_survives_management_list_hydration_and_api_queries(bind_application_runtime, runtime, monkeypatch):
     from receipt_ocr.web import application as web
-    monkeypatch.setattr(web, 'database', runtime.store.database)
-    monkeypatch.setattr(web, 'job_store', runtime.store)
-    monkeypatch.setattr(web, 'job_worker', None)
+    bind_application_runtime(database=runtime.store.database, job_store=runtime.store)
     job_id = start(runtime)
     runtime.worker.step()
     job = finish_regular(runtime)
@@ -326,11 +324,9 @@ def test_remote_status_survives_management_list_hydration_and_api_queries(runtim
     assert runtime.client.submits == 1  # UI queries only enqueue GET work
 
 
-def test_regular_failure_finishes_progress_but_waits_for_independent_remote_verdict(runtime, monkeypatch):
+def test_regular_failure_finishes_progress_but_waits_for_independent_remote_verdict(bind_application_runtime, runtime, monkeypatch):
     from receipt_ocr.web import application as web
-    monkeypatch.setattr(web, 'database', runtime.store.database)
-    monkeypatch.setattr(web, 'job_store', runtime.store)
-    monkeypatch.setattr(web, 'job_worker', None)
+    bind_application_runtime(database=runtime.store.database, job_store=runtime.store)
     job_id = start(runtime)
     runtime.store.finish(runtime.store.claim(), error='常规识别暂时失败')
     task = runtime.store.task('task')

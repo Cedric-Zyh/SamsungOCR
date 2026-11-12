@@ -111,14 +111,17 @@ def test_replacing_field_removes_only_its_outdated_fallback():
     assert updated["field_fallbacks"]["仓库联系人"] == current["field_fallbacks"]["仓库联系人"]
 
 
-def test_unresolved_real_field_disagreement_still_requires_review():
+def test_saved_printed_field_disagreement_prefers_danzhengtong_without_an_extra_pass_condition():
     current = saved_result()
     select_replacement(current, "客户名称", "客户乙")
     current["recognition_variants"]["fields"][0]["details"]["field_metadata"]["客户名称"].update(confidence=.95, low_confidence=False)
     updated = refresh_printed_fields_result(current)
-    assert "客户名称" in updated["printed_field_selection"]["conflicts"]
-    assert CONFLICT in updated["review_reasons"]
-    assert updated["final_result"] == "需人工复核"
+    assert not updated["printed_field_selection"]["conflicts"]
+    assert updated["fields"]["客户名称"] == "客户乙"
+    assert updated["printed_field_selection"]["fields"]["客户名称"]["selected_method"] == "danzhengtong"
+    assert updated["recognition_variants"] == current["recognition_variants"]
+    assert CONFLICT not in updated["review_reasons"]
+    assert updated["final_result"] == "通过"
 
 
 @pytest.mark.parametrize("change", [
@@ -141,8 +144,8 @@ def test_changed_required_date_never_reuses_old_local_match(mode):
     current["recognition_config"]["acceptance"]["date_match_mode"] = mode
     updated = refresh_printed_fields_result(current)
     assert updated["date_check"]["required"] == "2025-01-05"
-    assert updated["date_check"]["status"] == ("未核对" if mode == "none" else "需人工复核")
-    assert updated["date_check"]["reliable"] is (mode == "none")
+    assert updated["date_check"]["status"] == "需人工复核"
+    assert updated["date_check"]["reliable"] is False
     assert updated["recognition_variants"] == current["recognition_variants"]
     assert refresh_printed_fields_result(updated) == updated
 
@@ -165,7 +168,7 @@ def test_changed_required_date_recompares_real_provider_observation_and_stays_id
     assert refresh(updated) == updated
 
 
-@pytest.mark.parametrize("mode, expected", [("any", "匹配"), ("all", "需人工复核"), ("none", "未核对")])
+@pytest.mark.parametrize("mode, expected", [("any", "匹配"), ("all", "需人工复核"), ("none", "匹配")])
 def test_recompared_date_retains_any_all_none_policy_with_two_providers(mode, expected):
     current = saved_result()
     select_replacement(current, "要求到货", "2025-01-05")

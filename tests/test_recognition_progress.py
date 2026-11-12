@@ -38,7 +38,7 @@ def response(body):
     return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body)
 
 
-def test_queue_api_reports_actual_stage_while_provider_is_still_running(store, tmp_path, monkeypatch):
+def test_queue_api_reports_actual_stage_while_provider_is_still_running(bind_application_runtime, store, tmp_path, monkeypatch):
     from receipt_ocr.web import application as web
     source = tmp_path / 'sample.jpg'
     source.write_bytes(b'image')
@@ -63,7 +63,7 @@ def test_queue_api_reports_actual_stage_while_provider_is_still_running(store, t
 
     client = dzt.Client(settings(), transport=SimpleNamespace(request=request))
     monkeypatch.setattr(dzt.time, 'sleep', lambda _: None)
-    monkeypatch.setattr(web, 'job_store', store)
+    bind_application_runtime(job_store=store)
 
     def execute(job):
         normalized, _ = client.recognize(source)

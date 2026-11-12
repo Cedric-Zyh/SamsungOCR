@@ -35,7 +35,7 @@ export function createSealPreview({environment, ui, showSource}) {
     const content = ui.$('#review-content'), viewport = ui.$('[data-image-viewport]', content);
     if (!viewport) return;
     const original = sealImageUrl(detail.original), processed = sealImageUrl(detail.processed);
-    const source = sealImageUrl(detail.url) || original || processed;
+    const source = sealImageUrl(detail.url) || sealImageUrl(detail.preferred) || processed || original;
     if (!source) return;
     toolbar = environment.document.createElement('div');
     toolbar.className = 'seal-preview-toolbar';
@@ -56,7 +56,7 @@ export function createSealPreview({environment, ui, showSource}) {
       display(mode === 'processed' ? processed : original, button.textContent, mode);
     }));
     display(source, detail.evidenceLabel || (source === processed
-      ? detail.processedLabel || '处理后' : detail.originalLabel || '原图'), source === original ? 'original' : source === processed ? 'processed' : 'evidence', detail.location, detail.evidenceSelected);
+      ? detail.processedLabel || '处理后' : detail.originalLabel || '原图'), source === processed ? 'processed' : source === original ? 'original' : 'evidence', detail.location, detail.evidenceSelected);
   }
   return {show, clear};
 }

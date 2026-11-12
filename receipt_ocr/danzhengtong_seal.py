@@ -17,6 +17,7 @@ import requests
 
 from .danzhengtong import Client, Settings
 from .danzhengtong_errors import safe_error_text
+from .domain.evidence_selection import inactive
 from .imaging.crops import save_region_crop, save_color_isolated_seal
 from .imaging.detection import detect_seal_regions
 from .imaging.seal_roles import sender_region_indices
@@ -209,6 +210,13 @@ def build_stage_result(context, previous_fields, results, trace=None, *, artifac
         text = normalized['fields']['收货客户印章']
         artifact = _returned_artifact(item, data, artifact_dir, artifact_url_prefix, download_mode=download_mode)
         artifacts.append(artifact)
+        # A late failure/waiting/simulation marker can coexist with an older
+        # completed payload. Keep its returned-image evidence and original
+        # trace, but never let that text or metadata vote as a current stamp.
+        if inactive(item) or inactive(data):
+            artifact.update(execution_status='skipped', skip_reason='inactive_provider_evidence')
+            failures.extend(str(value['error']) for value in (item, data) if value.get('error'))
+            continue
         if artifact.get('role') != '发货单位章':
             texts.append(text)
             metadata.append(normalized)

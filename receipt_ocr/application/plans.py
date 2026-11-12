@@ -16,6 +16,7 @@ from ..domain.stages import STAGES, STAGE_LABELS as LABELS
 from ..domain.issues import issue
 from ..domain.printed_field_selection import canonical_printed_field
 from ..domain.results import StageOutcome
+from ..domain.decision_provenance import record_evaluation, PROVENANCE_KEY
 from .document_evidence import selected_document_fields
 from .snapshots import DocumentSnapshot
 
@@ -292,7 +293,9 @@ def run_configured(analyzer, source, preview_path=None, *, config=None, previous
             ).to_json()
         output = assemble_result(context, config, results, errors, output, previous_fields,
                                  source, preview_path, kwargs)
+        record_evaluation(output, 'recognition', origin='recorded')
         if snapshot is not None:
+            snapshot[PROVENANCE_KEY] = deepcopy(output[PROVENANCE_KEY])
             output['_assembly_snapshot'] = snapshot
     output["processing_seconds"] = round(time.perf_counter() - started, 2)
     return output

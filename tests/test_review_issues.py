@@ -20,7 +20,7 @@ def test_low_confidence_policy_uses_code_instead_of_words():
     assert decide_overall(check, check, [], acceptance,
                           review_issues=[issue("low_confidence", "fields", "Uncertain field")]) == "通过"
     assert decide_overall(check, check, [], acceptance,
-                          review_issues=[issue("provider_conflict", "fields", "低置信度")]) == "需人工复核"
+                          review_issues=[issue("provider_conflict", "date", "低置信度")]) == "需人工复核"
 
 
 def test_provider_identity_survives_localized_error_text():

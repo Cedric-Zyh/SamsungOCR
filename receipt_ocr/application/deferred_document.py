@@ -7,6 +7,9 @@ from .snapshots import DocumentSnapshot
 from .document_evidence import selected_document_fields
 from ..domain.results import StageOutcome
 from ..domain.stages import STAGES
+from ..domain.decision_provenance import record_evaluation, PROVENANCE_KEY
+from ..domain.evidence_selection import inactive
+from ..domain.saved_evidence import completed_real_trace
 
 
 def empty_snapshot(config, previous_fields=None):
@@ -70,8 +73,11 @@ def combine_saved(source, filename, snapshot, *, remote=None, remote_seal=None, 
                 artifact_dir=remote_seal.get('artifact_dir'),
                 artifact_url_prefix=remote_seal.get('artifact_url_prefix', ''),
                 download_mode=remote_seal.get('download_mode', 'inline'))))
+    base = empty_result(context)
+    if PROVENANCE_KEY in saved.extra:
+        base[PROVENANCE_KEY] = deepcopy(saved.extra[PROVENANCE_KEY])
     output = assemble_result(context, config, results, failures,
-                             empty_result(context), fields, source, None, {
+                             base, fields, source, None, {
                                  'recompare_saved_checks': bool(remote and not remote_failed),
                                  'preserve_provider_checks': preserve_provider_checks,
                              })
@@ -81,4 +87,29 @@ def combine_saved(source, filename, snapshot, *, remote=None, remote_seal=None, 
         output['danzhengtong_seal'] = deepcopy(remote_seal.get('trace') or {})
     if pending:
         output = mark_danzhengtong_pending(output, config)
-    return output
+    # Scope the current policy context to this operation. Reusing saved checks
+    # does not relabel their original rules, and a seal-only response cannot
+    # claim that the saved date was evaluated under today's comparison policy.
+    page_stages = {stage for stage in STAGES if 'danzhengtong' in config[stage]
+                   and stage != 'products' and not (stage == 'seal' and remote_seal is not None)}
+    fresh_page = bool(page_stages and completed_real_trace(remote)
+                      and not inactive(remote.get('result'))
+                      and isinstance((remote.get('result') or {}).get('commitResult'), dict))
+    fresh_seal = bool(remote_seal is not None and 'danzhengtong' in config['seal']
+                      and not remote_seal.get('preparation_error')
+                      and completed_real_trace(remote_seal.get('trace'))
+                      and any(item.get('status') in {'completed', 'received'}
+                              and not inactive(item) and not inactive(item.get('result'))
+                              and (item.get('region') or {}).get('role') != '发货单位章'
+                              and isinstance(item.get('result'), dict)
+                              and isinstance(item['result'].get('commitResult'), dict)
+                              for item in remote_seal.get('requests', []) if isinstance(item, dict)))
+    comparison_stages = {stage for stage in ('date', 'seal') if fresh_page and config[stage]
+                         and (stage in page_stages or not preserve_provider_checks)}
+    if fresh_seal:
+        comparison_stages.add('seal')
+    rules = tuple(f'{stage}_comparison' for stage in ('date', 'seal') if stage in comparison_stages)
+    rules += ('evidence_selection', 'overall_decision')
+    return record_evaluation(output, 'saved_reassembly', rules,
+                             preserve_provider_checks=bool(preserve_provider_checks),
+                             new_remote_evidence=fresh_page or fresh_seal)

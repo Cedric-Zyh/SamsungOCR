@@ -153,10 +153,13 @@ class ReviewOperationsMixin:
                     continue
                 date = result.get("date_check") or {}
                 seal = result.get("seal_check") or {}
-                date_unreliable = date.get("reliable") is False
-                seal_unreliable = seal.get("reliable") is False
-                date_mismatch = date.get("status") == "不匹配"
-                seal_mismatch = seal.get("status") == "不匹配"
+                acceptance = (result.get("recognition_config") or {}).get("acceptance") or {}
+                date_enabled = acceptance.get("date_match_mode") != "none"
+                seal_enabled = acceptance.get("seal_match_mode") != "none"
+                date_unreliable = date_enabled and date.get("reliable") is False
+                seal_unreliable = seal_enabled and seal.get("reliable") is False
+                date_mismatch = date_enabled and date.get("status") == "不匹配"
+                seal_mismatch = seal_enabled and seal.get("status") == "不匹配"
                 if not (date_unreliable or seal_unreliable or date_mismatch or seal_mismatch):
                     continue
                 if row["review_status"] == "待复核" and row["overall"] == "需人工复核":

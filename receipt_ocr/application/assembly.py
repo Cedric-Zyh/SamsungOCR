@@ -13,23 +13,11 @@ from ..recognition.seal.orientation import DEFAULT_SEAL_ORIENTATION_MODE
 from ..domain.seal_provider_selection import combine_seal_provider_checks
 from .pipeline import attach_product_fields, complete_result, normalize_result_contract
 from ..domain.results import StageOutcome
+from ..domain.saved_evidence import SavedStageEvidence
+from ..domain.evidence_selection import inactive
+from ..domain.decision import apply_pending_verdict
 from .document_evidence import evaluate_document_evidence, variant_payloads, selected_date_outcome
-
-def _value(stage, result):
-    if stage == "fields":
-        return {k: v for k, v in result.get("fields", {}).items() if k in PRINTED_FIELDS}
-    if stage == "handwriting":
-        return result.get("handwriting_fields", {})
-    if stage == "products":
-        return [
-            row.get("values", {})
-            for row in result.get("product_table", {}).get("rows", [])
-        ]
-    check = result.get("date_check" if stage == "date" else "seal_check", {})
-    return (
-        check.get("actual" if stage == "date" else "recognized", ""),
-        check.get("status"),
-    )
+from .variant_projection import public_variant, variant_value as _value
 
 
 def select_variants(stage, successful, acceptance, *, required_date=None):
@@ -51,7 +39,7 @@ def select_variants(stage, successful, acceptance, *, required_date=None):
         selected = selected_date_outcome(successful, required_date=required_date)
         decisions = matching if matching and acceptance.get('date_match_mode') in {'any', 'all'} else successful
         decision_variants = [selected, *(variant for variant in decisions if variant is not selected)]
-    if stage == 'seal' and provider_seal is None and acceptance.get('seal_match_mode') in {'any', 'all'} and successful:
+    if stage == 'seal' and provider_seal is None and acceptance.get('seal_match_mode') in {'any', 'all', 'none'} and successful:
         matching = [v for v in successful if (v['result'].get('seal_check') or {}).get('status') == '匹配'
                     and (v['result'].get('seal_check') or {}).get('reliable') is True]
         decision_variants = matching or successful
@@ -82,13 +70,9 @@ def select_variants(stage, successful, acceptance, *, required_date=None):
 
 
 def apply_match_mode(output, stage, variants, successful, provider_seal, acceptance):
-    if stage == 'date' and acceptance.get('date_match_mode') == 'none':
-        output['date_check'].update(status='未核对', reliable=True, message='按设置跳过签收日期核对')
-    if stage == 'seal' and acceptance.get('seal_match_mode') == 'none':
-        output['seal_check'].update(status='未核对', reliable=True, message='按设置跳过客户印章核对')
     if (stage == 'seal' and acceptance.get('seal_match_mode') == 'all'
             and (provider_seal is None or len(successful) != len(variants))):
-        all_checks = [variant.get('result', {}).get('seal_check') for variant in variants]
+        all_checks = [(variant.get('result') or {}).get('seal_check') for variant in variants]
         all_match = bool(all_checks) and len(all_checks) == len(successful) == len(variants) and all(
             check.get('status') == '匹配' and check.get('reliable') is True
             for check in all_checks if isinstance(check, dict)
@@ -99,7 +83,7 @@ def apply_match_mode(output, stage, variants, successful, provider_seal, accepta
                 message='全部识别结果匹配模式下，客户印章结果未全部匹配',
             )
     if stage == 'date' and acceptance.get('date_match_mode') == 'all':
-        all_checks = [variant.get('result', {}).get('date_check') for variant in variants]
+        all_checks = [(variant.get('result') or {}).get('date_check') for variant in variants]
         all_match = bool(all_checks) and len(all_checks) == len(successful) == len(variants) and all(
             check.get('status') == '匹配' and check.get('reliable') is True
             for check in all_checks if isinstance(check, dict)
@@ -155,22 +139,35 @@ def merge_primary(output, stage, primary, successful, variants, provider_seal, a
 def _variant_skipped(stage, variant):
     if isinstance(variant, StageOutcome):
         return variant.state == "skipped"
-    return (variant.get("result", {}).get(f"{stage}_check", {})
+    return (((variant.get("result") or {}).get(f"{stage}_check") or {})
             .get("execution_status") == "skipped")
+
+
+def _usable_payload(stage, variant):
+    has_result = variant.has_result if isinstance(variant, StageOutcome) else variant.get("result") is not None
+    return has_result and SavedStageEvidence.from_variant(stage, variant).active
+
+
+def _clean_skipped(stage, variants):
+    return [variant for variant in variants if _variant_skipped(stage, variant)
+            and not inactive(variant) and not inactive(variant.get("result"))]
 
 
 def _recognition_status(stage, selected, variants):
     if not selected:
         return "未执行"
-    successful = [variant for variant in variants
-                  if (variant.has_result if isinstance(variant, StageOutcome) else "result" in variant)]
-    if not successful:
-        return "识别失败"
-    if all(_variant_skipped(stage, variant) for variant in successful):
-        if all(v['result'].get(f'{stage}_check', {}).get('skip_reason') == 'missing_requirement' for v in successful):
+    successful = [variant for variant in variants if _usable_payload(stage, variant)]
+    if successful:
+        return "已执行"
+    skipped = _clean_skipped(stage, variants)
+    if skipped and len(skipped) == len(variants):
+        if all(v['result'].get(f'{stage}_check', {}).get('skip_reason') == 'missing_requirement' for v in skipped):
             return "已跳过（未提供签章要求）"
         return "已跳过（页脚尚未确认）"
-    return "已执行"
+    if any(variant.get('pending') for variant in variants):
+        remote_pending = any(v.get('method') == 'danzhengtong' and v.get('pending') for v in variants)
+        return "等待单证通结果" if remote_pending else "等待识别结果"
+    return "识别失败"
 
 
 def finish_result(output, context, config, results, reasons, issues, stage_reasons, preview_regions, preview_date_box, source, preview_path, kwargs):
@@ -187,11 +184,11 @@ def finish_result(output, context, config, results, reasons, issues, stage_reaso
     for stage in ("date", "seal"):
         primary_backends[stage] = next(
             (variant["method"] for variant in results[stage]
-             if "result" in variant and not _variant_skipped(stage, variant)),
+             if _usable_payload(stage, variant)),
             "skipped",
         )
     dates = [variant for variant in results['date']
-             if 'result' in variant and not _variant_skipped('date', variant)]
+             if _usable_payload('date', variant)]
     if dates:
         primary_backends['date'] = selected_date_outcome(
             dates, required_date=output['fields'].get('要求到货'))['method']
@@ -231,6 +228,7 @@ def finish_result(output, context, config, results, reasons, issues, stage_reaso
         recognition_config=config,
     )
     complete_result(output, reference_matcher=kwargs.get("reference_matcher"))
+    apply_pending_verdict(output)
     if preview_path:
         annotate_image(
             source,
@@ -266,38 +264,16 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
     preview_regions = []
     preview_date_box = None
     for stage, variants in results.items():
-        successful = [v for v in variants if v.has_result]
-        output["recognition_variants"][stage] = deepcopy([
-            {
-                "method": v["method"],
-                "error": v.get("error"),
-                "value": _value(stage, v["result"]) if "result" in v else None,
-                "details": (
-                    {
-                        key: v["result"].get(key)
-                        for key in (
-                            "handwriting_fields",
-                            "handwriting_metadata",
-                            "fields",
-                            "field_metadata",
-                            "field_fallbacks",
-                            "product_table",
-                            "date_check",
-                            "seal_check",
-                            "processing_artifacts",
-                            "danzhengtong",
-                            "danzhengtong_seal",
-                        ) + (('date_ocr_texts', 'preview_date_box') if stage == 'date' else ())
-                    }
-                    if "result" in v
-                    else None
-                ),
-            }
-            for v in variants
-        ])
+        successful = [v for v in variants if _usable_payload(stage, v)]
+        output["recognition_variants"][stage] = [public_variant(stage, value) for value in variants]
         if not successful:
             if config[stage] and stage in ("date", "seal"):
-                output[f"{stage}_check"]["status"] = "识别失败"
+                skipped = _clean_skipped(stage, variants)
+                if skipped and len(skipped) == len(variants):
+                    output[f"{stage}_check"] = deepcopy(skipped[0]["result"].get(f"{stage}_check") or {})
+                else:
+                    output[f"{stage}_check"]["status"] = (
+                        "等待结果" if any(v.get("pending") for v in variants) else "识别失败")
             if config[stage] and stage == "products":
                 output["product_table"]["status"] = "识别失败"
             continue
@@ -340,13 +316,12 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
         else:
             conflicting = any(_value(stage, v["result"]) != _value(stage, primary)
                               for v in decision_variants[1:])
-        skip_date_comparison = stage == 'date' and stage_match_mode == 'none'
-        if provider_seal is None and stage_match_mode != 'any' and not skip_date_comparison and conflicting:
+        if provider_seal is None and stage_match_mode not in {'any', 'none'} and conflicting:
             conflicts.append(f"{LABELS[stage]}：多种识别方式结果不一致")
             conflicts_issues.append(issue("provider_conflict", stage, conflicts[-1]))
             if stage in ("date", "seal"):
                 output[f"{stage}_check"].update(status="需人工复核", reliable=False)
-        if provider_seal is None and stage in ("date", "seal") and stage_match_mode != 'any' and not skip_date_comparison and any(
+        if provider_seal is None and stage in ("date", "seal") and stage_match_mode not in {'any', 'none'} and any(
             not v["result"].get(f"{stage}_check", {}).get("reliable")
             for v in decision_variants
         ):
@@ -375,7 +350,7 @@ def assemble_result(context, config, results, errors, output, previous_fields, s
     for variants in results.values():
         for variant in variants:
             for key in ('danzhengtong', 'danzhengtong_seal'):
-                trace = variant.get("result", {}).get(key)
+                trace = (variant.get("result") or {}).get(key)
                 if trace:
                     output[key] = deepcopy(trace)
     return finish_result(output, context, config, results, reasons, issues, stage_reasons,

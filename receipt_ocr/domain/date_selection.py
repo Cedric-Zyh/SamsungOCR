@@ -1,5 +1,6 @@
 """Select one existing date observation without altering provider evidence."""
 from copy import deepcopy
+from .decision_provenance import track_machine_refresh
 
 from .parsing.parsing_dates import parse_date
 from .printed_field_selection import canonical_printed_field
@@ -65,6 +66,7 @@ def _pending(variant):
                              details.get('danzhengtong') or {}))
 
 
+@track_machine_refresh('date_selection', ('evidence_selection',))
 def refresh_date_selection(current):
     """Reproject a saved machine date only; keep all original evidence and verdicts.
 
@@ -84,15 +86,13 @@ def refresh_date_selection(current):
     check = deepcopy(_check(selected))
     acceptance = (current.get('recognition_config') or {}).get('acceptance') or {}
     mode = acceptance.get('date_match_mode')
-    if mode == 'none':
-        check.update(status='未核对', reliable=True, message='按设置跳过签收日期核对')
-    elif mode == 'all':
+    if mode == 'all':
         if (len(successful) != len(variants) or not all(
                 _check(variant).get('status') == '匹配' and _check(variant).get('reliable') is True
                 for variant in successful)):
             check.update(status='需人工复核', reliable=False,
                          message='全部识别结果匹配模式下，签收日期结果未全部匹配')
-    elif mode != 'any':
+    elif mode not in {'any', 'none'}:
         values = {(_check(variant).get('actual'), _check(variant).get('status')) for variant in successful}
         if len(values) > 1:
             check.update(status='需人工复核', reliable=False)

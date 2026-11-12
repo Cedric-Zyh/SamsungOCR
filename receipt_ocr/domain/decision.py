@@ -59,9 +59,11 @@ def apply_signature_match_mode(result: dict) -> None:
     if mode not in {"any", "all", "none"}:
         return
     if mode == "none":
+        previous = result.get("signature_check") or {}
         result["signature_check"] = {
-            **result.get("signature_check", {}), "status": "未核对", "reliable": True,
-            "source": "按设置跳过", "match_mode": mode,
+            **derive_signature_check(result.get("fields") or {},
+                                     previous if previous.get("source") == "人工复核" else None),
+            "match_mode": mode,
         }
         return
     base = {**(result.get("internal_fields") or {}), **(result.get("fields") or {})}

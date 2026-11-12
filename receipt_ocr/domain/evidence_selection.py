@@ -1,4 +1,4 @@
-"""Shared evidence quality rules for choosing recognized field candidates."""
+"""Choose usable field readings with DanZhengTong priority on disagreement."""
 
 from math import isfinite
 from collections.abc import Mapping
@@ -65,6 +65,14 @@ def choose_candidate(candidates, *, label="字段"):
     if len(groups) == 1:
         reason = "多个识别结果一致" if len(candidates) > 1 else f"采用识别到的{label}"
         return selected, False, reason
+
+    preferred = [candidate for candidate in candidates if candidate["method"] == "danzhengtong"]
+    if preferred:
+        selected = max(preferred, key=_rank)
+        disputed = len({candidate["normalized"] for candidate in preferred}) > 1
+        reason = (f"单证通的{label}结果不一致，仍需核对原图" if disputed
+                  else "识别结果不同，优先采用单证通结果")
+        return selected, disputed, reason
 
     # Agreement between independent, usable readers is stronger evidence than
     # repeated attempts from a single reader. Low-confidence guesses do not vote.

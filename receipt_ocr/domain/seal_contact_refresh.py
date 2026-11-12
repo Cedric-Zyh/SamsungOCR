@@ -1,5 +1,6 @@
 """Repair saved real hotline-only mismatches without recognizing any image again."""
 from copy import deepcopy
+from .decision_provenance import track_machine_refresh
 
 from .decision import decide_overall, has_provider_failure
 from .evidence_selection import inactive
@@ -15,6 +16,7 @@ def _usable(variant, current):
     return bool(evidence.check) and evidence.active
 
 
+@track_machine_refresh('seal_contact_refresh', ('seal_comparison', 'evidence_selection', 'overall_decision'))
 def refresh_seal_contact_results(current):
     """Recompare only a reliable real DanZhengTong reading with a valid hotline.
 
@@ -72,9 +74,7 @@ def refresh_seal_contact_results(current):
                                            match_mode=mode)
     if combined is None:
         return result
-    if mode == 'none':
-        combined.update(status='未核对', reliable=True, message='按设置跳过客户印章核对')
-    elif mode == 'all' and len(checks) != len(variants):
+    if mode == 'all' and len(checks) != len(variants):
         combined.update(status='需人工复核', reliable=False,
                         message='全部识别结果匹配模式下，客户印章结果未全部匹配')
     result['seal_check'] = combined

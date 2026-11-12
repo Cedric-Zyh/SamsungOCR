@@ -22,3 +22,4 @@ class SampleDependencies:
     project_result: Callable
     seal_api_enabled: bool
     logger: Logger
+    owner_token: object = None

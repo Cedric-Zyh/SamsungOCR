@@ -74,7 +74,8 @@ export function createReview({
     pass.title = readiness.ready ? '确认本单通过并继续下一张（⌘ / Ctrl + Enter）' : readiness.message;
     for (const key of ['date', 'seal']) {
       const ready = readiness[`${key}Ready`];
-      $(`[data-check-card="${key}"]`, content).classList.toggle('check-attention', !ready);
+      $(`[data-check-card="${key}"]`, content).classList.toggle('check-attention',
+        ReceiptWorkbench.participatesInDecision(reviewState.current, key) && !ready);
       $(`[data-check-badge="${key}"]`, content).innerHTML = statusPill(readiness[`${key}Status`]);
       const summary = $(`[data-check-summary="${key}"]`, content);
       if (summary) {
@@ -174,7 +175,8 @@ export function createReview({
       const detail = activeSealPreview?.id === item?.id ? activeSealPreview.detail
         : artifact ? {label: '印章 1', ...sealWorkspaceModel(artifact)} : null;
       if (detail?.original || detail?.processed) {
-        previewSeal({...detail, url: detail.original || detail.processed, evidenceLabel: '印章原图'});
+        previewSeal({...detail, url: detail.preferred || detail.processed || detail.original,
+          evidenceLabel: detail.preferredLabel || (detail.processed ? detail.processedLabel || '处理后' : detail.originalLabel || '印章原图')});
         return;
       }
     }

@@ -97,14 +97,15 @@ def test_exif_orientation_uses_upright_coordinates(tmp_path):
 
 
 @pytest.fixture
-def preview_app(tmp_path, monkeypatch):
+def preview_app(bind_application_runtime, tmp_path, monkeypatch):
     database = Database(tmp_path / "preview.db")
     database.initialize()
+    paths = {}
     for setting in ("UPLOAD_DIR", "DATA_DIR"):
         directory = tmp_path / setting.lower()
         directory.mkdir()
-        monkeypatch.setattr(web, setting, directory)
-    monkeypatch.setattr(web, "database", database)
+        paths[setting.lower()] = directory
+    bind_application_runtime(database=database, **paths)
     def unexpected_remote(*args, **kwargs):
         raise AssertionError("Opening a preview must not call OCR")
     monkeypatch.setattr(web.analyzer.seal_api, "recognize", unexpected_remote)

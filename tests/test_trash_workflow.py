@@ -19,9 +19,9 @@ def test_delete_removes_repeats_from_records_dates_and_export_source(tmp_path):
         assert connection.execute('SELECT count(*) FROM results').fetchone()[0] == 1
 
 
-def test_delete_api_validation_and_no_restore(tmp_path,monkeypatch):
+def test_delete_api_validation_and_no_restore(bind_application_runtime, tmp_path,monkeypatch):
     from receipt_ocr.web import application as web
-    db=Database(tmp_path/'db.sqlite');db.initialize();monkeypatch.setattr(web,'database',db)
+    db=Database(tmp_path/'db.sqlite');db.initialize();bind_application_runtime(database=db)
     item=sample_result();rid=db.insert_result(filename=item['filename'],stored_name='x',preview_name='',task_id='',result=item)
     client=web.app.test_client()
     assert client.post('/api/results/delete',json={'ids':[]}).status_code == 400

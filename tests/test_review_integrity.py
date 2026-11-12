@@ -22,11 +22,10 @@ def uncertain_receipt():
 
 
 @pytest.fixture
-def database(tmp_path, monkeypatch):
+def database(bind_application_runtime, tmp_path, monkeypatch):
     db = Database(tmp_path / 'review.db')
     db.initialize()
-    monkeypatch.setattr(web, 'database', db)
-    monkeypatch.setattr(web, 'GROUND_TRUTH_PATH', tmp_path / 'truth.json')
+    bind_application_runtime(database=db, ground_truth_path=tmp_path / 'truth.json')
     return db
 
 

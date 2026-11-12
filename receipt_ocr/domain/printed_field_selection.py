@@ -54,6 +54,8 @@ def _number_value(text):
 def canonical_printed_field(name, value):
     """Normalize equivalent formats without turning unlike text into a match."""
     text = "".join(_text(value).translate(_WIDTHS).split())
+    if name == "仓库联系人":
+        return "、".join(part for part in re.split(r"[、,/;|]+", text) if part)
     if name == "要求到货":
         return _date_value(text) or text
     if name in _QUANTITIES:

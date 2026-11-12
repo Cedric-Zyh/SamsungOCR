@@ -11,10 +11,10 @@ export function resultPreviewModel(record, workbench) {
   ].map(row => {
     const status = workbench.checkStatus(record, row.key);
     const tone = status === '匹配' ? 'success' : status === '未执行' ? 'neutral' : 'warning';
-    return {...row, status, tone, expected: row.expected || '未提供',
+    return {...row, status, tone, included: workbench.participatesInDecision(record, row.key), expected: row.expected || '未提供',
       actual: row.actual || (status === '未执行' ? '未执行' : '未识别')};
   });
-  const attention = rows.filter(row => row.tone === 'warning');
+  const attention = rows.filter(row => row.included && row.tone === 'warning');
   const category = workbench.category(record);
   return {rows, attention, status: ({passed: '已通过', rejected: '不通过', review: '待复核', failed: '识别失败'})[category] || '已完成',
     tone: category === 'passed' ? 'success' : 'warning'};
@@ -24,7 +24,7 @@ export function renderResultPreview(model) {
   const {rows, attention} = model;
   const summary = attention.length ? `${attention.length} 项待确认` : '核验结果已加载';
   const detail = attention.length ? attention.map(row => `${row.label} · ${row.status}`).join('；')
-    : rows.some(row => row.status === '未执行') ? '部分项目未执行，请按需要进入复核。' : '日期、印章、签名均匹配。';
+    : rows.some(row => row.included && row.status === '未执行') ? '部分项目未执行，请按需要进入复核。' : '参与整单判定的核验项目已匹配。';
   return `<div class="result-preview-summary" data-tone="${attention.length ? 'warning' : 'neutral'}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16v1"/></svg><strong>${summary}</strong><span>${escapeHtml(detail)}</span></div>
     <div class="result-preview-table-wrap"><table class="result-preview-table"><colgroup><col class="preview-label-col"><col><col><col class="preview-status-col"></colgroup>
     <thead><tr><th scope="col">核验项目</th><th scope="col">要求值</th><th scope="col">识别值</th><th scope="col">结果</th></tr></thead>

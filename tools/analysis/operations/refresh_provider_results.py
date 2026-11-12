@@ -20,7 +20,7 @@ from receipt_ocr.domain.fields.schema import PRINTED_FIELDS
 from receipt_ocr.provider_result_refresh import REFRESH_ACTION, has_human_edits, refresh_provider_result
 
 
-def refresh_database(path, *, ids=None, apply=False):
+def refresh_database(path, *, ids=None, apply=False, refresh=refresh_provider_result):
     if ids is not None and not ids:
         raise ValueError("指定记录列表不能为空")
     database = Database(path)
@@ -38,13 +38,13 @@ def refresh_database(path, *, ids=None, apply=False):
             parameters.extend(ids)
         rows = connection.execute(f"SELECT * FROM results WHERE {' AND '.join(conditions)} ORDER BY id", parameters).fetchall()
         protected = {row[0] for row in connection.execute(
-            "SELECT DISTINCT result_id FROM review_history WHERE action NOT IN (?, '安全规则升级', '重新识别')", (REFRESH_ACTION,))}
+            "SELECT DISTINCT result_id FROM review_history WHERE action NOT IN (?, '安全规则升级', '重新识别', '取回单证通结果')", (REFRESH_ACTION,))}
         for row in rows:
             current = database._row_to_result(row)
             if row["id"] in protected or has_human_edits(current):
                 report["counts"]["human_preserved"] += 1
                 continue
-            updated = refresh_provider_result(current)
+            updated = refresh(current)
             if updated == current:
                 report["counts"]["unchanged"] += 1
                 continue

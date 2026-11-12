@@ -31,7 +31,7 @@ def policy_result(mode):
     return result
 
 
-@pytest.mark.parametrize('mode,status', [('none', '未核对'), ('any', '匹配'), ('all', '需人工复核')])
+@pytest.mark.parametrize('mode,status', [('none', '不匹配'), ('any', '匹配'), ('all', '需人工复核')])
 def test_saved_signature_policy_survives_database_and_sample_read_paths(samples, mode, status):
     ctx, client = samples
     service = SampleCenter(ctx)

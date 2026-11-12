@@ -6,12 +6,12 @@ import os
 import sys
 import threading
 import atexit
+from functools import partial
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template, request, send_file, send_from_directory, url_for
+from flask import Flask, abort, g, has_request_context, jsonify, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 
-from receipt_ocr.application import RecognitionService
 from receipt_ocr.application.retries import ResultRetryService, MissingRetrySource, InvalidRetrySelection
 from receipt_ocr.application.document_service import DocumentRecognitionService
 from receipt_ocr.review import (
@@ -23,7 +23,6 @@ from receipt_ocr.domain.fields.schema import OUTPUT_FIELDS, PRINTED_FIELDS, HAND
 from receipt_ocr.persistence.database import (
     DEFAULT_RECOGNITION_SETTINGS,
     DEFAULT_RETENTION_DAYS,
-    Database,
     now_iso,
 )
 from receipt_ocr.evaluation import (
@@ -41,9 +40,8 @@ from receipt_ocr.recognition.seal.api import (
     SEAL_RECOGNITION_MODES,
 )
 from receipt_ocr.recognition.seal.orientation import SEAL_ORIENTATION_MODES
-from receipt_ocr.runtime import RuntimePaths, build_runtime_paths
+from receipt_ocr.runtime import build_runtime_paths
 from receipt_ocr.storage import ReceiptFileStore
-from receipt_ocr.web.maintenance import StorageMaintenance
 from .dependencies import QueueDependencies, RecognitionDependencies, ResultDependencies, ReviewDependencies
 from receipt_ocr.samples.dependencies import SampleDependencies, SamplePaths
 from receipt_ocr.web import queue as queue_handlers
@@ -54,22 +52,13 @@ from receipt_ocr.web import remote_settings
 from receipt_ocr.web.local_models import local_models_handler
 from receipt_ocr.web import seal_standards as standard_handlers
 from receipt_ocr.domain.seal_standards import apply_standard_check
-from receipt_ocr.application.configured_recognition import ConfiguredRecognition
 from .runtime import ApplicationRuntime
+from .runtime_compat import legacy_attribute
 from receipt_ocr.web.settings import normalize_recognition_settings as _normalize_recognition_settings
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-RUNTIME_PATHS = build_runtime_paths(BASE_DIR)
-RESOURCE_DIR = RUNTIME_PATHS.resource_dir
-DATA_DIR = RUNTIME_PATHS.data_dir
-STORAGE_DIR = RUNTIME_PATHS.storage_dir
-UPLOAD_DIR = RUNTIME_PATHS.upload_dir
-PREVIEW_DIR = RUNTIME_PATHS.preview_dir
-ARTIFACT_DIR = RUNTIME_PATHS.artifact_dir
-EXPORT_DIR = RUNTIME_PATHS.export_dir
-DATABASE_PATH = RUNTIME_PATHS.database_path
-GROUND_TRUTH_PATH = RUNTIME_PATHS.ground_truth_path
+_default_paths = build_runtime_paths(BASE_DIR)
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 RESULT_FILTERS = (
     "filename", "order_id", "customer", "date", "import_date", "overall", "review_status",
@@ -77,8 +66,8 @@ RESULT_FILTERS = (
 )
 app = Flask(
     __name__,
-    static_folder=str(RESOURCE_DIR / "static"),
-    template_folder=str(RESOURCE_DIR / "templates"),
+    static_folder=str(_default_paths.resource_dir / "static"),
+    template_folder=str(_default_paths.resource_dir / "templates"),
 )
 app.config.update(MAX_CONTENT_LENGTH=500 * 1024 * 1024, JSON_AS_ASCII=False,
                   BACKGROUND_WORKER=True, TEMPLATES_AUTO_RELOAD=True)
@@ -105,143 +94,155 @@ def asset_url(filename: str) -> str:
     return url_for('static', filename=filename, v=version)
 
 
-application_runtime = ApplicationRuntime(RUNTIME_PATHS, logger=app.logger)
-# Stable compatibility names for existing scripts and HTTP dependency factories.
-# The runtime owns their construction, initialization, worker and shutdown.
-analyzer = application_runtime.analyzer
-database = application_runtime.database
-seal_reference_matcher = application_runtime.matcher
-recognition_service = application_runtime.recognition
-job_store = application_runtime.job_store
-job_worker = None
-_initialized = False
+application_runtime = ApplicationRuntime(_default_paths, logger=app.logger)
 _initialization_lock = threading.RLock()
 
 
+def __getattr__(name):
+    """Keep legacy script reads at one boundary; HTTP code uses the owner."""
+    return legacy_attribute(application_runtime, name)
+
+
+def _current_runtime(runtime=None):
+    """Keep one owner across a request and across explicitly bound callbacks."""
+    if runtime is not None:
+        return runtime
+    if has_request_context():
+        return getattr(g, 'application_runtime', application_runtime)
+    return application_runtime
+
+
+def install_runtime(runtime: ApplicationRuntime) -> None:
+    """Bind an explicit owner before startup or after the previous one closed."""
+    global application_runtime
+    with _initialization_lock:
+        current = application_runtime
+        if runtime is current:
+            return
+        if runtime.closed or runtime.stopping:
+            raise RuntimeError('不能安装正在关闭或已关闭的运行环境')
+        if current.stopping and not current.closed:
+            raise RuntimeError('后台任务正在停止，退出完成前不能替换运行环境')
+        if current.initialized and not current.closed:
+            raise RuntimeError('运行环境已启动，请关闭后再替换运行环境')
+        if not current.close():
+            raise RuntimeError('后台任务尚未退出，不能替换运行环境')
+        if not app.extensions['sample_runtime'].bind_owner(runtime):
+            raise RuntimeError('样单后台任务尚未退出，不能替换运行环境')
+        application_runtime = runtime
+
+
 def _queue_dependencies():
+    runtime = _current_runtime()
     return QueueDependencies(
         allowed_extensions=ALLOWED_EXTENSIONS,
-        data_dir=DATA_DIR,
-        upload_dir=UPLOAD_DIR,
-        seal_api_enabled=analyzer.seal_api.enabled,
-        database=database,
-        job_store=job_store,
-        job_worker=job_worker,
+        data_dir=runtime.paths.data_dir,
+        upload_dir=runtime.paths.upload_dir,
+        seal_api_enabled=runtime.analyzer.seal_api.enabled,
+        database=runtime.database,
+        job_store=runtime.job_store,
+        job_worker=runtime.job_worker,
     )
 
 
 def _sample_dependencies():
+    runtime = _current_runtime()
     return SampleDependencies(
-        database=database,
-        paths=SamplePaths(DATA_DIR, GROUND_TRUTH_PATH, frozenset(ALLOWED_EXTENSIONS)),
-        analyze=_configured_analyze,
-        project_result=_project_paginated_result,
-        seal_api_enabled=analyzer.seal_api.enabled,
+        database=runtime.database,
+        paths=SamplePaths(runtime.paths.data_dir, runtime.paths.ground_truth_path, frozenset(ALLOWED_EXTENSIONS)),
+        analyze=runtime.configured_recognition.recognize,
+        project_result=partial(_project_paginated_result, _runtime=runtime),
+        seal_api_enabled=runtime.analyzer.seal_api.enabled,
         logger=app.logger,
+        owner_token=runtime,
     )
 
 
 def _recognition_dependencies():
+    runtime = _current_runtime()
     return RecognitionDependencies(
         allowed_extensions=ALLOWED_EXTENSIONS,
-        data_dir=DATA_DIR,
-        upload_dir=UPLOAD_DIR,
-        documents=_document_service(),
-        seal_api_enabled=analyzer.seal_api.enabled,
+        data_dir=runtime.paths.data_dir,
+        upload_dir=runtime.paths.upload_dir,
+        documents=_document_service(_runtime=runtime),
+        seal_api_enabled=runtime.analyzer.seal_api.enabled,
         logger=app.logger,
-        database=database,
+        database=runtime.database,
         now_iso=now_iso,
     )
 
 
-def _document_service():
-    return DocumentRecognitionService(_configured_analyze, PREVIEW_DIR, ARTIFACT_DIR, now_iso)
+def _document_service(*, _runtime=None):
+    runtime = _current_runtime(_runtime)
+    return DocumentRecognitionService(runtime.configured_recognition.recognize,
+        runtime.paths.preview_dir, runtime.paths.artifact_dir, now_iso)
 
 
 def _results_dependencies():
+    runtime = _current_runtime()
     return ResultDependencies(
-        ground_truth_path=GROUND_TRUTH_PATH,
+        ground_truth_path=runtime.paths.ground_truth_path,
         result_filters=RESULT_FILTERS,
-        project_result=_project_paginated_result,
-        database=database,
-        job_store=job_store,
+        project_result=partial(_project_paginated_result, _runtime=runtime),
+        database=runtime.database,
+        job_store=runtime.job_store,
         load_ground_truth=load_ground_truth,
     )
 
 
 def _review_dependencies():
+    runtime = _current_runtime()
     return ReviewDependencies(
-        ground_truth_path=GROUND_TRUTH_PATH,
-        apply_edits=_apply_review_edits_with_standard,
+        ground_truth_path=runtime.paths.ground_truth_path,
+        apply_edits=partial(_apply_review_edits_with_standard, _runtime=runtime),
         confirmation_error=_confirmation_error,
-        project_result=_project_paginated_result,
+        project_result=partial(_project_paginated_result, _runtime=runtime),
         review_revision=_review_revision,
         with_review_revision=_with_review_revision,
-        database=database,
-        seal_reference_matcher=seal_reference_matcher,
+        database=runtime.database,
+        seal_reference_matcher=runtime.matcher,
     )
 
 
-def _apply_review_edits_with_standard(current, payload, *, _connection=None):
+def _apply_review_edits_with_standard(current, payload, *, _connection=None, _runtime=None):
+    runtime = _current_runtime(_runtime)
     updated = _apply_human_edits(current, payload)
     requirement = (updated.get("fields") or {}).get("签章要求", "")
-    standard = database.get_seal_standard(requirement, _connection=_connection)
-    updated = apply_standard_check(updated, standard, preserve_confirmed=False)
+    standard = runtime.database.get_seal_standard(requirement, _connection=_connection)
+    updated = apply_standard_check(updated, standard, preserve_confirmed=False, record_provenance=True)
     if payload.get("review_status") == "确认不通过" and payload.get("final_result") == "不通过":
         updated["overall"] = "不通过"
     return updated
 
 
 def _purge_expired_data() -> dict:
-    return StorageMaintenance(
-        database, upload_dir=UPLOAD_DIR, preview_dir=PREVIEW_DIR,
-        artifact_dir=ARTIFACT_DIR, export_dir=EXPORT_DIR, logger=app.logger,
-    ).purge_expired()
+    return _current_runtime().maintenance.purge_expired()
 
 
 def _maybe_purge_expired_data() -> None:
-    application_runtime.maybe_purge()
+    _current_runtime().maybe_purge()
 
 
 def initialize(*, start_worker: bool = True) -> None:
     with _initialization_lock:
-        global application_runtime, recognition_service, _initialized, job_store, job_worker
-        paths = RuntimePaths(RESOURCE_DIR, DATA_DIR, STORAGE_DIR, UPLOAD_DIR, PREVIEW_DIR,
-            ARTIFACT_DIR, EXPORT_DIR, database.path, GROUND_TRUTH_PATH)
-        runtime = application_runtime
-        if (runtime.paths != paths or runtime.database is not database
-                or runtime.analyzer is not analyzer or runtime.matcher is not seal_reference_matcher
-                or runtime.recognition is not recognition_service):
-            if runtime.job_worker is not None and not runtime.closed:
-                raise RuntimeError('后台任务已启动，不能替换正在使用的运行环境')
-            runtime.close()
-            # Rebind the default service if a caller supplied a different matcher.
-            if recognition_service is runtime.recognition:
-                recognition_service = RecognitionService(analyzer, seal_reference_matcher)
-            application_runtime = ApplicationRuntime(paths, database=database, analyzer=analyzer,
-                matcher=seal_reference_matcher, recognition=recognition_service, logger=app.logger)
         application_runtime.initialize(start_worker=start_worker and app.config['BACKGROUND_WORKER'])
-        job_store = application_runtime.job_store
-        job_worker = application_runtime.job_worker
-        _initialized = application_runtime.initialized
 
 
 def ensure_initialized() -> None:
     # Importing this module must not recover tasks or write to the real DB.
     # WSGI/Flask CLI initialize on their first request; direct launch below
     # initializes before accepting requests.
-    if application_runtime.closed or application_runtime.stopping:
-        abort(503, description='服务正在关闭，请重新启动后再试')
-    if not _initialized:
-        with _initialization_lock:
-            if not _initialized:
-                initialize()
+    with _initialization_lock:
+        if application_runtime.closed or application_runtime.stopping:
+            abort(503, description='服务正在关闭，请重新启动后再试')
+        if not application_runtime.initialized:
+            initialize()
+        g.application_runtime = application_runtime
     _maybe_purge_expired_data()
 
 
 def _configured_analyze(*args, recognition_config=None, previous_fields=None, **kwargs):
-    # Compatibility entry point also supports explicitly replaced dependencies.
-    return ConfiguredRecognition(database, analyzer, recognition_service, remote_settings.restore).recognize(
+    return _current_runtime().configured_recognition.recognize(
         *args, recognition_config=recognition_config, previous_fields=previous_fields, **kwargs)
 
 
@@ -249,19 +250,20 @@ def _configured_analyze(*args, recognition_config=None, previous_fields=None, **
 def index():
     # “一键测试”使用已有人工标注的基准集；目录中的其余新增图片仍可通过
     # “选择文件夹”批量导入，避免把数百张未标注图片误称为 6 张测试样单。
-    samples = [name for name in load_ground_truth(GROUND_TRUTH_PATH) if (DATA_DIR / name).is_file()]
+    runtime = _current_runtime()
+    samples = [name for name in load_ground_truth(runtime.paths.ground_truth_path) if (runtime.paths.data_dir / name).is_file()]
     return render_template(
         "index.html",
         samples=samples,
         output_fields=OUTPUT_FIELDS, printed_fields=PRINTED_FIELDS, handwritten_fields=HANDWRITTEN_FIELDS,
-        seal_api_enabled=analyzer.seal_api.enabled,
+        seal_api_enabled=runtime.analyzer.seal_api.enabled,
         python_path=sys.executable,
-        dzt_status=remote_settings.status(database),
+        dzt_status=remote_settings.status(runtime.database),
         default_ocr_backend=default_backend(),
         ocr_backend_catalog=backend_catalog(),
         seal_recognition_modes=SEAL_RECOGNITION_MODES,
         seal_orientation_modes=SEAL_ORIENTATION_MODES,
-        retention_days=database.get_retention_days(),
+        retention_days=runtime.database.get_retention_days(),
         retention_default_days=DEFAULT_RETENTION_DAYS,
     )
 
@@ -283,8 +285,9 @@ def ocr_backends():
 
 
 def _settings_payload() -> dict:
+    runtime = _current_runtime()
     return {
-        "retention_days": database.get_retention_days(),
+        "retention_days": runtime.database.get_retention_days(),
         "default_retention_days": DEFAULT_RETENTION_DAYS,
     }
 
@@ -294,11 +297,12 @@ def get_settings():
 
 
 def _update_retention_settings():
+    runtime = _current_runtime()
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict) or "retention_days" not in payload:
         return jsonify(error="请提供保留天数"), 400
     try:
-        database.set_retention_days(payload["retention_days"])
+        runtime.database.set_retention_days(payload["retention_days"])
         purge = _purge_expired_data()
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
@@ -319,6 +323,7 @@ def retention_settings():
 
 
 def qingtong_settings():
+    runtime = _current_runtime()
     if request.method == 'PATCH':
         # Only accept JSON from this application's own origin.
         origin = request.headers.get('Origin')
@@ -331,40 +336,45 @@ def qingtong_settings():
         if not isinstance(key, str) or len(key) > 4096 or any(c.isspace() for c in key.strip()):
             return jsonify(error='请输入有效密钥，不能包含空白字符'), 400
         key = key.strip()
-        database.set_json_setting('qingtong_credentials', {'api_key': key})
-        analyzer.seal_api.api_key = key
+        runtime.database.set_json_setting('qingtong_credentials', {'api_key': key})
+        runtime.analyzer.seal_api.api_key = key
     # Never return credentials to the browser.
-    return jsonify(configured=analyzer.seal_api.enabled)
+    return jsonify(configured=runtime.analyzer.seal_api.enabled)
 
 
 def danzhengtong_settings():
-    return remote_settings.settings_handler(database)
+    runtime = _current_runtime()
+    return remote_settings.settings_handler(runtime.database)
 
 
 def test_danzhengtong_settings():
-    return remote_settings.test_handler(database, ALLOWED_EXTENSIONS)
+    runtime = _current_runtime()
+    return remote_settings.test_handler(runtime.database, ALLOWED_EXTENSIONS)
 
 
 def get_recognition_settings():
-    settings = database.get_json_setting("recognition_defaults", DEFAULT_RECOGNITION_SETTINGS)
+    runtime = _current_runtime()
+    settings = runtime.database.get_json_setting("recognition_defaults", DEFAULT_RECOGNITION_SETTINGS)
     try:
         return jsonify(_normalize_recognition_settings(settings))
     except ValueError:
         # Repair a malformed setting left by an interrupted/manual edit.
-        database.set_json_setting("recognition_defaults", DEFAULT_RECOGNITION_SETTINGS)
+        runtime.database.set_json_setting("recognition_defaults", DEFAULT_RECOGNITION_SETTINGS)
         return jsonify(DEFAULT_RECOGNITION_SETTINGS)
 
 
 def local_models():
-    return local_models_handler(database)
+    runtime = _current_runtime()
+    return local_models_handler(runtime.database)
 
 
 def update_recognition_settings():
+    runtime = _current_runtime()
     try:
         settings = _normalize_recognition_settings(request.get_json(silent=True) or {})
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    database.set_json_setting("recognition_defaults", settings)
+    runtime.database.set_json_setting("recognition_defaults", settings)
     return jsonify(settings)
 
 
@@ -379,12 +389,13 @@ def list_tasks():
 
 
 def delete_results():
+    runtime = _current_runtime()
     payload = request.get_json(silent=True) or {}
     ids = payload.get('ids')
     if not isinstance(ids, list) or not ids or len(ids) > 2000 or any(type(i) is not int or i <= 0 for i in ids):
         return jsonify(error='请选择有效的回单记录'), 400
     try:
-        affected = database.delete_results(ids)
+        affected = runtime.database.delete_results(ids)
     except KeyError:
         return jsonify(error='回单不存在'), 404
     return jsonify(ids=affected)
@@ -456,8 +467,9 @@ def process_history():
 
 
 def result_recognition_calls(result_id):
+    runtime = _current_runtime()
     from .recognition_calls import recognition_calls_response
-    return recognition_calls_response(database, result_id)
+    return recognition_calls_response(runtime.database, result_id)
 
 
 
@@ -542,8 +554,10 @@ def result_ground_truth(result_id: int):
 
 
 def _retry_service():
-    return ResultRetryService(database, _document_service(), _source_for_record,
-        analyzer.seal_api.enabled, job_store, DATA_DIR)
+    runtime = _current_runtime()
+    return ResultRetryService(runtime.database, _document_service(_runtime=runtime),
+        partial(_source_for_record, _runtime=runtime),
+        runtime.analyzer.seal_api.enabled, runtime.job_store, runtime.paths.data_dir)
 
 
 def retry_result(result_id: int):
@@ -598,8 +612,9 @@ def _enqueue_result_retries(ids, payload):
 
 
 def report():
-    truth = load_ground_truth(GROUND_TRUTH_PATH)
-    all_machine_results = database.list_original_results(
+    runtime = _current_runtime()
+    truth = load_ground_truth(runtime.paths.ground_truth_path)
+    all_machine_results = runtime.database.list_original_results(
         limit=2000, completed_tasks_only=True
     )
     requested_backend = str(request.args.get("ocr_backend", "")).strip()
@@ -615,7 +630,7 @@ def report():
     if requested_backend and not machine_results:
         machine_results = all_machine_results
         requested_backend = ""
-    results = database.query_receipts(
+    results = runtime.database.query_receipts(
         filters={"ocr_backend": requested_backend}, latest_by_filename=True,
     )["items"]
     accuracy = evaluate_results(
@@ -625,10 +640,10 @@ def report():
     accuracy["scope_backend_label"] = (
         backend_label(requested_backend) if requested_backend else "全部后端最新结果"
     )
-    report_data = operational_report(results, database.all_history(), accuracy)
+    report_data = operational_report(results, runtime.database.all_history(), accuracy)
     report_data["backend_comparison"] = evaluate_backends(all_machine_results, truth)
     dataset_images = sum(
-        1 for path in DATA_DIR.iterdir()
+        1 for path in runtime.paths.data_dir.iterdir()
         if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS
     )
     report_data["dataset"] = {
@@ -641,8 +656,9 @@ def report():
 
 
 def selected_seal_preview(result_id: int):
+    runtime = _current_runtime()
     try:
-        item = _project_paginated_result(database.get_result(result_id))
+        item = _project_paginated_result(runtime.database.get_result(result_id))
         revision = request.args.get("revision")
         if revision and revision != _review_revision(item):
             abort(409)
@@ -654,14 +670,14 @@ def selected_seal_preview(result_id: int):
             footer_id = group.get("footer_result_id")
             if footer_id not in (group.get("continuation_result_ids") or []):
                 abort(404)
-            physical = database.get_result(footer_id)
+            physical = runtime.database.get_result(footer_id)
             if physical.get("filename") != source_page:
                 abort(404)
         source = _source_for_record(physical)
         if source is None:
             abort(404)
         source = source.resolve()
-        if not any(source.is_relative_to(root.resolve()) for root in (UPLOAD_DIR, DATA_DIR)):
+        if not any(source.is_relative_to(root.resolve()) for root in (runtime.paths.upload_dir, runtime.paths.data_dir)):
             abort(404)
         preview = render_selected_seal(source, check)
     except (KeyError, OSError, ValueError):
@@ -672,12 +688,13 @@ def selected_seal_preview(result_id: int):
 
 
 def files(kind: str, name: str):
-    directory = {"previews": PREVIEW_DIR, "uploads": UPLOAD_DIR, "artifacts": ARTIFACT_DIR,
-                 "seal-standards": database.path.parent / "seal-standards"}.get(kind)
+    runtime = _current_runtime()
+    directory = {"previews": runtime.paths.preview_dir, "uploads": runtime.paths.upload_dir, "artifacts": runtime.paths.artifact_dir,
+                 "seal-standards": runtime.database.path.parent / "seal-standards"}.get(kind)
     if directory is None:
         abort(404)
     if kind == 'seal-standards':
-        name = database.seal_standard_image_name(name)
+        name = runtime.database.seal_standard_image_name(name)
     if kind == "artifacts" and request.args.get("preview") == "rgb":
         from .artifact_preview import send_rgb_artifact_preview
 
@@ -685,32 +702,35 @@ def files(kind: str, name: str):
     return send_from_directory(directory, name)
 
 
-def _project_paginated_result(item: dict, *, _connection=None) -> dict:
+def _project_paginated_result(item: dict, *, _connection=None, _runtime=None) -> dict:
     """Return one logical receipt when ``item`` is a paginated cover."""
     # Backfill the display-only signature comparison for records created
     # before the explicit signature evidence field was introduced.
+    runtime = _current_runtime(_runtime)
     item["signature_check"] = derive_signature_check(
         item.get("fields") or {}, item.get("signature_check")
     )
     page_group = item.get("page_group") or {}
     if page_group.get("page_count", 0) <= 1 or item.get("page_role") == "continuation":
-        return _with_standard_check(item, _connection=_connection)
+        return _with_standard_check(item, _connection=_connection, _runtime=runtime)
     task_id = str(item.get("task_id") or "")
     if not task_id:
-        return _with_standard_check(item, _connection=_connection)
-    projected = database.query_receipts(filters={"task_id": task_id}, _connection=_connection)["items"]
+        return _with_standard_check(item, _connection=_connection, _runtime=runtime)
+    projected = runtime.database.query_receipts(filters={"task_id": task_id}, _connection=_connection)["items"]
     item = next((row for row in projected if int(row.get("id") or 0) == int(item.get("id") or 0)), item)
-    return _with_standard_check(item, _connection=_connection)
+    return _with_standard_check(item, _connection=_connection, _runtime=runtime)
 
 
-def _with_standard_check(item, *, _connection=None):
+def _with_standard_check(item, *, _connection=None, _runtime=None):
+    runtime = _current_runtime(_runtime)
     requirement = (item.get("fields") or {}).get("签章要求", "")
-    return apply_standard_check(item, database.get_seal_standard(requirement, _connection=_connection))
+    return apply_standard_check(item, runtime.database.get_seal_standard(requirement, _connection=_connection))
 
 
 def _standard_dependencies():
-    return standard_handlers.SealStandardDependencies(database, ARTIFACT_DIR,
-        _project_paginated_result, _review_revision, _with_review_revision)
+    runtime = _current_runtime()
+    return standard_handlers.SealStandardDependencies(runtime.database, runtime.paths.artifact_dir,
+        partial(_project_paginated_result, _runtime=runtime), _review_revision, _with_review_revision)
 
 
 def list_seal_standards():
@@ -734,16 +754,18 @@ def register_seal_standard(result_id):
     return standard_handlers.register_standard(_standard_dependencies(), result_id)
 
 
-def _source_for_record(item: dict) -> Path | None:
-    return ReceiptFileStore(DATA_DIR, UPLOAD_DIR).source_for_record(item)
+def _source_for_record(item: dict, *, _runtime=None) -> Path | None:
+    runtime = _current_runtime(_runtime)
+    return ReceiptFileStore(runtime.paths.data_dir, runtime.paths.upload_dir).source_for_record(item)
 
 
 
 from .samples import register_sample_routes
 register_sample_routes(app, _sample_dependencies)
+app.extensions['sample_runtime'].bind_owner(application_runtime)
 
 from .danzhengtong_jobs import register_danzhengtong_routes
-register_danzhengtong_routes(app, lambda: job_store, _wake_jobs)
+register_danzhengtong_routes(app, lambda: _current_runtime().job_store, _wake_jobs)
 
 from .routes import register_routes
 
@@ -798,8 +820,10 @@ register_routes(app, {
 }, before_request=ensure_initialized)
 
 def shutdown() -> bool:
-    app.extensions['sample_runtime'].close()
-    return application_runtime.close()
+    with _initialization_lock:
+        formal_stopped = application_runtime.close()
+        samples_stopped = app.extensions['sample_runtime'].close()
+        return formal_stopped and samples_stopped
 
 
 atexit.register(shutdown)

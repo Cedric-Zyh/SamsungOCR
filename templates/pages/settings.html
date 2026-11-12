@@ -75,28 +75,28 @@
         </section>
         <section id="settings-rules-panel" class="settings-tab-panel" role="tabpanel" data-settings-panel="rules" aria-labelledby="settings-tab-rules" hidden>
           <section class="settings-card acceptance-card" aria-labelledby="acceptance-settings-title">
-            <div class="settings-section-heading"><div><h2 id="acceptance-settings-title">核验与复核规则</h2><p>设置多路结果如何判定通过或不通过，修改后自动保存。</p></div></div>
+            <div class="settings-section-heading"><div><h2 id="acceptance-settings-title">核验与复核规则</h2><p>已选择的内容照常识别和比对；这里只决定哪些结果计入整单判定，修改后自动保存。</p></div></div>
             <div class="acceptance-settings">
             <h3>默认通过标准</h3>
             <div class="acceptance-rule" role="group" aria-labelledby="seal-match-title">
               <strong id="seal-match-title">客户印章</strong>
               <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="any" checked><span>任一结果匹配</span></label>
               <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="none"><span>不核对</span></label>
+              <label><input type="radio" name="seal-match-mode" data-acceptance-input="seal" value="none"><span>不计入判定</span></label>
               <small>清瞳包含“印章模板”和“文字 OCR”两路结果；同时选择多种识别方式时按此规则判定。</small>
             </div>
             <div class="acceptance-rule" role="group" aria-labelledby="date-match-title">
               <strong id="date-match-title">签收日期</strong>
               <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="any" checked><span>任一结果匹配</span></label>
               <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="none"><span>不核对</span></label>
+              <label><input type="radio" name="date-match-mode" data-acceptance-input="date" value="none"><span>不计入判定</span></label>
               <small>多种识别方式都返回日期时，按这里选择是否要求全部一致。</small>
             </div>
             <div class="acceptance-rule" role="group" aria-labelledby="signature-match-title">
               <strong id="signature-match-title">签名核对</strong>
               <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="any"><span>任一结果匹配</span></label>
               <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="all"><span>全部结果匹配</span></label>
-              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none" checked><span>不核对</span></label>
+              <label><input type="radio" name="signature-match-mode" data-acceptance-input="signature" value="none" checked><span>不计入判定</span></label>
               <small>多种识别方式识别收货人和仓库联系人时，按这里选择判定方式。</small>
             </div>
             <h3 class="acceptance-subheading">默认不通过标准</h3>
@@ -109,9 +109,9 @@
             </div>
             <div class="acceptance-rule" role="group" aria-labelledby="low-confidence-title">
               <strong id="low-confidence-title">低置信度字段</strong>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check"><span>核对</span></label>
-              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore" checked><span>不核对</span></label>
-              <small>“核对”会因低置信度字段进入人工复核；“不核对”仍保留提示，但不阻止整单自动通过。</small>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="check"><span>计入判定</span></label>
+              <label><input type="radio" name="low-confidence-mode" data-acceptance-low-confidence value="ignore" checked><span>不计入判定</span></label>
+              <small>“计入判定”会因低置信度字段进入人工复核；“不计入判定”仍保留提示，整单按其他已启用的规则判定。</small>
             </div>
             </div>
           </section>

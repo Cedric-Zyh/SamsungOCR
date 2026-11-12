@@ -43,7 +43,8 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
       const needsStandard = key === 'seal' && item.seal_standard_check?.requirement
         && item.seal_standard_check.status !== 'matched' && item.seal_check?.human_confirmed_match !== true
         && !(reviewState.sampleView && status === '匹配');
-      const blocking = ['date', 'seal'].includes(key) && (status !== '匹配' || needsStandard);
+      const included = ReceiptWorkbench.participatesInDecision(item, key);
+      const blocking = included && ['date', 'seal'].includes(key) && (status !== '匹配' || needsStandard);
       card.open = blocking;
       card.classList.toggle('check-attention', blocking);
       $(`[data-check-badge="${key}"]`, content).innerHTML = statusPill(status);

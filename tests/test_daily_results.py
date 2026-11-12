@@ -2,10 +2,10 @@ from receipt_ocr.web import application as app_module
 from receipt_ocr.persistence.database import Database
 
 
-def test_daily_results_combines_tasks_and_scopes_before_dedup(tmp_path, monkeypatch):
+def test_daily_results_combines_tasks_and_scopes_before_dedup(bind_application_runtime, tmp_path, monkeypatch):
     db = Database(tmp_path / 'daily.db')
     db.initialize()
-    monkeypatch.setattr(app_module, 'database', db)
+    bind_application_runtime(database=db)
     for filename, day, task, status in [
         ('a.jpg', '2026-09-08', 'first', '待复核'),
         ('b.jpg', '2026-09-08', 'second', '待复核'),
@@ -26,14 +26,13 @@ def test_daily_results_combines_tasks_and_scopes_before_dedup(tmp_path, monkeypa
     assert client.get('/api/daily-results?import_date=2026-02-30').status_code == 400
 
 
-def test_workbench_includes_cross_day_retry_results_by_id(tmp_path, monkeypatch):
+def test_workbench_includes_cross_day_retry_results_by_id(bind_application_runtime, tmp_path, monkeypatch):
     from receipt_ocr.jobs.store import JobStore
     db = Database(tmp_path / 'retry.db')
     db.initialize()
     store = JobStore(db)
     store.initialize()
-    monkeypatch.setattr(app_module, 'database', db)
-    monkeypatch.setattr(app_module, 'job_store', store)
+    bind_application_runtime(database=db, job_store=store)
     old_id = db.insert_result(filename='same.jpg', stored_name='old.jpg', preview_name='', task_id='',
         result={'created_at': '2026-09-08T10:00:00', 'fields': {'客户名称': '原回单客户'},
                 'date_check': {'status': '未识别', 'actual': '', 'required': '2025-03-31', 'reliable': False},
@@ -62,10 +61,10 @@ def test_workbench_includes_cross_day_retry_results_by_id(tmp_path, monkeypatch)
     assert [r['id'] for r in client.get(url).get_json()] == [new_id]
 
 
-def test_header_filters_apply_to_list(tmp_path, monkeypatch):
+def test_header_filters_apply_to_list(bind_application_runtime, tmp_path, monkeypatch):
     db = Database(tmp_path / 'filter-scope.db')
     db.initialize()
-    monkeypatch.setattr(app_module, 'database', db)
+    bind_application_runtime(database=db)
     for filename, reliable in [('7123.jpg', True), ('7281.jpg', False), ('8172.jpg', True)]:
         db.insert_result(filename=filename, stored_name=filename, preview_name='', task_id='', result={
             'created_at': '2026-09-10T10:00:00', 'overall': '需人工复核',
@@ -77,10 +76,10 @@ def test_header_filters_apply_to_list(tmp_path, monkeypatch):
     assert [r['filename'] for r in listed] == ['8172.jpg', '7123.jpg']
 
 
-def test_pending_seal_filter_combines_review_states_and_preserves_details(tmp_path, monkeypatch):
+def test_pending_seal_filter_combines_review_states_and_preserves_details(bind_application_runtime, tmp_path, monkeypatch):
     db = Database(tmp_path / 'pending-seals.db')
     db.initialize()
-    monkeypatch.setattr(app_module, 'database', db)
+    bind_application_runtime(database=db)
     checks = [
         ('unreliable.jpg', '匹配', False),
         ('pending.jpg', '匹配待确认', False),

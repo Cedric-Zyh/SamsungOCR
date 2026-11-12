@@ -3,6 +3,8 @@ from copy import deepcopy
 
 from .deferred_document import empty_snapshot
 from .saved_footer import saved_footer_evidence
+from .variant_projection import replay_variant
+from ..domain.decision_provenance import PROVENANCE_KEY, attach_retained_sources, retained_source_context
 from ..domain.stages import STAGES
 
 
@@ -24,6 +26,7 @@ def retained_branch(history, remote_plan, source_hash):
     """Newest observation per provider wins; history entries are newest first."""
     base, snapshot, retained = None, None, {stage: {} for stage in STAGES}
     original_variants = {stage: {} for stage in STAGES}
+    retained_sources = {}
     for result, saved in history:
         saved_snapshot = saved.get('snapshot') or {}
         if saved_snapshot.get('source_hash') not in (None, '', source_hash):
@@ -34,12 +37,12 @@ def retained_branch(history, remote_plan, source_hash):
             # Public variants also work for results saved before assembly snapshots.
             rendered = []
             for variant in variants.get(stage) or []:
-                if variant.get('method') == 'danzhengtong' or variant.get('pending'):
+                if variant.get('method') == 'danzhengtong':
                     continue
-                if variant.get('details') is not None:
-                    rendered.append({'method': variant['method'], 'result': deepcopy(variant['details'])})
-                elif variant.get('error'):
-                    rendered.append({'method': variant['method'], 'error': variant['error']})
+                # The newest provider outcome owns its slot, including an
+                # empty failed/waiting outcome. Dropping that marker would let
+                # an older successful reading reappear from another history row.
+                rendered.append(replay_variant(stage, variant))
                 original_variants[stage].setdefault(variant['method'], deepcopy(variant))
             if rendered:
                 observations[stage] = rendered
@@ -57,6 +60,8 @@ def retained_branch(history, remote_plan, source_hash):
             base = deepcopy(result)
             config = deepcopy(result.get('recognition_config') or saved_snapshot.get('config') or remote_plan)
             snapshot = empty_snapshot(config, result.get('fields'))
+            if PROVENANCE_KEY in base:
+                snapshot[PROVENANCE_KEY] = deepcopy(base[PROVENANCE_KEY])
         base['processing_artifacts'] = merge_artifacts(base.get('processing_artifacts'), result.get('processing_artifacts'))
         for key in ('raw_text', 'ocr_observations', 'qr_text', 'preview_url', 'processing_timings'):
             if not base.get(key) and result.get(key):
@@ -75,8 +80,11 @@ def retained_branch(history, remote_plan, source_hash):
             })
         for stage in STAGES:
             for observation in observations.get(stage) or []:
-                if observation.get('method') != 'danzhengtong':
-                    retained[stage].setdefault(observation['method'], deepcopy(observation))
+                method = observation['method']
+                if method != 'danzhengtong' and method not in retained[stage]:
+                    retained[stage][method] = deepcopy(observation)
+                    source = result if PROVENANCE_KEY in result else saved_snapshot
+                    retained_sources.setdefault(stage, {})[method] = retained_source_context(source, stage, method)
     if base is None:
         return None
     footer = saved_footer_evidence(snapshot['context'], snapshot['evidence'], base)
@@ -92,6 +100,7 @@ def retained_branch(history, remote_plan, source_hash):
             snapshot['config'][stage].append('danzhengtong')
     snapshot['source_hash'] = source_hash
     snapshot['retained_variants'] = {stage: list(values.values()) for stage, values in original_variants.items()}
+    attach_retained_sources(snapshot, retained_sources)
     return {'snapshot': snapshot, 'base': base}
 
 
@@ -104,8 +113,19 @@ def merge_retained_result(branch, combined):
                                   branch['snapshot'].get('context'), branch['snapshot'].get('evidence'))
     if footer:
         result['signature_footer'] = footer
-    result['processing_artifacts'] = merge_artifacts(
-        branch['base'].get('processing_artifacts'), combined.get('processing_artifacts'))
+    previous_artifacts = deepcopy(branch['base'].get('processing_artifacts') or {})
+    current_seals = (combined.get('processing_artifacts') or {}).get('seals')
+    for artifact in previous_artifacts.get('seals') or []:
+        if not isinstance(artifact, dict):
+            continue
+        # DZT observations are deliberately rerun, while QingTong observations
+        # come from the newest retained variant. Historical images remain
+        # inspectable but cannot outvote the replacement text, even at one URL.
+        if (artifact.get('provider') == 'danzhengtong'
+                or (artifact.get('source') == '清瞳印章区域' and isinstance(current_seals, list)
+                    and artifact not in current_seals)):
+            artifact.update(execution_status='skipped', skip_reason='superseded_provider_evidence')
+    result['processing_artifacts'] = merge_artifacts(previous_artifacts, combined.get('processing_artifacts'))
     for stage, variants in branch['snapshot'].get('retained_variants', {}).items():
         if not variants:
             continue

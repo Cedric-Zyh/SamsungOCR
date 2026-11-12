@@ -290,7 +290,7 @@ def test_direct_recognition_failure_keeps_measured_calls(web_queue, monkeypatch)
     def analyze(source, preview, **options):
         with recognition_call('paddle_v6', 'recognize', source):
             raise RuntimeError('timeout')
-    monkeypatch.setattr(web_queue, '_configured_analyze', analyze)
+    monkeypatch.setattr(web_queue.application_runtime.configured_recognition, 'recognize', analyze)
     client = web_queue.app.test_client()
     response = client.post('/api/analyze', data={'file': (io.BytesIO(b'image'), 'one.png'),
                                                'ocr_backend': 'paddle_v6'})

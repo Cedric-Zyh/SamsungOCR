@@ -29,6 +29,10 @@ def active_issues(issues: list[ReviewIssue], acceptance: dict) -> list[ReviewIss
         if not item["blocking"]:
             continue
         scope = item["scope"]
+        # Reader disagreement is selection evidence, not a separate pass rule.
+        # Date, seal and signature comparisons enforce their own any/all policy.
+        if item["code"] == "provider_conflict" and scope in {"fields", "handwriting"}:
+            continue
         if scope in {"date", "seal", "signature"} and acceptance.get(f"{scope}_match_mode") == "none":
             continue
         if item["code"] == "low_confidence" and acceptance.get("low_confidence_mode") == "ignore":

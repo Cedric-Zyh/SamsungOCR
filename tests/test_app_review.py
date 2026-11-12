@@ -20,10 +20,10 @@ def sample_result(filename="7266301052.jpg"):
     }
 
 
-def test_create_task_defaults_to_local_seal_mode(tmp_path, monkeypatch):
+def test_create_task_defaults_to_local_seal_mode(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
 
     response = app_module.app.test_client().post(
         "/api/tasks",
@@ -35,7 +35,7 @@ def test_create_task_defaults_to_local_seal_mode(tmp_path, monkeypatch):
 
 
 def test_create_task_uses_saved_plan_instead_of_legacy_seal_mode(
-    tmp_path, monkeypatch
+    bind_application_runtime, tmp_path, monkeypatch
 ):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
@@ -43,7 +43,7 @@ def test_create_task_uses_saved_plan_instead_of_legacy_seal_mode(
     settings['recognition_config']['seal'] = ['qingtong']
     test_database.set_json_setting('recognition_defaults', settings)
     monkeypatch.setattr(app_module.analyzer.seal_api, 'api_key', 'test-key')
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
     client = app_module.app.test_client()
 
     response = client.post(
@@ -89,10 +89,10 @@ def test_human_edits_recompute_date_and_seal():
     assert all(meta["source"] == "人工复核" for meta in updated["field_metadata"].values())
 
 
-def test_confirm_pass_rejects_missing_date_and_seal_evidence(tmp_path, monkeypatch):
+def test_confirm_pass_rejects_missing_date_and_seal_evidence(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
     result = sample_result("unsafe.jpg")
     result["field_metadata"] = {}
     result["fields"].update({"要求到货": "2025-01-05", "签章要求": "测试收货章"})
@@ -115,10 +115,10 @@ def test_confirm_pass_rejects_missing_date_and_seal_evidence(tmp_path, monkeypat
     assert test_database.history(result_id) == []
 
 
-def test_date_mismatch_stays_pending_until_human_confirms_rejection(tmp_path, monkeypatch):
+def test_date_mismatch_stays_pending_until_human_confirms_rejection(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
     result = sample_result("date-mismatch.jpg")
     result.update(
         fields={"要求到货": "2026-02-02", "签章要求": "测试收货章"},
@@ -150,11 +150,11 @@ def test_date_mismatch_stays_pending_until_human_confirms_rejection(tmp_path, mo
 
 
 def test_results_show_latest_receipt_once_while_history_retains_prior_runs(
-    tmp_path, monkeypatch
+    bind_application_runtime, tmp_path, monkeypatch
 ):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
     stale = sample_result("same.jpg")
     stale["fields"]["客户名称"] = "旧客户"
     current = sample_result("same.jpg")
@@ -179,10 +179,10 @@ def test_results_show_latest_receipt_once_while_history_retains_prior_runs(
     assert len(client.get("/api/history?customer=旧客户").get_json()) == 1
 
 
-def test_bulk_pass_rejects_uncertain_record_but_accepts_reliable_pass(tmp_path, monkeypatch):
+def test_bulk_pass_rejects_uncertain_record_but_accepts_reliable_pass(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
 
     unsafe = sample_result("unsafe.jpg")
     unsafe_id = test_database.insert_result(
@@ -269,12 +269,11 @@ def test_product_cell_edit_retains_machine_value():
     assert "物料编号" not in detail["low_confidence_columns"]
 
 
-def test_confirmed_review_can_create_audited_ground_truth(tmp_path, monkeypatch):
+def test_confirmed_review_can_create_audited_ground_truth(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
     truth_path = tmp_path / "ground_truth.json"
-    monkeypatch.setattr(app_module, "database", test_database)
-    monkeypatch.setattr(app_module, "GROUND_TRUTH_PATH", truth_path)
+    bind_application_runtime(database=test_database, ground_truth_path=truth_path)
 
     fields = {name: f"确认-{name}" for name in GROUND_TRUTH_FIELDS}
     fields["要求到货"] = "2025-01-05"
@@ -316,7 +315,7 @@ def test_confirmed_review_can_create_audited_ground_truth(tmp_path, monkeypatch)
     assert truth_response["history"][0]["action"] == "新增评测真值"
 
 
-def test_accuracy_report_follows_requested_backend(tmp_path, monkeypatch):
+def test_accuracy_report_follows_requested_backend(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
     truth_path = tmp_path / "ground_truth.json"
@@ -326,8 +325,7 @@ def test_accuracy_report_follows_requested_backend(tmp_path, monkeypatch):
             "actual_date": "", "seal_should_match": False,
         }
     }, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(app_module, "database", test_database)
-    monkeypatch.setattr(app_module, "GROUND_TRUTH_PATH", truth_path)
+    bind_application_runtime(database=test_database, ground_truth_path=truth_path)
 
     for backend, customer in (("paddle_v6", "Paddle 正确客户"), ("danzhengtong", "远程错误客户")):
         task_id = f"task-{backend}"
@@ -348,10 +346,10 @@ def test_accuracy_report_follows_requested_backend(tmp_path, monkeypatch):
     assert payload["accuracy"]["field_accuracy"] == 1
 
 
-def test_paginated_receipt_is_reviewed_as_one_logical_record(tmp_path, monkeypatch):
+def test_paginated_receipt_is_reviewed_as_one_logical_record(bind_application_runtime, tmp_path, monkeypatch):
     test_database = Database(tmp_path / "results.db")
     test_database.initialize()
-    monkeypatch.setattr(app_module, "database", test_database)
+    bind_application_runtime(database=test_database)
     task_id = "paginated-task"
     test_database.create_task(task_id, "two page receipt", 2, "paddle_v6")
 

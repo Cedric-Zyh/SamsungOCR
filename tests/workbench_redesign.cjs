@@ -207,6 +207,25 @@ test('date changes hide old rows and clear old progress; failed requests cannot 
   await h.$('#workbench-start-review').dispatch('click'); assert.equal(h.scopes.length, 0);
 });
 
+test('changing the selected date without another query discards the pending day and releases loading', async () => {
+  const h = harness(), pending = deferred(), started = deferred(), read = h.api;
+  h.api = (url, options) => {
+    if (url.startsWith('/api/daily-results?')) { started.resolve(); return pending.promise; }
+    return read(url, options);
+  };
+  const loading = h.controller.loadDailyResults();
+  await started.promise;
+  h.controller.showImportedTask({day: '2026-09-11'});
+  pending.resolve([row(1)]);
+  await loading;
+  assert.equal(h.$('#progress-date').value, '2026-09-11');
+  assert.equal(h.state.progress.dailyReady, false);
+  assert.equal(h.state.progress.queueDay, undefined);
+  assert.equal(h.state.progress.progressRecordCache, undefined);
+  assert.equal(h.$('#task-section').attributes['aria-busy'], undefined);
+  assert.equal(h.$('#task-section').classList.contains('hidden'), true);
+});
+
 test('remote retry respects confirmation and switches to processing only after success', async () => {
   const h = harness(), retry = deferred();
   h.jobs = [{id: 'remote/1', filename: 'remote.jpg', status: 'failed', uses_remote: true}];

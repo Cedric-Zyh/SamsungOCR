@@ -10,6 +10,9 @@ export function normalizedReviewDate(value) {
 
 export function reviewReadiness(item, draft) {
   const date = item.date_check || {}, seal = item.seal_check || {};
+  const acceptance = item.recognition_config?.acceptance || {};
+  const dateEnabled = acceptance.date_match_mode !== 'none';
+  const sealEnabled = acceptance.seal_match_mode !== 'none';
   const fields = item.fields || {};
   const required = normalizedReviewDate(draft.requiredDate);
   const actual = normalizedReviewDate(draft.actualDate);
@@ -36,11 +39,12 @@ export function reviewReadiness(item, draft) {
   const sealIssue = sealReady ? '' : sealMismatch ? '印章与要求不匹配'
     : !sealText ? '印章内容尚未填写' : !standardReady && standard?.status === 'missing' ? '尚无标准章，请选择加入或完成人工核对'
     : sealPartial ? '印章文字部分匹配，需人工核对' : '印章尚未确认';
-  const issues = [dateIssue && {target: 'date', message: dateIssue}, sealIssue && {target: 'seal', message: sealIssue}].filter(Boolean);
-  return {ready: dateReady && sealReady, dateReady, sealReady, issues,
+  const issues = [dateEnabled && dateIssue && {target: 'date', message: dateIssue},
+    sealEnabled && sealIssue && {target: 'seal', message: sealIssue}].filter(Boolean);
+  return {ready: (!dateEnabled || dateReady) && (!sealEnabled || sealReady), dateReady, sealReady, issues,
     dateStatus: dateReady ? '匹配' : actual && required && !dateMatched ? '不匹配' : '待确认',
     sealStatus: sealReady ? '匹配' : sealMismatch ? '不匹配' : sealPartial ? '部分匹配' : '待确认',
-    message: issues.length ? issues.map(issue => issue.message).join('；') : '日期和印章已核对，可确认通过'};
+    message: issues.length ? issues.map(issue => issue.message).join('；') : '参与判定的核验项目已满足，可确认通过'};
 }
 
 export function reviewKeyboardAction(event) {

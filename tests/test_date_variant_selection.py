@@ -75,7 +75,7 @@ def test_missing_requirement_keeps_original_order_without_completing_partial_dat
 
 
 @pytest.mark.parametrize('mode,status,reliable', [
-    ('any', '不匹配', True), ('all', '需人工复核', False), ('none', '未核对', True),
+    ('any', '不匹配', True), ('all', '需人工复核', False), ('none', '不匹配', True),
 ])
 def test_assembly_selects_existing_nearest_check_without_changing_acceptance(mode, status, reliable):
     candidates = [variant('local', '2025-02-02', reliable=False), variant('danzhengtong', '2025-02-21')]
@@ -93,7 +93,7 @@ def test_assembly_selects_existing_nearest_check_without_changing_acceptance(mod
     assert candidates == before
 
 
-@pytest.mark.parametrize('mode,status', [('any', '不匹配'), ('all', '需人工复核'), ('none', '未核对')])
+@pytest.mark.parametrize('mode,status', [('any', '不匹配'), ('all', '需人工复核'), ('none', '不匹配')])
 def test_complete_assembly_keeps_every_providers_date_text_and_selected_backend(tmp_path, mode, status):
     results = {stage: [] for stage in STAGES}
     results['date'] = [variant('paddle_v6', '2025-02-02', reliable=False),
@@ -128,7 +128,7 @@ def saved_result(mode='any'):
 
 
 @pytest.mark.parametrize('mode,status,reliable', [
-    ('any', '不匹配', True), ('all', '需人工复核', False), ('none', '未核对', True),
+    ('any', '不匹配', True), ('all', '需人工复核', False), ('none', '不匹配', True),
 ])
 def test_saved_date_refresh_changes_only_the_aggregate_and_machine_date(mode, status, reliable):
     current = saved_result(mode)
@@ -140,8 +140,10 @@ def test_saved_date_refresh_changes_only_the_aggregate_and_machine_date(mode, st
     if mode == 'any':
         assert updated['date_check'] == current['recognition_variants']['date'][1]['details']['date_check']
         assert updated['date_check']['message'] == '实际收货比要求日期早 1 天'
-    assert {key: value for key, value in updated.items() if key not in {'fields', 'date_check'}} == {
+    assert {key: value for key, value in updated.items() if key not in {'fields', 'date_check', 'decision_provenance'}} == {
         key: value for key, value in current.items() if key not in {'fields', 'date_check'}}
+    assert updated['decision_provenance']['origin'] == 'unrecorded'
+    assert updated['decision_provenance']['evaluations'][-1]['operation'] == 'date_selection'
     assert current == before
     assert refresh_date_selection(updated) == updated
 

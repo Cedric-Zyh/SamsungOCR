@@ -339,7 +339,8 @@ class DanzhengtongWorker(SealRequests):
             combined = merge_retained_result(branch, combined)
         from ..domain.seal_standards import apply_standard_check
         requirement = (combined.get('fields') or {}).get('签章要求', '')
-        combined = apply_standard_check(combined, self.store.database.get_seal_standard(requirement))
+        combined = apply_standard_check(combined, self.store.database.get_seal_standard(requirement),
+                                        record_provenance=True)
         for key in ('processing_seconds', 'processing_timings', 'queue', 'preview_url', 'filename'):
             if key in branch['base']:
                 combined[key] = branch['base'][key]

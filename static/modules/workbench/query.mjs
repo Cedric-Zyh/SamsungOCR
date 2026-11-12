@@ -1,59 +1,20 @@
-/** Daily queue query, response ordering and freshness tracking. */
-import {localToday} from '../core/ui.mjs';
-
-export function createDailyQuery({environment, ui, progressState, importsState,
-  services, calendar, selected, viewState, pageSize,
-  ReceiptQueue, ReceiptWorkbench, syncSelection, syncStartRecognition,
-  renderQueueControl, renderTask, renderWorkbenchRows,
+/** Daily queue data, response ordering and freshness. No DOM or navigation.
+ * The controller supplies the selected day and can reject responses after its
+ * selection changes, even before the next request begins. */
+export function createDailyQuery({progressState, services, ReceiptQueue, ReceiptWorkbench,
+  now = () => Date.now(), onStateChange = () => {},
   onResultsChanged = () => {}, onQueueChanged = () => {}}) {
-  const {document} = environment;
-  const {$, $$} = ui;
-  async function loadDailyResults({refreshRecords = true} = {}) {
-    progressState.dailyAttemptAt = Date.now();
-    const day = $('#progress-date').value || localToday();
-    $('#progress-date').value = day;
-    calendar.sync();
-    const reviewEntry = $('#open-batch-review');
-    if (document.body.dataset.activePage === 'progress' && reviewEntry.dataset.reviewDay !== day) {
-      reviewEntry.dataset.reviewDay = day;
-      reviewEntry.setAttribute('aria-label', `人工复核，${day}，当天全部`);
-      reviewEntry.title = `复核 ${day} 当天的回单`;
-      reviewEntry.classList.remove('has-pending');
-      $('#review-entry-count').textContent = '';
-      $('#review-entry-count').classList.add('hidden');
-    }
+  async function load(day, {refreshRecords = true, isCurrent = () => true} = {}) {
+    progressState.dailyAttemptAt = now();
     const requestId = progressState.dailyRequest = (progressState.dailyRequest || 0) + 1;
     const previousDay = progressState.queueDay, newDay = previousDay !== day;
+    const current = () => requestId === progressState.dailyRequest && isCurrent();
     if (newDay) {
       progressState.workItems = [];
       progressState.queueJobs = new Map();
-      progressState.queueMarkup = '';
-      if ($('#task-strip-counts')) $('#task-strip-counts').textContent = '正在获取任务…';
-      selected.clear(); viewState.shownItems = [];
-      if ($('#overview-completed')) $('#overview-completed').textContent = '—';
-      if ($('#overview-total')) $('#overview-total').textContent = '—';
-      if ($('#overview-percent')) $('#overview-percent').textContent = '—';
-      for (const id of ['task-count-succeeded', 'task-count-failed', 'task-count-pending']) {
-        if ($(`#${id}`)) $(`#${id}`).textContent = '—';
-      }
-      if ($('#overview-remaining')) $('#overview-remaining').textContent = '正在加载当天数据…';
-      if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '加载中';
-      if ($('#workbench-type-counts')) $('#workbench-type-counts').innerHTML = '';
-      $$('[data-work-count]').forEach(label => label.textContent = '—');
       progressState.dailyReady = false;
-      syncSelection();
-      progressState.workVisibleLimit = pageSize;
-      $('#task-section').classList.add('hidden');
-      $('#task-summary').textContent = '正在加载';
-      $('#task-summary').dataset.status = 'loading';
-      $('#task-progress').style.width = '0%';
-      $('#task-progress').parentElement.setAttribute('aria-valuenow', 0);
-      if ($('#workbench-total-label')) $('#workbench-total-label').textContent = '';
-      $('#progress-note').textContent = `正在加载 ${day} 的回单…`;
     }
-    syncStartRecognition();
-    $('#progress-note').dataset.tone = '';
-    $('#task-section').setAttribute('aria-busy', 'true');
+    onStateChange({phase: 'loading', day, newDay});
     try {
       const [jobs, control] = await Promise.all([
         services.queue.list(day),
@@ -61,52 +22,39 @@ export function createDailyQuery({environment, ui, progressState, importsState,
       ]);
       const signature = jobs.filter(job => ['succeeded', 'failed', 'cancelled'].includes(job.status)).map(job => `${job.id}:${job.status}:${job.finished_at}:${job.danzhengtong?.status || ''}:${job.danzhengtong?.updated_at || ''}`).join('|');
       const cached = progressState.progressRecordCache;
-      const reuse = !refreshRecords && cached?.day === day && cached.signature === signature && Date.now() - cached.at < 30000;
+      const reuse = !refreshRecords && cached?.day === day && cached.signature === signature && now() - cached.at < 30000;
       const records = reuse ? cached.records : await (services.records.daily(day));
-      if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
-      if (!reuse) progressState.progressRecordCache = {day, signature, records, at: Date.now()};
+      if (!current()) return;
+      if (!reuse) progressState.progressRecordCache = {day, signature, records, at: now()};
       progressState.queueControl = control;
       if (control.danzhengtong) progressState.dztControl = control.danzhengtong;
-      renderQueueControl();
       progressState.queueJobs = new Map(jobs.map(job => [job.id, job]));
       const items = ReceiptQueue.rows(records, jobs), counts = ReceiptQueue.counts(items);
       counts.pending_review = items.filter(item => ReceiptWorkbench.category(item) === 'review').length;
       counts.passed = items.filter(item => ReceiptWorkbench.category(item) === 'passed').length;
-      if (control.paused) counts.status = control.status === 'pausing' ? '暂停中' : '已暂停';
-      $('#task-section').classList.remove('hidden');
-      renderTask(counts);
       progressState.workItems = items;
       progressState.queueDay = day;
       progressState.dailyReady = true;
-      syncStartRecognition();
-      renderWorkbenchRows();
-      $('#progress-note').textContent = importsState.batchRunning || importsState.uploadingJobs?.size ? '正在上传，请保持页面打开。' : '';
-      $('#refresh-progress').textContent = '刷新';
+      onStateChange({phase: 'ready', day, newDay, counts, control});
       if (previousDay === day && progressState.queueSignature !== undefined && progressState.queueSignature !== signature) {
         onResultsChanged({keepProgressCache: true});
       }
-      progressState.queueDay = day; progressState.queueSignature = signature;
+      progressState.queueSignature = signature;
       const viewSignature = jobs.map(job => `${job.id}:${job.status}:${job.result_id || ''}:${job.target_result_id || ''}`).join('|');
       if (progressState.managementSignature !== `${day}:${viewSignature}`) {
         progressState.managementSignature = `${day}:${viewSignature}`;
         onQueueChanged();
       }
     } catch (error) {
-      if (requestId !== progressState.dailyRequest || $('#progress-date').value !== day) return;
+      if (!current()) return;
       progressState.dailyReady = false;
-      syncSelection();
-      if (!newDay) renderWorkbenchRows();
-      if ($('#workbench-state-pill')) $('#workbench-state-pill').textContent = '更新失败';
-      syncStartRecognition();
-      if (newDay) { $('#task-summary').textContent = '暂时无法加载'; $('#task-summary').dataset.status = 'error'; }
-      $('#progress-note').dataset.tone = 'danger';
-      $('#progress-note').textContent = newDay ? `${day} 的回单加载失败，请重试。` : '更新失败，当前显示上次成功加载的回单，请重试。';
-      $('#refresh-progress').textContent = '重试';
+      onStateChange({phase: 'error', day, newDay, error});
       throw error;
     } finally {
-      if (requestId === progressState.dailyRequest) $('#task-section').removeAttribute('aria-busy');
+      // A selection change without a replacement request still releases loading.
+      if (requestId === progressState.dailyRequest) onStateChange({phase: 'settled', day, newDay});
     }
   }
 
-  return {loadDailyResults};
+  return {load};
 }

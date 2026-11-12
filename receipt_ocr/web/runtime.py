@@ -4,6 +4,7 @@ Construction does not access the database or start workers. A runtime has one
 initialization and one shutdown; a different configuration gets a new owner.
 """
 from threading import RLock
+from dataclasses import replace
 import time
 
 from ..application.analyzer import ReceiptAnalyzer
@@ -22,14 +23,18 @@ from .remote_settings import restore
 
 class ApplicationRuntime:
     def __init__(self, paths, *, database=None, analyzer=None, matcher=None,
-                 recognition=None, logger=None, worker_factory=JobWorker):
+                 recognition=None, job_store=None, logger=None, worker_factory=JobWorker):
+        if database is not None:
+            paths = replace(paths, database_path=database.path)
         self.paths = paths
         self.database = database if database is not None else Database(paths.database_path)
         self.analyzer = analyzer if analyzer is not None else ReceiptAnalyzer()
         self.matcher = matcher if matcher is not None else SealReferenceMatcher(paths.artifact_dir)
         self.recognition = recognition if recognition is not None else RecognitionService(self.analyzer, self.matcher)
         self.configured_recognition = ConfiguredRecognition(self.database, self.analyzer, self.recognition, restore)
-        self.job_store = JobStore(self.database)
+        if job_store is not None and job_store.database is not self.database:
+            raise ValueError('任务队列必须使用运行环境的数据库')
+        self.job_store = job_store if job_store is not None else JobStore(self.database)
         self.job_worker = None
         self.logger = logger
         self._worker_factory = worker_factory

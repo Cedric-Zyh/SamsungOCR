@@ -10,6 +10,7 @@ from collections.abc import Mapping, Iterator
 from copy import deepcopy
 from typing import Any, Literal
 from .issues import CheckResult
+from .evidence_selection import inactive
 
 Metadata = dict[str, dict[str, Any]]
 Artifact = dict[str, Any]
@@ -89,18 +90,33 @@ class StageOutcome(Mapping[str, Any]):
 
     @classmethod
     def from_variant(cls, stage: str, variant) -> "StageOutcome":
+        """Decode internal ``result`` or the historical public ``details`` form.
+
+        Display values are not observations. Unknown envelope metadata remains
+        in the internal snapshot, while public serialization has its own narrow
+        field contract. A nonempty public payload has the same precedence used
+        by the saved-evidence readers.
+        """
         if isinstance(variant, cls):
             if variant.stage != stage:
                 raise ValueError(f"Stage outcome belongs to {variant.stage}, not {stage}")
             return variant
         payload = variant.get("result")
+        details = variant.get("details")
+        if isinstance(details, Mapping) and (details or not isinstance(payload, Mapping)):
+            payload = details
+        failed = variant.get("error") or any(
+            str(variant.get(key, "")).lower() in {"failed", "error", "识别失败"}
+            for key in ("status", "execution_status"))
         state = ("pending" if variant.get("pending") else
+                 "failed" if failed else
                  "skipped" if isinstance(payload, dict) and
-                 payload.get(f"{stage}_check", {}).get("execution_status") == "skipped" else
+                 (payload.get(f"{stage}_check") or {}).get("execution_status") == "skipped" else
                  "completed" if payload is not None else "failed")
         return cls(stage, variant["method"], state, payload=payload, error=variant.get("error"),
                    metadata={key: value for key, value in variant.items()
-                             if key != "method" and (key not in {"result", "error"} or value is None)})
+                             if key not in {"method", "details", "value"}
+                             and (key not in {"result", "error"} or value is None)})
 
     @classmethod
     def completed(cls, stage: str, method: str, payload: dict) -> "StageOutcome":
@@ -111,7 +127,7 @@ class StageOutcome(Mapping[str, Any]):
         return cls(stage, method, "failed", error=error)
 
     def to_variant(self, *, copy_payload=True) -> dict:
-        value = {"method": self.method, **self.metadata}
+        value = {**self.metadata, "method": self.method}
         if self.state == "pending":
             value["pending"] = True
         if self.has_result:
@@ -119,9 +135,13 @@ class StageOutcome(Mapping[str, Any]):
             if self.state == "skipped":
                 key = f"{self.stage}_check"
                 value["result"] = {**self.payload, key: {
-                    **self.payload.get(key, {}), "execution_status": "skipped"}}
+                    **(self.payload.get(key) or {}), "execution_status": "skipped"}}
         if self.error is not None:
             value["error"] = self.error
+        if self.state == "failed" and not inactive(value):
+            # A constructed failure can retain an old payload without an error
+            # message. Its execution state must still survive the JSON boundary.
+            value["execution_status"] = "failed"
         return deepcopy(value) if copy_payload else value
 
     def __getitem__(self, key):

@@ -2,11 +2,10 @@ from receipt_ocr.persistence.database import Database
 from receipt_ocr.web import application as web
 
 
-def test_qingtong_save_clear_and_restart(monkeypatch, tmp_path):
+def test_qingtong_save_clear_and_restart(bind_application_runtime, monkeypatch, tmp_path):
     db = Database(tmp_path / 'settings.db')
     db.initialize()
-    monkeypatch.setattr(web, 'database', db)
-    monkeypatch.setattr(web, 'job_store', web.job_store)
+    bind_application_runtime(database=db)
     monkeypatch.setattr(web.analyzer.seal_api, 'api_key', '')
     client = web.app.test_client()
     assert client.get('/api/settings/qingtong').json == {'configured': False}
@@ -27,10 +26,10 @@ def test_qingtong_save_clear_and_restart(monkeypatch, tmp_path):
     assert not web.analyzer.seal_api.enabled
 
 
-def test_qingtong_rejects_invalid_and_cross_origin_updates(monkeypatch, tmp_path):
+def test_qingtong_rejects_invalid_and_cross_origin_updates(bind_application_runtime, monkeypatch, tmp_path):
     db = Database(tmp_path / 'settings.db')
     db.initialize()
-    monkeypatch.setattr(web, 'database', db)
+    bind_application_runtime(database=db)
     monkeypatch.setattr(web.analyzer.seal_api, 'api_key', 'existing')
     client = web.app.test_client()
     for payload in ({}, {'api_key': 12}, {'api_key': 'two words'}):

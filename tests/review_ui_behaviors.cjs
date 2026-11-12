@@ -35,6 +35,20 @@ test('reliable machine matches remain ready without requiring repeat human confi
   assert.equal(reviewReadiness(untrusted, draft()).ready, false);
   assert.equal(reviewReadiness(untrusted, {...draft(), dateConfirmed: true, sealConfirmed: true}).ready, true);
 });
+test('excluding a date or seal from pass criteria preserves the mismatch badge without blocking confirmation', () => {
+  for (const key of ['date', 'seal']) {
+    const record = item(), values = draft();
+    record.recognition_config = {acceptance: {[`${key}_match_mode`]: 'none'}};
+    record[`${key}_check`].status = '不匹配';
+    if (key === 'date') { record.date_check.actual = '2025-03-30'; values.actualDate = '2025-03-30'; }
+    const readiness = reviewReadiness(record, values);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness[`${key}Status`], '不匹配');
+    assert.equal(readiness.issues.length, 0);
+    record.recognition_config.acceptance[`${key}_match_mode`] = 'any';
+    assert.equal(reviewReadiness(record, values).ready, false);
+  }
+});
 
 test('date evidence keeps provider provenance together with accepted and rejected date evidence', () => {
   const evidence = dateAuditText({date_check: {backend: '单证通', actual: '2025-02-10',

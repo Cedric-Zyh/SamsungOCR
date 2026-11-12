@@ -1,5 +1,9 @@
 /* Presentation policy shared by the daily workbench and review workspace. */
 const ReceiptWorkbench = (() => {
+  function participatesInDecision(record, key) {
+    const mode = record.recognition_config?.acceptance?.[`${key}_match_mode`];
+    return key === 'signature' ? ['any', 'all'].includes(mode) : mode !== 'none';
+  }
   function hasProviderFailure(record) {
     if (!record) return false;
     if ((record.review_issues || []).some(issue =>
@@ -18,7 +22,8 @@ const ReceiptWorkbench = (() => {
     if (hasProviderFailure(item.record || item)) return 'failed';
     const record = item.record || item;
     const humanDecision = ['确认通过', '确认不通过'].includes(item.review_status);
-    if (!humanDecision && ['date_check', 'seal_check'].some(key => record[key]?.status === '不匹配')) return 'review';
+    if (!humanDecision && ['date', 'seal'].some(key => participatesInDecision(record, key)
+      && record[`${key}_check`]?.status === '不匹配')) return 'review';
     if (item.review_status === '待复核') return 'review';
     return item.final_result === '不通过' ? 'rejected' : item.final_result === '通过' ? 'passed' : 'review';
   }
@@ -37,12 +42,12 @@ const ReceiptWorkbench = (() => {
   }
   function signatureCheck(record) {
     const saved = record.signature_check;
-    if (saved) return saved;
+    if (saved && saved.status !== '未核对') return saved;
     const fields = record.fields || {};
     const contact = String(fields['仓库联系人'] || record.internal_fields?.['仓库联系人'] || '').trim();
     const receiver = String(fields['仓库接收人'] || record.internal_fields?.['仓库接收人'] || '').trim();
     const normalize = value => value.replace(/\s+/g, '');
-    const contactNames = contact.split(/[、,，/／;；|]+/).map(normalize).filter(Boolean);
+    const contactNames = contact.split(/[、,，/／;；|｜]+/).map(normalize).filter(Boolean);
     const receiverName = normalize(receiver);
     return {contact, receiver,
       status: contact && receiver ? (contactNames.includes(receiverName) ? '匹配' : '不匹配') : '未识别',
@@ -73,6 +78,7 @@ const ReceiptWorkbench = (() => {
   function issues(record) {
     const found = [];
     for (const [key, title] of [['date', '签收日期'], ['seal', '客户印章']]) {
+      if (!participatesInDecision(record, key)) continue;
       const check = record[`${key}_check`] || {};
       if (check.status === '不匹配') found.push({target: key, message: `${title}与要求不一致`});
       else if (check.status === '部分匹配') found.push({target: key, message: check.message || `${title}部分文字缺失，需人工复核`});
@@ -80,7 +86,12 @@ const ReceiptWorkbench = (() => {
       else if (!check.reliable) found.push({target: key, message: check.status === '未执行' ? `${title}未执行核验` : check.status === '匹配' ? `${title}比对匹配，但证据不足，仍需确认` : `${title}尚未可靠识别`});
     }
     const ignoreLowConfidence = record.recognition_config?.acceptance?.low_confidence_mode === 'ignore';
+    const excludedReasons = new Set((record.review_issues || []).filter(item =>
+      item.blocking === false || (item.code === 'provider_conflict' && ['fields', 'handwriting'].includes(item.scope))
+      || (['date', 'seal', 'signature'].includes(item.scope) && !participatesInDecision(record, item.scope)))
+      .map(item => item.message));
     for (const reason of record.review_reasons || []) {
+      if (excludedReasons.has(reason)) continue;
       if (ignoreLowConfidence && /低置信度/.test(reason)) continue;
       let target = /日期|到货/.test(reason) ? 'date' : /印章|签章/.test(reason) ? 'seal' : /商品/.test(reason) ? 'products' : /签名|填写/.test(reason) ? 'handwriting' : /字段/.test(reason) ? 'fields' : 'evidence';
       const lowFields = Object.entries(record.field_metadata || {}).filter(([,meta]) => meta.low_confidence).map(([name]) => name);
@@ -194,6 +205,6 @@ const ReceiptWorkbench = (() => {
   function nextReview(rows, currentId, deferred) {
     return rows.find(row => row.id !== currentId && !deferred.has(row.id));
   }
-  return {hasProviderFailure, category, matches, ordered, signatureCheck, checkStatus, dateReview, chooseDate, issues, imageSources, selectedLocalSealArtifact, nextReview};
+  return {hasProviderFailure, participatesInDecision, category, matches, ordered, signatureCheck, checkStatus, dateReview, chooseDate, issues, imageSources, selectedLocalSealArtifact, nextReview};
 })();
 export {ReceiptWorkbench};

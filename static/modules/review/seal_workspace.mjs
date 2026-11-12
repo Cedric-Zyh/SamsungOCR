@@ -19,13 +19,14 @@ export function sealWorkspaceModel(item) {
       {label: '印章类型', value: item.provider_seal_type || '', url: processed},
     ];
     const missing = item.returned_image_status === 'missing';
+    const originalLabel = item.input_url || item.color_isolated_url ? '上传的增强图' : '印章原始区域';
     const imageMessage = item.returned_image_status === 'disabled' ? '已关闭单证通旋正图下载'
       : item.returned_image_status === 'pending' ? '单证通旋正图正在后台下载'
         : missing ? '单证通未返回旋正图' : '单证通旋正图未能取回';
     return {adopted: false, managed: false, remote: true, selected: '', text: resultText,
       emptyText: '单证通尚未返回印章文字', status: resultText ? '单证通返回' : '未返回文字',
       original, processed, preferred: processed || original,
-      originalLabel: item.input_url || item.color_isolated_url ? '上传的增强图' : '印章原始区域', processedLabel: '单证通旋正图',
+      originalLabel, processedLabel: '单证通旋正图', preferredLabel: processed ? '单证通旋正图' : originalLabel,
       fields, formFields: [], otherCandidate: '',
       warning: processed ? '' : `${imageMessage}，可查看上传的增强图核对。`,
     };
@@ -87,7 +88,8 @@ export function sealWorkspaceModel(item) {
     text: resultText,
     emptyText: form.managed ? '尚无可采用的完整结果' : fields.length ? '已保存分项读数，请查看下方内容' : '这条记录未保存识别文字',
     status: adopted ? '已采用' : form.managed ? '待核对' : resultText ? '识别文字' : fields.length ? '分项结果' : '无文字记录',
-    original, processed, fields, formFields, otherCandidate,
+    original, processed, preferred: processed || original, preferredLabel: processed ? '处理后' : '印章原图',
+    fields, formFields, otherCandidate,
     warning: form.managed && !adopted ? (form.status === 'conflict'
       ? '识别结果存在分歧，请查看对应图片与识别过程。' : '尚未形成完整的印章文字，请查看原图。') : '',
   };
@@ -107,7 +109,7 @@ export function renderSealWorkspace(item, {audit = ''} = {}) {
   return `<section class="seal-workspace"><header class="seal-result-heading"><h4>印章识别结果</h4><span class="seal-adoption${model.adopted ? ' is-adopted' : ''}">${model.status}</span></header>
     <div class="seal-final-text">${escapeHtml(model.text || model.emptyText)}</div>
     ${model.warning ? `<p class="seal-result-warning">${escapeHtml(model.warning)}</p>` : ''}
-    <div class="seal-image-entry">${button(model.remote && model.processed ? '单证通旋正图' : model.originalLabel || '印章原图', model.preferred || model.original || model.processed, '查看印章图片')}<small>${model.remote ? '在左侧查看上传图与单证通返回图' : '在左侧查看原图与处理图'}</small></div>
+    <div class="seal-image-entry">${button(model.preferredLabel, model.preferred, '查看印章图片')}<small>${model.remote ? '在左侧查看上传图与单证通返回图' : '在左侧查看原图与处理图'}</small></div>
     ${model.fields.length ? `<div class="seal-result-fields">${model.fields.map(row).join('')}</div>` : ''}
     ${model.otherCandidate ? `<details class="seal-other-candidate"><summary>${model.adopted ? '其他识别读数' : '待核对候选'}</summary><p>${escapeHtml(model.otherCandidate)}</p></details>` : ''}
     ${formFields}${process}</section>`;
@@ -126,8 +128,7 @@ export function bindSealWorkspaces(root, items, previewSeal) {
     root.querySelectorAll('[data-seal-workspace-select]').forEach(button => {
       button.setAttribute('aria-pressed', String(Number(button.dataset.sealWorkspaceSelect) === index));
     });
-    if (preview) show(selection().preferred || selection().original || selection().processed,
-      selection().remote && selection().processed ? '单证通旋正图' : selection().originalLabel || '印章原图');
+    if (preview) show(selection().preferred, selection().preferredLabel);
   };
   root.querySelectorAll('[data-seal-workspace-select]').forEach(button => {
     button.addEventListener('click', () => activate(Number(button.dataset.sealWorkspaceSelect), true));
@@ -139,6 +140,5 @@ export function bindSealWorkspaces(root, items, previewSeal) {
     });
   });
   activate(0, false);
-  return () => show(selection().preferred || selection().original || selection().processed,
-    selection().remote && selection().processed ? '单证通旋正图' : selection().originalLabel || '印章原图');
+  return () => show(selection().preferred, selection().preferredLabel);
 }

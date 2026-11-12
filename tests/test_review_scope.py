@@ -12,10 +12,10 @@ from receipt_ocr.jobs.store import JobStore
 
 
 @pytest.fixture
-def scoped_database(tmp_path, monkeypatch):
+def scoped_database(bind_application_runtime, tmp_path, monkeypatch):
     database = Database(tmp_path / 'scope.db')
     database.initialize()
-    monkeypatch.setattr(web, 'database', database)
+    bind_application_runtime(database=database)
     return database
 
 

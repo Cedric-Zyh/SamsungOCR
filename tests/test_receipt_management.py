@@ -7,11 +7,10 @@ from receipt_ocr.jobs.store import JobStore
 DAY = '2026-10-19'
 
 @pytest.fixture
-def managed(tmp_path, monkeypatch):
+def managed(bind_application_runtime, tmp_path, monkeypatch):
     db = Database(tmp_path / 'management.db'); db.initialize()
     store = JobStore(db); store.initialize()
-    monkeypatch.setattr(web, 'database', db)
-    monkeypatch.setattr(web, 'job_store', store)
+    bind_application_runtime(database=db, job_store=store)
     def batch(key, files, status='queued', result_id=None):
         task = store.create_batch(key, key, [{'filename': name} for name in files],
                                   {'ocr_backend': 'paddle_v6', 'seal_recognition_mode': 'local'})

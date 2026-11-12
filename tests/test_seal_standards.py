@@ -89,14 +89,13 @@ def test_requirement_key_keeps_different_station_numbers_and_chinese_names_disti
 
 
 @pytest.fixture
-def app_store(tmp_path, monkeypatch):
+def app_store(bind_application_runtime, tmp_path, monkeypatch):
     db=Database(tmp_path/'results.db');db.initialize()
     artifact_dir=tmp_path/'artifacts';folder=artifact_dir/'test';folder.mkdir(parents=True)
     for index in [0,1]:
         for name,color in [('original','black'),('color','pink'),('oriented','red')]:
             Image.new('RGB',(40,24),color).save(folder/f'{index}-{name}.png')
-    monkeypatch.setattr(web,'database',db)
-    monkeypatch.setattr(web,'ARTIFACT_DIR',artifact_dir)
+    bind_application_runtime(database=db, artifact_dir=artifact_dir)
     client=web.app.test_client()
     def add(*candidates, requirement=REQUIREMENT):
         item=receipt(*candidates);item['fields']['签章要求']=requirement
@@ -214,6 +213,23 @@ def test_raw_crop_only_and_path_escape_cannot_be_registered(app_store):
     assert register(client,add(raw)).status_code==400
     escaping=artifact();escaping['color_isolated_oriented_url']='/files/artifacts/../../secret.png'
     assert register(client,add(escaping)).status_code==400
+
+
+@pytest.mark.parametrize('marker', [{'execution_status': 'skipped'}, {'pending': True},
+                                   {'simulated': True}, {'error': 'inactive provider evidence'}])
+def test_an_inactive_artifact_cannot_be_registered_with_its_old_candidate_id(app_store, marker):
+    db, client, add, _ = app_store
+    original = artifact()
+    old_id = seal_candidates(receipt(original))[0]['id']
+    blocked = {**original, **marker}
+    result_id = add(blocked)
+    detail = client.get(f'/api/results/{result_id}').get_json()
+    assert detail['seal_standard_check']['candidates'] == []
+    response = client.post(f'/api/results/{result_id}/seal-standard', json={
+        'candidate_id': old_id, 'review_revision': detail['review_revision'], 'standard_revision': 0})
+    assert response.status_code == 400
+    assert db.list_seal_standards() == []
+    assert db.get_result(result_id)['processing_artifacts']['seals'] == [blocked]
     assert db.list_seal_standards()==[]
 
 
@@ -273,10 +289,10 @@ def test_reopened_confirmed_receipt_cannot_transfer_judgement_to_new_requirement
     assert response.status_code==409
 
 
-def test_recognition_applies_existing_standard_before_result_is_saved(app_store, monkeypatch):
+def test_recognition_applies_existing_standard_before_result_is_saved(bind_application_runtime, app_store, monkeypatch):
     _,client,add,_=app_store
     assert register(client,add(artifact())).status_code==200
-    monkeypatch.setattr(web,'recognition_service',SimpleNamespace(
+    bind_application_runtime(recognition=SimpleNamespace(
         recognize=lambda *args,**kwargs:receipt(artifact(shape='ellipse'))))
     result=web._configured_analyze('unused.png')
     assert result['seal_standard_check']['status']=='unmatched'

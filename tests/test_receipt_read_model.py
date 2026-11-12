@@ -62,7 +62,7 @@ def test_summary_and_review_write_share_transaction_and_rollback(tmp_path):
     assert db.query_receipts(filters={"customer": "重识别客户"})["items"][0]["preview_name"] == "retry.jpg"
 
 
-def test_status_counts_keep_scope_and_latest_decisions_across_pages(tmp_path, monkeypatch):
+def test_status_counts_keep_scope_and_latest_decisions_across_pages(bind_application_runtime, tmp_path, monkeypatch):
     from receipt_ocr.web import application as web
     db = Database(tmp_path / "counts.db")
     db.initialize()
@@ -86,7 +86,7 @@ def test_status_counts_keep_scope_and_latest_decisions_across_pages(tmp_path, mo
     assert "status_counts" not in db.query_receipts(filters=filters)
     assert db.query_receipts(filters={**filters, "customer": "不存在"},
                              include_status_counts=True)["status_counts"][""] == 0
-    monkeypatch.setattr(web, "database", db)
+    bind_application_runtime(database=db)
     response = web.app.test_client().get("/api/results", query_string={
         **filters, "page": 1, "page_size": 1, "include_status_counts": "1"})
     assert response.status_code == 200

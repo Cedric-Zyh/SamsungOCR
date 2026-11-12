@@ -1,4 +1,5 @@
 """Per-stamp comparison against a manually registered standard seal."""
+from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
 
@@ -7,6 +8,9 @@ from .issues import issue, active_issues
 from .parsing.parsing_seals import compare_seal_text_strict, normalize_seal_text_strict, seal_text_comparison_rank
 from .seal_serial import serial_matching_texts
 from .seal_ring import normalize_ring_candidates
+from .decision_provenance import record_evaluation, standard_reference
+from .evidence_selection import inactive
+from .saved_evidence import SavedStageEvidence, provider_trace
 
 SHAPES = {"round": "圆形", "ellipse": "椭圆", "rectangle": "矩形"}
 
@@ -41,9 +45,23 @@ def seal_candidates(result):
     """Never combine text or shape across artifacts/physical stamp regions."""
     requirement = str((result.get("fields") or {}).get("签章要求") or "")
     remote = ((result.get("seal_check") or {}).get("dual_check") or {}).get("candidates") or []
+    variants = [variant for variant in (result.get("recognition_variants") or {}).get("seal") or []
+                if isinstance(variant, Mapping) and variant.get("method")]
+    active_providers = {evidence.method for variant in variants
+                        if (evidence := SavedStageEvidence.from_variant("seal", variant, result)).active
+                        and evidence.check}
     candidates, seen = [], set()
     for artifact in (result.get("processing_artifacts") or {}).get("seals") or []:
-        if not isinstance(artifact, dict) or artifact.get("role") == "发货单位章":
+        if not isinstance(artifact, dict) or inactive(artifact) or artifact.get("role") == "发货单位章":
+            continue
+        provider = ("danzhengtong" if artifact.get("provider") == "danzhengtong" else
+                    "qingtong" if artifact.get("source") == "清瞳印章区域" else None)
+        # Explicit current outcomes own remote evidence, including an empty
+        # waiting/failed outcome. Legacy saves without named variants retain
+        # their per-artifact evidence; local region reuse is not remote OCR.
+        if provider and variants and provider not in active_providers:
+            continue
+        if provider == "danzhengtong" and inactive(provider_trace(result, "seal")):
             continue
         original = str(artifact.get("original_url") or "")
         clean = str(artifact.get('receiving_selected_image_url') or artifact.get("color_isolated_oriented_url")
@@ -187,7 +205,7 @@ def _apply_standard_check(result, standard, *, preserve_confirmed=True):
     return result
 
 
-def apply_standard_check(result, standard, *, preserve_confirmed=True):
+def apply_standard_check(result, standard, *, preserve_confirmed=True, record_provenance=False):
     # Re-evaluate available evidence before applying the standard. A pending
     # provider is a dependency, not a permanent machine warning: a complete
     # match from an already-returned provider can satisfy an "any" policy.
@@ -201,4 +219,14 @@ def apply_standard_check(result, standard, *, preserve_confirmed=True):
                                     if reason != '等待单证通结果']
         finalize_result(result)
     result = _apply_standard_check(result, standard, preserve_confirmed=preserve_confirmed)
-    return apply_pending_verdict(result)
+    result = apply_pending_verdict(result)
+    check = result.get('seal_check') or {}
+    acceptance = (result.get('recognition_config') or {}).get('acceptance') or {}
+    if (record_provenance and (result.get('fields') or {}).get('签章要求')
+            and acceptance.get('seal_match_mode') != 'none'
+            and not (preserve_confirmed and result.get('review_status') in {'确认通过', '确认不通过'})
+            and not isinstance(check.get('human_confirmed_match'), bool)
+            and result.get('overall') != '识别失败'):
+        record_evaluation(result, 'seal_standard', ('seal_comparison', 'seal_standard', 'overall_decision'),
+                          standard=standard_reference(standard))
+    return result
