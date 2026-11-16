@@ -278,7 +278,7 @@ export function createSampleCenter({environment, ui, services, flushSettings, op
   function acceptSnapshot(data) {
     items = data.items; companies = data.companies;
     runProgress.discover(items);
-    resultFilters.updateSources(data.filter_seal_sources);
+    resultFilters.updateSources(data.filter_seal_sources, data.filter_date_sources, data.filter_signature_sources);
     requirementGroups = data.requirement_groups || {};
     companyMarks.update(data);
     if (company && company !== '未分类' && !companies.some(row => row.name === company)) { company = ''; requirement = null; classificationRequirement = null; }

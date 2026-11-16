@@ -50,7 +50,7 @@ def test_manual_query_ignores_deadlines_without_authorizing_a_queued_post():
 
 
 @pytest.mark.parametrize('seconds,expected,error', [(59, 2, ''), (60, 30, ''),
-    (599, 30, ''), (600, 120, ''), (1, 30, 'network')])
+    (269, 30, ''), (299, 1, ''), (299, 1, 'network'), (1, 30, 'network')])
 def test_page_and_stamp_queries_share_the_same_backoff_policy(seconds, expected, error):
     from datetime import datetime, timedelta
     start = datetime.fromisoformat('2026-01-01T00:00:00+00:00')
@@ -67,3 +67,31 @@ def test_failed_transport_preserves_uncertain_acceptance_until_uuid_is_known():
     accepted = accept_submission(next_query_at='soon')
     accepted.update(fail_operation(accepted, req_uuid='known', error='query timeout', retry_at='later'))
     assert accepted == {'status': 'waiting', 'error': 'query timeout', 'next_query_at': 'later'}
+
+
+@pytest.mark.parametrize('seconds', [300, 301, 900])
+def test_empty_results_stop_at_five_minutes_without_scheduling_another_query(seconds):
+    from datetime import datetime, timedelta
+    start = datetime.fromisoformat('2026-01-01T00:00:00+00:00')
+    update = finish_query(submitted_at=start.isoformat(), observed_at=(start + timedelta(seconds=seconds)).isoformat(),
+                          completed=False, error='temporary network error')
+    assert update['status'] == 'failed'
+    assert update['failure_code'] == 'result_timeout'
+    assert update['next_query_at'] == ''
+    assert '5 分钟' in update['error']
+
+
+@pytest.mark.parametrize('recover', [False, True])
+def test_timeout_is_terminal_even_with_an_accepted_uuid_and_after_restart(recover):
+    saved = task(req_uuid='accepted')
+    state = json.loads(saved['seal_requests_json'])
+    timeout = finish_query(submitted_at='2026-01-01T00:00:00+00:00', observed_at='2026-01-01T00:05:00+00:00', completed=False)
+    state['page'].update(timeout)
+    state['requests'][0].update(timeout, req_uuid='accepted-stamp')
+    state['timeout_applied'] = True
+    saved.update(status='failed', seal_requests_json=json.dumps(state))
+    recovered = remote_state(saved, recover=recover)
+    assert recovered['page']['status'] == recovered['requests'][0]['status'] == 'failed'
+    assert aggregate_remote(recovered)['status'] == 'failed'
+    assert next_remote_operation(saved, recovered, {'auto_query': True, 'submit_paused': False},
+                                  timestamp='2026-01-01T00:06:00+00:00') is None

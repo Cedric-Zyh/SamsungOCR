@@ -9,7 +9,7 @@ from ..persistence.database_clock import now_iso
 
 from ..persistence.job_views import PENDING, LABELS, PUBLIC_KEYS, PUBLIC_COLUMNS, remote_public
 from ..persistence.result_versions import result_revision
-from ..domain.remote_tasks import remote_state, aggregate_remote, branch_due, next_remote_operation
+from ..domain.remote_tasks import remote_state, aggregate_remote, branch_due, next_remote_operation, result_timeout_error
 from ..domain.remote_runs import LocalAttempt, RemoteRunLink
 
 
@@ -380,14 +380,21 @@ class DanzhengtongOperations:
             if conflict:
                 status, message = 'conflict', '单据已修改或已有新识别，已保存单证通结果，请核对后使用'
             else:
-                status, message = 'applied', ''
+                message = result_timeout_error(remote_state(dict(remote)))
+                status = 'failed' if message else 'applied'
                 self.database.result_writes.apply_remote_result(current['id'], combined, connection=con)
-                if job['status'] == 'failed':
+                if message:
+                    con.execute("UPDATE recognition_jobs SET status='failed',error_message=?,finished_at=? WHERE id=?",
+                                (message, now_iso(), job['id']))
+                elif job['status'] == 'failed':
                     con.execute("UPDATE recognition_jobs SET status='succeeded',error_message='' WHERE id=?", (job['id'],))
             con.execute('UPDATE danzhengtong_jobs SET status=?,error_message=?,lease_until=?,updated_at=? WHERE id=?',
                         (status, message, '', now_iso(), remote['id']))
             if status == 'applied':
                 self.mark_remote_applied(con, remote['id'])
+            elif status == 'failed':
+                con.execute("UPDATE danzhengtong_jobs SET seal_requests_json=json_set(seal_requests_json,'$.timeout_applied',json('true')) WHERE id=?",
+                            (remote['id'],))
             self.database.sync_remote_recognition_calls(con, job['id'])
             self._log(con, job['id'], job['task_id'], 'dzt_result', LABELS[status], message, status)
             self._refresh(con, job['task_id'])

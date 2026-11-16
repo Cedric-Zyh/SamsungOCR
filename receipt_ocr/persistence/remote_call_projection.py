@@ -81,6 +81,16 @@ def record_transport_phase(call, remote, phase, seconds, finished_at, *, termina
     return call
 
 
+def finish_wait_timeout(call, finished_at, error):
+    """Close a wait without inventing a query request or changing its counts."""
+    call = deepcopy(call)
+    call.update(status='failed', error=error, finished_at=finished_at)
+    timing = call.setdefault('transport', {})
+    timing.update(phase='query_timeout', finished_at=finished_at,
+                  elapsed_seconds=_elapsed(timing.get('started_at'), finished_at))
+    return call
+
+
 def remote_call(remote, filename):
     """An accepted request proves one call, but never proves an unmeasured duration."""
     measured = json.loads(remote['recognition_call_json'] or '{}')

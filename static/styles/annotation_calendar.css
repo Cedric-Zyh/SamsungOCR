@@ -1,0 +1,26 @@
+/* The annotation date picker follows the review form's paper and olive tones. */
+.review-page fieldset.sample-annotation-editor .annotation-date-control { position:relative; min-width:0; }
+.review-page fieldset.sample-annotation-editor .annotation-date-control>input { padding-right:42px; font-variant-numeric:tabular-nums; }
+.review-page fieldset.sample-annotation-editor .annotation-field [data-annotation-source="required_date"]:not(:disabled):not(:focus) { border-color:#bdc6ad; background:#f8faf2; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle { position:absolute; top:4px; right:4px; display:grid; place-items:center; width:32px; height:32px; padding:0; border:0; border-radius:4px; background:transparent; color:#657451; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle>svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle:hover:not(:disabled),.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle[aria-expanded="true"] { background:#e7ecdd; color:#435134; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle:disabled { color:#a0a494; cursor:not-allowed; }
+.review-page fieldset.sample-annotation-editor .annotation-date-calendar { position:fixed; inset:auto; z-index:1100; box-sizing:border-box; width:304px; max-width:calc(100vw - 24px); margin:0; padding:14px; border:1px solid #c9cdbb; border-radius:10px; background:#fdfcf8; color:#2f3528; box-shadow:0 10px 32px #333c2526; font:inherit; font-size:13px; line-height:1.5; }
+.review-page fieldset.sample-annotation-editor .annotation-date-calendar[hidden] { display:none; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-heading { display:flex; align-items:center; justify-content:space-between; gap:6px; margin:0 0 13px; padding:0; border:0; background:transparent; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-heading>button { display:grid; place-items:center; width:30px; height:30px; padding:0; border:1px solid #e1e2d6; border-radius:5px; background:#f2f3eb; color:#657451; font:400 23px/1 sans-serif; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-selects { display:flex; align-items:center; gap:5px; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-selects select { width:auto; height:30px; min-height:0; padding:3px 5px; border:1px solid transparent; border-radius:4px; background:#fdfcf8; color:#3f4933; font-size:13px; font-weight:600; line-height:22px; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-selects select:hover { border-color:#d0d6c3; background:#f2f5eb; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-week,.review-page fieldset.sample-annotation-editor .annotation-calendar-days { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:3px; text-align:center; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-week { margin-bottom:5px; color:#8a8e7d; font-size:11px; line-height:24px; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-days button { display:grid; place-items:center; height:33px; min-width:0; padding:0; border:1px solid transparent; border-radius:5px; background:transparent; color:#424936; font:inherit; font-size:12px; font-variant-numeric:tabular-nums; line-height:1; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-days button.is-adjacent { color:#b3b6a8; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-days button.is-today { border-color:#a9b494; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-days button.is-selected { border-color:#657451; background:#657451; color:#fff; font-weight:600; }
+.review-page fieldset.sample-annotation-editor .annotation-date-calendar button:hover:not(:disabled):not(.is-selected) { background:#e9eedf; color:#3c4b2f; }
+.review-page fieldset.sample-annotation-editor .annotation-date-calendar :is(button,select):focus-visible,.review-page fieldset.sample-annotation-editor .annotation-calendar-toggle:focus-visible { outline:2px solid #829367; outline-offset:2px; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-footer { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:11px; padding-top:10px; border-top:1px solid #e5e5d9; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-footer button { min-height:28px; margin:0; padding:4px 7px; border:0; border-radius:4px; background:transparent; color:#657451; font:inherit; font-size:12px; line-height:20px; cursor:pointer; }
+.review-page fieldset.sample-annotation-editor .annotation-calendar-footer button:disabled { color:#a6aa9b; cursor:not-allowed; }

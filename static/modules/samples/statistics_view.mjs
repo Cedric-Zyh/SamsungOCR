@@ -99,13 +99,14 @@ export function problemAnnotationsPanel(rows) {
     ${legacy ? `<p>${legacy} 张样单有未关联测试的旧标记，未计入本次问题；可打开样单核对后标注。</p>` : ''}`);
 }
 
-function dateCohorts(rows) {
-  const s = summarizeChannel(rows, 'date', 'date');
-  return analysisPanel('date-cohorts', '有日期与空白日期分别评估', '区分真实日期与空白样单', `<p>分开看两类样单，避免大量空白日期掩盖实际日期识别效果。</p><div class="sample-stat-matrix-wrap"><table class="sample-stat-matrix"><thead><tr><th>人工标注</th><th>样单数</th><th>可评测</th><th>正确</th><th>正确率</th></tr></thead><tbody>${[['dated','有日期','date_with_value'],['blank','空白日期','date_blank']].map(([key,label,filter]) => {
+function dateCohorts(rows, columns) {
+  return analysisPanel('date-cohorts', '有日期与空白日期分别评估', '区分真实日期与空白样单', `<p>各来源分别评估有日期和空白样单，避免大量空白日期掩盖实际日期识别效果。</p><div class="sample-stat-matrix-wrap"><table class="sample-stat-matrix"><thead><tr><th>识别方案</th><th>人工标注</th><th>样单数</th><th>可评测</th><th>正确</th><th>正确率</th></tr></thead><tbody>${columns.map(column => {
+    const s = summarizeChannel(rows, column.key, 'date');
+    return [['dated','有日期','date_with_value'],['blank','空白日期','date_blank']].map(([key,label,filter]) => {
     const all = rows.filter(row => key === 'dated' ? Boolean(row.expected_date) : row.expected_date === '');
     const c = s.cohorts[key];
-    return `<tr><th scope="row">${label}</th><td>${drill(all.length, filter)}</td><td>${c.total}</td><td>${c.correct}</td><td>${statPercent(c.accuracy)}</td></tr>`;
-  }).join('')}</tbody></table></div>`);
+    return `<tr><th scope="row">${esc(column.label)}</th><td>${label}</td><td>${drill(all.length, filter, {channel:column.key})}</td><td>${c.total}</td><td>${c.correct}</td><td>${statPercent(c.accuracy)}</td></tr>`;
+  }).join(''); }).join('')}</tbody></table></div>`);
 }
 
 function commonComparison(rows, columns, tab) {
@@ -133,6 +134,6 @@ export function statisticsOverview(rows, options) {
   const {tab, columns, distribution} = options;
   return channelTable(rows, columns, tab, distribution)
     + errorTable(rows, columns, tab) + problemAnnotationsPanel(rows)
-    + (tab === 'date' ? dateCohorts(rows) : commonComparison(rows, columns, tab) + disagreementPanel(rows, columns))
+    + (tab === 'date' ? dateCohorts(rows, columns) : commonComparison(rows, columns, tab) + disagreementPanel(rows, columns))
     + groupPanel(rows, options);
 }

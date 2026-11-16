@@ -7,6 +7,7 @@ from ..persistence.database import now_iso, DEFAULT_RECOGNITION_SETTINGS
 from ..persistence.recognition_calls import take_recognition_calls
 from ..persistence.result_versions import result_revision
 from ..domain.recognition import options_with_current_settings
+from ..domain.remote_tasks import result_timeout_error
 from ..runtime.progress import public_progress, merge_progress, seconds_between, STAGE_LABELS, MODEL_LABELS
 from .danzhengtong_store import DanzhengtongOperations, scope_plan, has_remote
 
@@ -527,12 +528,19 @@ class JobStore(DanzhengtongOperations):
             if result_id and status in ('succeeded', 'failed') and snapshot is not None and not (target and error):
                 self.save_branch(con, job, result_id, snapshot, result)
             timestamp = now_iso()
+            timeout_error = result_timeout_error(json.loads(remote['seal_requests_json'] or '{}')) if remote_only and remote else ''
+            if timeout_error and status == 'succeeded':
+                status, error = 'failed', timeout_error
             con.execute('UPDATE recognition_jobs SET status=?,finished_at=?,result_id=?,error_message=? WHERE id=?',
                         (status, timestamp, result_id, str(error), job['id']))
-            if remote_only and remote and status == 'succeeded':
-                con.execute("UPDATE danzhengtong_jobs SET status='applied',lease_until='',updated_at=? WHERE id=?",
-                            (timestamp, remote['id']))
-                self.mark_remote_applied(con, remote['id'])
+            if remote_only and remote and (status == 'succeeded' or timeout_error and status == 'failed'):
+                con.execute("UPDATE danzhengtong_jobs SET status=?,error_message=?,lease_until='',updated_at=? WHERE id=?",
+                            ('failed' if timeout_error else 'applied', timeout_error, timestamp, remote['id']))
+                if not timeout_error:
+                    self.mark_remote_applied(con, remote['id'])
+                else:
+                    con.execute("UPDATE danzhengtong_jobs SET seal_requests_json=json_set(seal_requests_json,'$.timeout_applied',json('true')) WHERE id=?",
+                                (remote['id'],))
             if remote and status != 'cancelled':
                 self.database.sync_remote_recognition_calls(con, job['id'])
             title = {'succeeded': '处理完成', 'failed': '处理失败', 'cancelled': '处理已取消'}[status]

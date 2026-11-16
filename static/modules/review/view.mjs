@@ -64,6 +64,7 @@ export function createReviewView({ui, reviewState, ReceiptWorkbench, fieldSchema
     reviewState.sampleAnnotationRevision = null;
     if (reviewState.sampleView) {
       $('[name=truth_date_present]', content).addEventListener('change', () => syncSampleDate(ui, content));
+      $('[name=truth_required_date]', content).addEventListener('change', () => syncSampleDate(ui, content));
       $('[data-save-sample]', content).addEventListener('click', saveSampleAnnotations);
     } else {
       $('[data-sample-annotations]', content)?.remove?.();

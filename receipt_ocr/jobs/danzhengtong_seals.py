@@ -15,7 +15,7 @@ from ..domain.remote_tasks import (
 from ..danzhengtong_errors import safe_error_text
 from ..persistence.database_clock import now_iso
 from ..persistence.recognition_calls import trace_timestamp
-from ..persistence.async_recognition_calls import record_transport_phase
+from ..persistence.async_recognition_calls import record_transport_phase, finish_wait_timeout
 
 
 def seal_state(task):
@@ -199,6 +199,12 @@ class SealRequests:
         if child is None:
             self._finish_seal_step(task, state)
             return True
+        observed = now_iso()
+        timeout = finish_query(submitted_at=child['submitted_at'], observed_at=observed, completed=False)
+        if timeout['status'] == 'failed':
+            child.update(timeout, call=finish_wait_timeout(child.get('call') or {}, observed, timeout['error']))
+            self._finish_seal_step(task, state)
+            return True
         client = self._seal_client(task)
         call = child['call']
         started_at, started = trace_timestamp(), perf_counter()
@@ -220,9 +226,12 @@ class SealRequests:
                 started_at=started_at, status='failed')
             measured['seconds'] = round(call.get('seconds', 0) + measured['transport']['spans'][-1]['seconds'], 4)
             child.update(error=safe_error_text(exc, client.settings), call=measured)
-        child.update(finish_query(submitted_at=child['submitted_at'], observed_at=now_iso(),
+        observed = now_iso()
+        child.update(finish_query(submitted_at=child['submitted_at'], observed_at=observed,
                                   completed=child['status'] == 'completed', error=child.get('error', '')),
                      query_count=child.get('query_count', 0) + 1)
+        if child['status'] == 'failed':
+            child['call'] = finish_wait_timeout(child['call'], observed, child['error'])
         if not child['error']:
             child.pop('error')
         self._finish_seal_step(task, state, last_query_at=now_iso(), query_count=task['query_count'] + 1)

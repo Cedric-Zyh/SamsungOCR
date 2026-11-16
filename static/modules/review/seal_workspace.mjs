@@ -4,31 +4,104 @@ import {savedSealText, savedSealComponents, sealProcessingSteps,
   isDanzhengtongSealArtifact, danzhengtongProcessedUrl} from './seal_component_fields.mjs';
 
 const objects = value => Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : [];
+const strings = value => Array.isArray(value) ? value.filter(text => typeof text === 'string') : [];
 const compact = value => String(value || '').replace(/\s+/gu, '');
 export const sealImageUrl = value => typeof value === 'string' && value.startsWith('/files/')
   && !/[\\\u0000-\u001f]/u.test(value) && !value.split(/[/?#]/u).includes('..') ? value : '';
 const purposePattern = /^(.*?)(收[^①-⑳()（）\d０-９]{1,4}专用章)([①-⑳]|\([0-9０-９]{1,3}\)|（[0-9０-９]{1,3}）|[0-9０-９]{1,3})?$/u;
 
+export function mergeSealArtifacts(items) {
+  const merged = [], byStamp = new Map();
+  for (const item of items || []) {
+    const key = `${isDanzhengtongSealArtifact(item) ? 'danzhengtong' : 'local'}|${item.index ?? ''}|${item.color ?? ''}`;
+    const current = byStamp.get(key);
+    if (!current) {
+      const copy = {...item};
+      byStamp.set(key, copy);
+      merged.push(copy);
+      continue;
+    }
+    for (const [name, value] of Object.entries(item)) {
+      if ((current[name] == null || current[name] === '') && value) current[name] = value;
+    }
+    if (current.shape !== '椭圆' && item.shape === '椭圆') current.shape = '椭圆';
+  }
+  return merged;
+}
+
+export function preferredSealIndex(record, items) {
+  if (!items?.length) return -1;
+  const imageKey = value => sealImageUrl(value).split(/[?#]/u)[0];
+  const imageFields = ['original_url', 'color_isolated_oriented_url', 'color_isolated_url', 'returned_image_url', 'input_url'];
+  const available = item => item.role !== '发货单位章' && imageFields.some(key => sealImageUrl(item[key]));
+  const locate = candidate => {
+    const original = imageKey(candidate?.original_url), image = imageKey(candidate?.image_url);
+    const exact = original ? items.findIndex(item => available(item) && imageKey(item.original_url) === original) : -1;
+    return exact >= 0 ? exact : image ? items.findIndex(item => available(item)
+      && imageFields.some(key => imageKey(item[key]) === image)) : -1;
+  };
+  const standard = record?.seal_standard_check || {};
+  const candidates = objects(standard.candidates);
+  const selected = candidates.find(candidate => candidate.id === standard.selected_id);
+  const chosen = locate(selected);
+  if (chosen >= 0) return chosen;
+
+  // Saved comparisons own the ranking; preview selection never creates a new verdict.
+  const statusRank = candidate => ({'匹配': 3, '部分匹配': 2, '不匹配': 1}[candidate.text_status] || 0);
+  const score = candidate => typeof candidate.score === 'number' && Number.isFinite(candidate.score) ? candidate.score : 0;
+  const ranked = [...candidates].sort((a, b) => Number(b.matched === true) - Number(a.matched === true)
+    || statusRank(b) - statusRank(a) || score(b) - score(a));
+  for (const candidate of ranked) {
+    const index = locate(candidate);
+    if (index >= 0) return index;
+  }
+
+  const normalize = value => compact(value).replace(/[（）()|｜]/gu, '');
+  const check = record?.seal_check || {};
+  const recognized = normalize(check.recognized || check.display_text);
+  if (recognized) {
+    const index = items.findIndex(item => available(item) && [savedSealText(item),
+      ...strings(item.matching_texts), item.receiving_form?.identity_text, item.receiving_form?.candidate_text]
+      .some(text => normalize(text) === recognized));
+    if (index >= 0) return index;
+  }
+  const remote = check.dual_check?.selected;
+  if (Number.isInteger(remote?.index)) {
+    const index = items.findIndex(item => available(item) && item.source === '清瞳印章区域'
+      && item.api_index === remote.index);
+    if (index >= 0) return index;
+  }
+  const first = items.findIndex(available);
+  return first >= 0 ? first : 0;
+}
+
+export function sealWorkspaceLabel(item, index) {
+  return isDanzhengtongSealArtifact(item) ? `单证通${item.fallback_upload ? '' : ` · 印章 ${(item.index ?? index) + 1}`}`
+    : `印章 ${index + 1}`;
+}
+
 export function sealWorkspaceModel(item) {
   if (isDanzhengtongSealArtifact(item)) {
-    const original = sealImageUrl(item.input_url || item.color_isolated_url || item.original_url);
+    const original = [item.input_url, item.color_isolated_url, item.original_url].map(sealImageUrl).find(Boolean) || '';
     const processed = sealImageUrl(danzhengtongProcessedUrl(item));
     const resultText = savedSealText(item);
     const fields = [
       {label: '印章颜色', value: item.provider_color || '', url: processed},
       {label: '印章类型', value: item.provider_seal_type || '', url: processed},
-    ];
+    ].filter(field => field.value);
     const missing = item.returned_image_status === 'missing';
-    const originalLabel = item.input_url || item.color_isolated_url ? '上传的增强图' : '印章原始区域';
+    const originalLabel = item.input_label || (item.input_url || item.color_isolated_url ? '上传的增强图' : '印章原始区域');
     const imageMessage = item.returned_image_status === 'disabled' ? '已关闭单证通旋正图下载'
       : item.returned_image_status === 'pending' ? '单证通旋正图正在后台下载'
         : missing ? '单证通未返回旋正图' : '单证通旋正图未能取回';
     return {adopted: false, managed: false, remote: true, selected: '', text: resultText,
-      emptyText: '单证通尚未返回印章文字', status: resultText ? '单证通返回' : '未返回文字',
+      emptyText: '单证通尚未返回印章文字', status: ['匹配', '部分匹配', '不匹配', '未识别', '识别失败', '未运行', '测试中'].includes(item.provider_status)
+        ? item.provider_status : resultText ? '单证通返回' : '未返回文字',
       original, processed, preferred: processed || original,
       originalLabel, processedLabel: '单证通旋正图', preferredLabel: processed ? '单证通旋正图' : originalLabel,
       fields, formFields: [], otherCandidate: '',
-      warning: processed ? '' : `${imageMessage}，可查看上传的增强图核对。`,
+      warning: processed ? '' : item.fallback_upload && original
+        ? '未保存单证通处理图，当前展示上传图。' : `${imageMessage}，可查看上传图核对。`,
     };
   }
   const form = item.receiving_form || {}, primary = form.primary || {};
@@ -106,21 +179,21 @@ export function renderSealWorkspace(item, {audit = ''} = {}) {
   const process = `<details class="seal-recognition-process"><summary>识别过程<span>处理图片与全部读数</span></summary>
     ${steps.length ? `<div class="seal-processing-steps">${steps.map((step, i) => `<div><span>${i + 1}</span><strong>${escapeHtml(step.label)}</strong>${button(step.label, step.url, '查看图片')}</div>`).join('')}</div>` : '<p>这条记录未保存独立的处理步骤图片。</p>'}
     <details class="seal-raw-record"><summary>完整识别记录<span>原始读数、候选与处理说明</span></summary>${audit}</details></details>`;
-  return `<section class="seal-workspace"><header class="seal-result-heading"><h4>印章识别结果</h4><span class="seal-adoption${model.adopted ? ' is-adopted' : ''}">${model.status}</span></header>
+  return `<section class="seal-workspace"><header class="seal-result-heading"><h4>${model.remote ? '单证通印章识别结果' : '印章识别结果'}</h4><span class="seal-adoption${model.adopted ? ' is-adopted' : ''}">${escapeHtml(model.status)}</span></header>
     <div class="seal-final-text">${escapeHtml(model.text || model.emptyText)}</div>
     ${model.warning ? `<p class="seal-result-warning">${escapeHtml(model.warning)}</p>` : ''}
-    <div class="seal-image-entry">${button(model.preferredLabel, model.preferred, '查看印章图片')}<small>${model.remote ? '在左侧查看上传图与单证通返回图' : '在左侧查看原图与处理图'}</small></div>
+    <div class="seal-image-entry">${button(model.preferredLabel, model.preferred, '查看印章图片')}<small>${model.remote ? model.processed ? '在左侧查看上传图与单证通返回图' : '在左侧查看上传图' : '在左侧查看原图与处理图'}</small></div>
     ${model.fields.length ? `<div class="seal-result-fields">${model.fields.map(row).join('')}</div>` : ''}
     ${model.otherCandidate ? `<details class="seal-other-candidate"><summary>${model.adopted ? '其他识别读数' : '待核对候选'}</summary><p>${escapeHtml(model.otherCandidate)}</p></details>` : ''}
     ${formFields}${process}</section>`;
 }
 
-export function bindSealWorkspaces(root, items, previewSeal) {
+export function bindSealWorkspaces(root, items, previewSeal, record = {}) {
   if (!root?.querySelectorAll || !items.length) return;
   const panels = [...root.querySelectorAll('[data-seal-workspace-panel]')];
   if (!panels.length) return;
-  let selected = 0;
-  const selection = () => ({label: `印章 ${selected + 1}`, ...sealWorkspaceModel(items[selected])});
+  let selected = preferredSealIndex(record, items);
+  const selection = () => ({label: sealWorkspaceLabel(items[selected], selected), ...sealWorkspaceModel(items[selected])});
   const show = (url, label, evidenceSelected = false) => previewSeal?.({...selection(), url, evidenceLabel: label, evidenceSelected});
   const activate = (index, preview) => {
     selected = index;
@@ -139,6 +212,6 @@ export function bindSealWorkspaces(root, items, previewSeal) {
       show(button.dataset.sealEvidenceUrl, button.dataset.sealEvidenceLabel, true);
     });
   });
-  activate(0, false);
+  activate(selected, false);
   return () => show(selection().preferred, selection().preferredLabel);
 }

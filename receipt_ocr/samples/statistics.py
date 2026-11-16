@@ -12,6 +12,8 @@ from collections import Counter
 from receipt_ocr.domain.sample_problems import resolve_problem_annotations
 from receipt_ocr.domain.sample_seal_decision import sample_seal_decision
 from receipt_ocr.providers.registry import PROVIDERS
+from .channel_filters import RECOGNITION_SOURCES, source_availability
+from .result_filters import sample_result_filters
 
 
 def _date(value):
@@ -108,6 +110,20 @@ def evaluate_sample(name, truth, job):
     date_enabled = bool(config.get("date")) if config is not None else bool(date_check)
     date_cell = _evaluate(date_check, value=date_check.get("actual", ""), expected=expected_date,
                           date_channel=True, error=failure, missing=availability(date_enabled))
+    sources = sample_result_filters(job, truth, result=result)
+
+    def source_evaluation(current, *, date_channel=False, evidence=()):
+        state = source_availability(job, current['state'] != '未运行', *evidence) or current['state']
+        unavailable = {'未测试': '未测试', '未运行': '未运行', '测试中': '测试中', '缺少结果': '未运行'}
+        if state in unavailable:
+            return _cell(unavailable[state], note='未保存该来源的独立结果' if state == '缺少结果' else '')
+        return _evaluate({'status': '识别失败' if state == '调用失败' else state},
+                         value='' if state == '调用失败' else current['value'], expected=expected_date if date_channel else expected_seal,
+                         date_channel=date_channel, error='该来源识别失败' if state == '调用失败' else failure,
+                         missing='executed', requirement=requirement)
+
+    dates = {key: source_evaluation(current, date_channel=True)
+             for key, current in sources['dates'].items() if key != 'combined'}
 
     remote_variant = next((v for v in variants if v.get("method") == "qingtong"), None)
     remote = ((remote_variant.get("details") or {}).get("seal_check") or {}) if remote_variant else (
@@ -137,13 +153,22 @@ def evaluate_sample(name, truth, job):
             check, value=check.get("recognized") or check.get("display_text", ""),
             expected=expected_seal, error=(variant or {}).get("error") or failure,
             missing=availability(method in methods), requirement=requirement)
+    dzt = next((variant for variant in variants if variant.get('method') == 'danzhengtong'), {})
+    details = dzt.get('details') or {}
+    dzt_cell = sources['seals']['danzhengtong']
+    legacy_remote = (methods == ['danzhengtong'] or primary.get('recognition_mode') == 'danzhengtong'
+                     or any('单证通' in str(primary.get(key) or '') for key in ('source', 'backend')))
+    if not dzt and not variants and (not legacy_remote or isinstance(primary.get('human_confirmed_match'), bool)):
+        dzt_cell = {**dzt_cell, 'state': '缺少结果' if terminal else dzt_cell['state'], 'value': ''}
+    seals['danzhengtong'] = source_evaluation(dzt_cell,
+        evidence=(dzt, details, details.get('danzhengtong'), details.get('seal_check')))
     return {
         "filename": name, "company": str(fields.get("客户名称") or "").strip() or "未分类",
         "result_id": job.get("result_id"), "job_status": status,
         "task_id": job.get("task_id", ""), "task_name": job.get("task_name", ""),
         "tested_at": job.get("finished_at") or job.get("started_at") or job.get("created_at", ""),
         "expected_date": expected_date, "requirement": fields.get("签章要求", ""),
-        "expected_seal": expected_seal, "date": date_cell, "seals": seals,
+        "expected_seal": expected_seal, "date": date_cell, "dates": dates, "seals": seals,
         "human_note": truth.get("human_note", ""),
         **resolve_problem_annotations(truth, job.get("result_id")),
     }
@@ -242,5 +267,14 @@ def sample_statistics(center, task_id=""):
         {"key": "qingtong_template", "label": "清瞳 · 印章模板"},
         {"key": "qingtong_ocr", "label": "清瞳 · 文字 OCR"},
         *[{"key": key, "label": _local_label(key.split(":", 1)[1])} for key in local_keys],
+        {"key": "danzhengtong", "label": "单证通"},
     ]
-    return {"items": rows, "columns": columns, "batches": batches, "task_id": task_id}
+    date_columns = [{"key": "date", "label": "综合日期"}]
+    for source in RECOGNITION_SOURCES:
+        if source['key'] == 'combined':
+            continue
+        if source['key'] == 'local:legacy_local' and not any(
+                row['dates'].get(source['key'], {}).get('state') not in {'未运行', '未测试'} for row in rows):
+            continue
+        date_columns.append({"key": 'date:' + source['key'], "label": source['label']})
+    return {"items": rows, "columns": columns, "date_columns": date_columns, "batches": batches, "task_id": task_id}

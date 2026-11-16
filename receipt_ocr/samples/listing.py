@@ -6,7 +6,7 @@ from receipt_ocr.domain.fields.schema import derive_signature_check
 from receipt_ocr.domain.seal_standards import requirement_key
 from .listing_cache import SampleCatalogCache, SampleListingCache
 from .requirement_groups import group_name
-from .result_filters import LIST_RESULT_SQL, SEAL_SOURCES, decode_list_result, sample_result_filters
+from .result_filters import LIST_RESULT_SQL, SEAL_SOURCES, RECOGNITION_SOURCES, decode_list_result, sample_result_filters
 
 
 class SampleListing:
@@ -108,6 +108,8 @@ class SampleListing:
             group['count'] += 1
         return {"items": items, "companies": companies, "total": len(items),
                 "filter_seal_sources": SEAL_SOURCES,
+                "filter_date_sources": RECOGNITION_SOURCES,
+                "filter_signature_sources": RECOGNITION_SOURCES,
                 "requirement_groups": {name: sorted(values.values(), key=lambda group: (bool(group['key']), group['name']))
                                        for name, values in groups.items()},
                 "company_marks": marks, "company_versions": versions, "company_seals": seals}

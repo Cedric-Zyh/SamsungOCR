@@ -16,14 +16,15 @@ PLAN = {'date': ['paddle_v6'], 'seal': ['qingtong', 'paddle_v6', 'danzhengtong']
 TRUTH = {'actual_date': '2025-02-13', 'seal_should_match': False}
 
 
-def project(result, *, status='succeeded', plan=PLAN):
+def project(result, *, status='succeeded', plan=PLAN, preserve=False, ensure_ascii=True):
     # Exercise the actual SQL allowlist used by the list endpoint.
     with sqlite3.connect(':memory:') as con:
         con.execute('CREATE TABLE results (result_json TEXT)')
-        con.execute('INSERT INTO results VALUES(?)', (json.dumps(result),))
+        con.execute('INSERT INTO results VALUES(?)', (json.dumps(result, ensure_ascii=ensure_ascii),))
         compact = con.execute('SELECT ' + LIST_RESULT_SQL + ' FROM results r').fetchone()[0]
     return sample_result_filters({'status': status,
-                                 'payload_json': json.dumps({'sample_options': {'recognition_config': plan}})},
+                                 'payload_json': json.dumps({'sample_options': {
+                                     'recognition_config': plan, '_preserve_provider_results': preserve}})},
                                  TRUTH, result=decode_list_result(compact)), compact
 
 
@@ -43,6 +44,136 @@ def evidence():
                 'status': '部分匹配', 'recognized': '客户甲'}}},
         ]},
     }
+
+
+def date_and_signature_evidence():
+    result = evidence()
+    result.update(fields={'仓库联系人': '王五', '仓库接收人': '李四'},
+                  signature_check={'contact': '王五', 'receiver': '李四', 'status': '匹配',
+                                   'source': '人工复核', 'human_confirmed_match': True},
+                  date_check={'status': '匹配', 'actual': '2025-02-13'})
+    result['recognition_variants'].update(date=[
+        {'method': 'paddle_v6', 'details': {'date_check': {'status': '不匹配', 'actual': '2025-02-12'}}},
+        {'method': 'danzhengtong', 'details': {'date_check': {'status': '匹配', 'actual': '2025-02-13'}}},
+    ], handwriting=[
+        {'method': 'paddle_v6', 'value': {'仓库接收人': '李四'},
+         'details': {'handwriting_fields': {'仓库接收人': '李四'}}},
+        {'method': 'danzhengtong', 'value': {'仓库接收人': '王五'},
+         'details': {'handwriting_fields': {'仓库接收人': '王五'}}},
+    ])
+    return result
+
+
+MULTI_PLAN = {**PLAN, 'date': ['paddle_v6', 'danzhengtong'],
+              'handwriting': ['paddle_v6', 'danzhengtong']}
+
+
+@pytest.mark.parametrize('ensure_ascii', [True, False])
+def test_date_and_signature_sources_keep_provider_readings_independent_of_combined_and_human_decisions(ensure_ascii):
+    result = date_and_signature_evidence()
+    before = deepcopy(result)
+    row, _ = project(result, plan=MULTI_PLAN, ensure_ascii=ensure_ascii)
+    assert row['date'] == row['dates']['combined']
+    assert row['dates']['local:paddle_v6'] == {
+        'state': '不匹配', 'value': '2025-02-12', 'recognized': True, 'accuracy': '错误'}
+    assert row['dates']['danzhengtong']['state'] == '匹配'
+    assert row['dates']['danzhengtong']['accuracy'] == '正确'
+    assert row['signatures']['combined']['state'] == '匹配'
+    assert row['signatures']['local:paddle_v6']['state'] == '不匹配'
+    assert row['signatures']['local:paddle_v6']['value'] == '李四'
+    assert row['signatures']['danzhengtong']['state'] == '匹配'
+    assert row['signatures']['danzhengtong']['value'] == '王五'
+    assert result == before
+
+
+@pytest.mark.parametrize('ensure_ascii', [True, False])
+def test_signature_reads_provider_fields_and_receiver_failure_metadata_in_both_stored_encodings(ensure_ascii):
+    result = date_and_signature_evidence()
+    result['recognition_variants']['handwriting'] = [
+        {'method': 'paddle_v6', 'details': {'fields': {'仓库联系人': '王五、李四', '仓库接收人': '李四'}}},
+        {'method': 'danzhengtong', 'details': {'handwriting_fields': {'仓库接收人': '王五'},
+            'handwriting_metadata': {'仓库接收人': {'error': '接收人识别失败'}}}},
+    ]
+    row, _ = project(result, plan=MULTI_PLAN, ensure_ascii=ensure_ascii)
+    assert row['signatures']['local:paddle_v6']['state'] == '匹配'
+    assert row['signatures']['local:paddle_v6']['value'] == '李四'
+    assert row['signatures']['danzhengtong']['state'] == '调用失败'
+    assert row['signatures']['danzhengtong']['value'] == ''
+
+
+def test_empty_signature_does_not_borrow_the_other_provider_and_missing_results_remain_distinct():
+    result = date_and_signature_evidence()
+    result['recognition_variants']['handwriting'][0].update(
+        value={'仓库接收人': ''}, details={'handwriting_fields': {'仓库接收人': ''}})
+    result['recognition_variants']['handwriting'][1].update(value=None, details=None)
+    row, _ = project(result, plan=MULTI_PLAN)
+    assert row['signatures']['local:paddle_v6']['state'] == '未识别'
+    assert row['signatures']['local:paddle_v6']['value'] == ''
+    assert row['signatures']['danzhengtong']['state'] == '缺少结果'
+    # A completed empty object is still a real unreadable observation.
+    result['recognition_variants']['handwriting'][0].update(value={}, details={'handwriting_fields': {}})
+    row, _ = project(result, plan=MULTI_PLAN)
+    assert row['signatures']['local:paddle_v6']['state'] == '未识别'
+
+
+@pytest.mark.parametrize('stage', ['date', 'handwriting'])
+@pytest.mark.parametrize('marker,expected', [
+    ({'error': '接口失败'}, '调用失败'), ({'pending': True}, '测试中'),
+    ({'execution_status': 'skipped'}, '未运行'), ({'simulated': True}, '缺少结果'),
+])
+def test_source_filter_excludes_failed_pending_skipped_and_simulated_observations(stage, marker, expected):
+    result = date_and_signature_evidence()
+    result['recognition_variants'][stage][1].update(marker)
+    row, _ = project(result, plan=MULTI_PLAN)
+    cells = row['dates' if stage == 'date' else 'signatures']
+    assert cells['danzhengtong']['state'] == expected
+    assert cells['danzhengtong']['value'] == ''
+    assert cells['local:paddle_v6']['state'] == '不匹配'
+
+
+def test_source_filter_uses_preserved_provider_config_and_does_not_expose_disabled_providers():
+    result = date_and_signature_evidence()
+    row, _ = project(result, plan={**MULTI_PLAN, 'date': ['paddle_v6'], 'handwriting': ['paddle_v6']})
+    assert row['dates']['danzhengtong']['state'] == '未运行'
+    assert row['signatures']['danzhengtong']['state'] == '未运行'
+    result['recognition_config'] = MULTI_PLAN
+    row, _ = project(result, plan={'date': ['danzhengtong'], 'handwriting': ['danzhengtong']}, preserve=True)
+    assert row['dates']['local:paddle_v6']['value'] == '2025-02-12'
+    assert row['signatures']['local:paddle_v6']['value'] == '李四'
+
+
+def test_new_source_summaries_exclude_raw_provider_responses_images_and_unowned_fields():
+    result = date_and_signature_evidence()
+    for stage in ('date', 'handwriting'):
+        for variant in result['recognition_variants'][stage]:
+            variant['details'].update(processing_artifacts={'image': 'large-private-image'},
+                                      danzhengtong={'mode': 'real', 'status': 'completed',
+                                                   'result': {'raw': 'large-private-provider-response'}},
+                                      fields={'unknown': 'unowned-private-field'})
+    _, compact = project(result, plan=MULTI_PLAN)
+    assert all(value not in compact for value in (
+        'large-private-image', 'large-private-provider-response', 'unowned-private-field'))
+    assert len(compact) < 10000
+
+
+def test_legacy_merged_results_are_not_misattributed_to_every_selected_provider():
+    result = {'fields': {'仓库联系人': '甲', '仓库接收人': '甲'},
+              'date_check': {'status': '匹配', 'actual': '2025-02-13'}}
+    row, _ = project(result, plan=MULTI_PLAN)
+    assert row['dates']['combined']['state'] == '匹配'
+    assert row['signatures']['combined']['state'] == '匹配'
+    for method in ('local:paddle_v6', 'danzhengtong'):
+        assert row['dates'][method]['state'] == '缺少结果'
+        assert row['signatures'][method]['state'] == '缺少结果'
+
+
+def test_source_options_are_carried_by_sample_listing(samples):
+    _, client = samples
+    data = client.get('/api/samples').json
+    expected = {'combined', 'local:paddle_v6', 'danzhengtong'}
+    for key in ('filter_date_sources', 'filter_signature_sources'):
+        assert expected <= {row['key'] for row in data[key]}
+        assert not any('清瞳' in row['label'] for row in data[key])
 
 
 def test_provider_verdicts_are_independent_and_accuracy_is_separate_from_requirement_matching():

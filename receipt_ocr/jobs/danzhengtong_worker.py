@@ -10,11 +10,11 @@ from time import perf_counter
 from .danzhengtong_store import later, scope_plan, settings_identity
 from ..domain.remote_tasks import (
     aggregate_remote, begin_upload, begin_submission, accept_submission,
-    fail_submission, fail_operation, finish_query,
+    fail_submission, fail_operation, finish_query, result_timeout_error,
 )
 from ..persistence.database_clock import now_iso
 from ..persistence.recognition_calls import trace_timestamp
-from ..persistence.async_recognition_calls import remote_call, record_transport_phase
+from ..persistence.async_recognition_calls import remote_call, record_transport_phase, finish_wait_timeout
 from .danzhengtong_seals import SealRequests, seal_state, pending_seal_submission
 
 
@@ -219,6 +219,13 @@ class DanzhengtongWorker(SealRequests):
         page = state['page']
         job = self.store.get(task['job_id'])
         call = remote_call(task, job['filename'])
+        observed = now_iso()
+        timeout = finish_query(submitted_at=task['submitted_at'], observed_at=observed, completed=False)
+        if timeout['status'] == 'failed':
+            page.update(timeout)
+            self._finish_seal_step(task, state, recognition_call_json=json.dumps(
+                finish_wait_timeout(call, observed, timeout['error']), ensure_ascii=False))
+            return
         started = None
         started_at = None
         finished_at = None
@@ -265,10 +272,14 @@ class DanzhengtongWorker(SealRequests):
             error = ''
         except Exception as exc:
             error = safe_error_text(exc, getattr(locals().get('client'), 'settings', None))
-        page.update(finish_query(submitted_at=task['submitted_at'], observed_at=now_iso(),
+        observed = now_iso()
+        page.update(finish_query(submitted_at=task['submitted_at'], observed_at=observed,
                                  completed=False, error=error))
-        self._finish_seal_step(task, state, last_query_at=now_iso(),
-            query_count=task['query_count'] + int(started is not None), recognition_call_json=measured_call())
+        encoded = measured_call()
+        if page['status'] == 'failed':
+            encoded = json.dumps(finish_wait_timeout(json.loads(encoded), observed, page['error']), ensure_ascii=False)
+        self._finish_seal_step(task, state, last_query_at=observed,
+            query_count=task['query_count'] + int(started is not None), recognition_call_json=encoded)
 
     def _apply(self, task):
         from ..application.deferred_document import combine_saved, empty_snapshot
@@ -317,7 +328,7 @@ class DanzhengtongWorker(SealRequests):
                  'reqUuid': task['req_uuid'],
                  'submission': json.loads(task['submission_json']), 'result': json.loads(task['result_json']),
                  'query': {'attempts': (page_call.get('transport') or {}).get('query_count', task['query_count']),
-                           'status': 'completed'}}
+                           'status': page['status']}}
         seal_remote = None
         if state.get('seal_required'):
             directory, prefix = self._seal_storage(task)
@@ -341,6 +352,13 @@ class DanzhengtongWorker(SealRequests):
         requirement = (combined.get('fields') or {}).get('签章要求', '')
         combined = apply_standard_check(combined, self.store.database.get_seal_standard(requirement),
                                         record_provenance=True)
+        timeout_error = result_timeout_error(state)
+        if timeout_error:
+            from ..domain.issues import issue
+            from ..domain.decision import finalize_result
+            combined.setdefault('review_issues', []).append(
+                issue('provider_failure', 'document', timeout_error, provider='danzhengtong'))
+            finalize_result(combined)
         for key in ('processing_seconds', 'processing_timings', 'queue', 'preview_url', 'filename'):
             if key in branch['base']:
                 combined[key] = branch['base'][key]

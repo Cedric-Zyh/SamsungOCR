@@ -29,7 +29,10 @@ PROBLEM_STATUSES = {'unmarked': '尚未标注', 'clear': '已核对无问题', '
 
 
 def cell(row, key):
-    return row['date'] if key == 'date' else row['seals'].get(key, {
+    if key == 'date':
+        return row['date']
+    source = row.get('dates', {}) if key.startswith('date:') else row['seals']
+    return source.get(key.removeprefix('date:') if key.startswith('date:') else key, {
         'state': '未运行' if row['job_status'] else '未测试'})
 
 
@@ -52,7 +55,7 @@ def error_type(row, current):
 
 def matches(row, tab, selected, channel=''):
     cells = [cell(row, channel)] if channel else (
-        [row['date']] if tab == 'date' else list(row['seals'].values()))
+        [row['date'], *row.get('dates', {}).values()] if tab == 'date' else list(row['seals'].values()))
     if selected == 'pending_truth':
         return row['expected_date' if tab == 'date' else 'expected_seal'] is None
     if selected == 'untested':
@@ -64,13 +67,12 @@ def matches(row, tab, selected, channel=''):
     if selected in {'false_accept', 'false_reject', 'partial', 'other'}:
         return any(error_type(row, current) == selected for current in cells)
     if selected in {'wrong_date', 'date_missed', 'date_spurious'}:
-        current = row['date']
         if selected == 'date_spurious':
-            return current['state'] == '错误' and row['expected_date'] == '' and bool(current.get('value'))
+            return row['expected_date'] == '' and any(current['state'] == '错误' and current.get('value') for current in cells)
         if selected == 'date_missed':
-            return bool(row['expected_date']) and (current['state'] == '未识别'
-                or (current['state'] == '错误' and not current.get('value')))
-        return bool(row['expected_date']) and current['state'] == '错误' and bool(current.get('value'))
+            return bool(row['expected_date']) and any(current['state'] == '未识别'
+                or (current['state'] == '错误' and not current.get('value')) for current in cells)
+        return bool(row['expected_date']) and any(current['state'] == '错误' and current.get('value') for current in cells)
     if selected == 'errors':
         return any(c['state'] in BAD for c in cells)
     if selected == 'failed':
@@ -89,15 +91,16 @@ def matches(row, tab, selected, channel=''):
 
 
 def counts(rows, key):
+    date_channel = key == 'date' or key.startswith('date:')
     states = {state: sum(cell(row, key)['state'] == state for row in rows) for state in STATES}
     states['可评测'] = sum(states[state] for state in SCORED)
     states['正确率'] = states['正确'] / states['可评测'] if states['可评测'] else None
     for kind in ('false_accept', 'false_reject', 'partial', 'other'):
-        states[kind] = sum(error_type(row, cell(row, key)) == kind for row in rows) if key != 'date' else 0
-    if key == 'date':
+        states[kind] = sum(error_type(row, cell(row, key)) == kind for row in rows) if not date_channel else 0
+    if date_channel:
         states['other'] = states['错误']
         for kind in ('wrong_date', 'date_missed', 'date_spurious'):
-            states[kind] = sum(matches(row, 'date', kind) for row in rows)
+            states[kind] = sum(matches(row, 'date', kind, key) for row in rows)
     return states
 
 
@@ -258,15 +261,17 @@ def _seal_comparisons(workbook, rows, columns, context):
     comparisons.freeze_panes = f'C{comparison_header + 1}'
 
 
-def _date_cohorts(workbook, rows, context):
+def _date_cohorts(workbook, rows, context, columns):
+    multi = len(columns) > 1
     cohorts, header = _summary_sheet(workbook, '日期分组', context, [
-        '人工标注', '样单数', '可评测', '正确', '错误', '未识别', '失败', '正确率'])
-    for label, blank in (('有日期', False), ('空白日期', True)):
-        members = [row for row in rows if row['expected_date'] is not None and bool(row['expected_date']) != blank]
-        summary = counts(members, 'date')
-        _append(cohorts, [label, len(members), summary['可评测'], *[summary[state] for state in ('正确', '错误', '未识别', '失败')],
-                          summary['正确率']])
-        cohorts.cell(cohorts.max_row, 8).number_format = '0.0%'
+        *(['识别方案'] if multi else []), '人工标注', '样单数', '可评测', '正确', '错误', '未识别', '失败', '正确率'])
+    for column in columns:
+        for label, blank in (('有日期', False), ('空白日期', True)):
+            members = [row for row in rows if row['expected_date'] is not None and bool(row['expected_date']) != blank]
+            summary = counts(members, column['key'])
+            _append(cohorts, [*([column['label']] if multi else []), label, len(members), summary['可评测'],
+                              *[summary[state] for state in ('正确', '错误', '未识别', '失败')], summary['正确率']])
+            cohorts.cell(cohorts.max_row, 9 if multi else 8).number_format = '0.0%'
     _append(cohorts, ['评估口径', '待标注样单不纳入两类分组；未测试、未运行、测试中不计入正确率分母，未识别与失败计入。'])
     _style(cohorts, (header,))
     cohorts.freeze_panes = f'B{header + 1}'
@@ -299,7 +304,7 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
             or (tab == 'seal' and selected in DATE_FILTERS)):
         raise ValueError('统计筛选条件无效')
     data = sample_statistics(center, task_id)
-    columns = data['columns'] if tab == 'seal' else [{'key': 'date', 'label': '识别日期'}]
+    columns = data['columns'] if tab == 'seal' else data.get('date_columns', [{'key': 'date', 'label': '识别日期'}])
     if channel and channel not in {column['key'] for column in columns}:
         raise ValueError('统计识别通道无效')
     rows = [row for row in data['items'] if (not company or row['company'] == company)
@@ -413,7 +418,7 @@ def export_statistics(center, *, company='', requirement='', task_id='', tab='se
     if tab == 'seal':
         _seal_comparisons(workbook, rows, columns, context)
     else:
-        _date_cohorts(workbook, rows, context)
+        _date_cohorts(workbook, rows, context, columns)
 
     group_links = {}
     for field, title, label in (('company', '按公司统计', '客户公司'), ('requirement', '按签章要求统计', '签章要求')):

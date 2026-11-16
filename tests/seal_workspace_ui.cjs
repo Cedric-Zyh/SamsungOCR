@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {sealWorkspaceModel, renderSealWorkspace, sealImageUrl} = require('../static/modules/review/seal_workspace.mjs');
+const {sealWorkspaceModel, renderSealWorkspace, sealImageUrl, mergeSealArtifacts,
+  preferredSealIndex, bindSealWorkspaces} = require('../static/modules/review/seal_workspace.mjs');
+const {sealWorkspaceArtifacts} = require('../static/modules/review/seal_artifacts.mjs');
 
 function fixture() {
   return {original_url: '/files/original.png', color_isolated_oriented_url: '/files/oriented.png',
@@ -14,6 +16,159 @@ function fixture() {
       {channel: 'receiving_primary', rectangle_row_index: 2, image_url: '/files/filled.png'},
     ]};
 }
+
+function multipleSeals() {
+  return {processing_artifacts: {seals: [
+    {index: 0, color: 'red', original_url: '/files/first-original.png', color_isolated_oriented_url: '/files/first-processed.png',
+      rectangular_text: '卜服科技服务有限公司维修中心专用章(04)'},
+    {index: 1, color: 'red', original_url: '/files/second-original.png', color_isolated_oriented_url: '/files/second-processed.png',
+      rectangular_text: '京小服科技服务有限公司维修中心专用章(04)'},
+    {index: 0, color: 'red', source: '清瞳印章区域', api_index: 1, original_url: '/files/remote-first.png'},
+    {index: 1, color: 'red', source: '清瞳印章区域', api_index: 2, original_url: '/files/remote-second.png'},
+  ]}, seal_check: {recognized: '京小服科技服务有限公司维修中心专用章(04)',
+    dual_check: {selected: {index: 1}}}, seal_standard_check: {selected_id: 'second', candidates: [
+      {id: 'first', index: 0, original_url: '/files/first-original.png', text_status: '不匹配', score: .923},
+      {id: 'second', index: 1, original_url: '/files/second-original.png', image_url: '/files/second-processed.png',
+        matched: true, text_status: '匹配', score: 1},
+    ]}};
+}
+
+test('the saved comparison winner selects the second physical seal despite overlapping provider indexes', () => {
+  const record = multipleSeals(), before = structuredClone(record);
+  const items = mergeSealArtifacts(record.processing_artifacts.seals);
+  assert.equal(items.length, 2);
+  const selected = preferredSealIndex(record, items);
+  assert.equal(selected, 1);
+  assert.equal(sealWorkspaceModel(items[selected]).preferred, '/files/second-processed.png');
+  assert.deepEqual(record, before);
+});
+
+test('saved comparison scores and selected text retain the closest available stamp without inventing a match', () => {
+  const record = multipleSeals(), items = mergeSealArtifacts(record.processing_artifacts.seals);
+  delete record.seal_standard_check.selected_id;
+  assert.equal(preferredSealIndex(record, items), 1);
+  delete record.seal_standard_check;
+  record.seal_check = {recognized: '京小服科技服务有限公司维修中心专用章(04)', status: '部分匹配'};
+  assert.equal(preferredSealIndex(record, items), 1);
+  assert.equal(record.seal_check.status, '部分匹配');
+});
+
+test('workspace selection and preview start on the winner while manual selection remains usable', () => {
+  const record = multipleSeals(), items = mergeSealArtifacts(record.processing_artifacts.seals), previews = [];
+  const panels = items.map(() => ({hidden: false}));
+  const buttons = items.map((_, index) => ({dataset: {sealWorkspaceSelect: String(index)},
+    setAttribute(name, value) { this[name] = value; }, addEventListener(_type, listener) { this.click = listener; }}));
+  const root = {querySelectorAll: selector => selector === '[data-seal-workspace-panel]' ? panels
+    : selector === '[data-seal-workspace-select]' ? buttons : []};
+  const show = bindSealWorkspaces(root, items, detail => previews.push(detail), record);
+  assert.deepEqual(panels.map(panel => panel.hidden), [true, false]);
+  assert.deepEqual(buttons.map(button => button['aria-pressed']), ['false', 'true']);
+  show();
+  assert.equal(previews.at(-1).label, '印章 2');
+  assert.equal(previews.at(-1).url, '/files/second-processed.png');
+  buttons[0].click();
+  assert.deepEqual(panels.map(panel => panel.hidden), [false, true]);
+  assert.equal(previews.at(-1).url, '/files/first-processed.png');
+});
+
+test('recognition evidence markup starts with the same selected seal as the main preview', () => {
+  const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
+  const target = {innerHTML: '', querySelectorAll: () => []};
+  createReviewEvidence({environment: {}, ui: {$: () => target},
+    reviewState: {artifactTab: 'seals', current: multipleSeals()}}).renderArtifacts();
+  assert.match(target.innerHTML, /data-seal-workspace-select="1" aria-pressed="true"/);
+  assert.match(target.innerHTML, /data-seal-workspace-panel="0" hidden/);
+  assert.match(target.innerHTML, /data-seal-workspace-panel="1">/);
+});
+
+function textOnlyRemote() {
+  return {sample_center: true, filename: '7303331190.jpg', preview_url: '/files/samples/previews/page.jpg',
+    seal_check: {recognized: '本地识别文字', backend: '本地 OCR'}, processing_artifacts: {seals: [
+      {index: 0, original_url: '/files/local-crop.png', combined_text: '本地识别文字'},
+    ]}, recognition_variants: {seal: [{method: 'danzhengtong', value: ['单证通识别文字'],
+      details: {seal_check: {recognized: '单证通识别文字', status: '部分匹配'}, processing_artifacts: {seals: []}}}]}};
+}
+
+test('text-only remote results remain separate from local stamps and preview the uploaded sample without rewriting data', () => {
+  const record = textOnlyRemote(), before = structuredClone(record), items = sealWorkspaceArtifacts(record);
+  assert.equal(items.length, 2);
+  assert.equal(sealWorkspaceModel(items[0]).text, '本地识别文字');
+  const remote = sealWorkspaceModel(items[1]);
+  assert.equal(remote.text, '单证通识别文字');
+  assert.equal(remote.status, '部分匹配');
+  assert.equal(remote.preferred, '/files/samples/original/7303331190.jpg');
+  assert.equal(remote.processed, '');
+  assert.equal(remote.originalLabel, '上传图（整页回单）');
+  const html = renderSealWorkspace(items[1]);
+  assert.match(html, /单证通印章识别结果/);
+  assert.match(html, /未保存单证通处理图，当前展示上传图/);
+  assert.doesNotMatch(html, /本地识别文字|local-crop|上传的增强图/);
+  assert.deepEqual(record, before);
+});
+
+test('an artifact-free remote record still renders its saved result and input link instead of the empty-artifacts message', () => {
+  const record = textOnlyRemote(); delete record.processing_artifacts;
+  const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
+  const target = {innerHTML: '', querySelectorAll: () => []};
+  createReviewEvidence({environment: {}, ui: {$: () => target},
+    reviewState: {artifactTab: 'seals', current: record}}).renderArtifacts();
+  assert.match(target.innerHTML, /单证通印章识别结果/);
+  assert.match(target.innerHTML, /单证通识别文字/);
+  assert.match(target.innerHTML, /部分匹配/);
+  assert.match(target.innerHTML, /data-seal-evidence-url="\/files\/samples\/original\/7303331190.jpg"/);
+  assert.doesNotMatch(target.innerHTML, /没有保存的中间处理图|旧记录可重新识别生成/);
+});
+
+test('the remote source selector switches to its own text and uploaded image with the same projected panel indexes', () => {
+  const record = textOnlyRemote(), items = sealWorkspaceArtifacts(record), previews = [];
+  const {createReviewEvidence} = require('../static/modules/review/review_evidence.mjs');
+  const panels = items.map(() => ({hidden: false}));
+  const buttons = items.map((_, index) => ({dataset: {sealWorkspaceSelect: String(index)},
+    setAttribute(name, value) { this[name] = value; }, addEventListener(_type, listener) { this.click = listener; }}));
+  const target = {innerHTML: '', closest: () => ({open: true}), querySelectorAll: selector =>
+    selector === '[data-seal-workspace-panel]' ? panels : selector === '[data-seal-workspace-select]' ? buttons : []};
+  createReviewEvidence({environment: {}, ui: {$: () => target}, previewSeal: detail => previews.push(detail),
+    reviewState: {artifactTab: 'seals', current: record}}).renderArtifacts();
+  assert.match(target.innerHTML, /data-seal-workspace-select="1"[^>]*>单证通<\/button>/);
+  assert.equal(previews.at(-1).url, '/files/local-crop.png');
+  buttons[1].click();
+  assert.deepEqual(panels.map(panel => panel.hidden), [true, false]);
+  assert.equal(previews.at(-1).label, '单证通');
+  assert.equal(previews.at(-1).text, '单证通识别文字');
+  assert.equal(previews.at(-1).url, '/files/samples/original/7303331190.jpg');
+});
+
+test('provider-specific uploads and returned crops survive projection without creating duplicate remote entries', () => {
+  const record = textOnlyRemote();
+  const artifact = {provider: 'danzhengtong', index: 0, input_url: '/files/remote-upload.png',
+    returned_image_url: '/files/remote-returned.png', returned_image_status: 'downloaded', provider_text: '单证通识别文字'};
+  record.processing_artifacts.seals.push(artifact);
+  record.recognition_variants.seal[0].details.processing_artifacts.seals.push(artifact);
+  let items = sealWorkspaceArtifacts(record);
+  assert.equal(items.length, 2);
+  assert.equal(sealWorkspaceModel(items[1]).preferred, '/files/remote-returned.png');
+  assert.equal(sealWorkspaceModel(items[1]).status, '部分匹配');
+  artifact.returned_image_status = 'missing';
+  assert.equal(sealWorkspaceModel(sealWorkspaceArtifacts(record)[1]).preferred, '/files/remote-upload.png');
+  record.processing_artifacts.seals.pop();
+  assert.equal(sealWorkspaceArtifacts(record).length, 2);
+});
+
+test('legacy single-source results use uploaded receipt files and unsafe image inputs cannot escape the local preview', () => {
+  const record = {stored_name: '上传 回单.jpg', preview_url: '/files/previews/p.jpg',
+    seal_check: {source: '单证通', recognized: '<img src=x onerror=bad()>', status: '匹配'}};
+  let items = sealWorkspaceArtifacts(record);
+  assert.equal(items.length, 1);
+  assert.equal(sealWorkspaceModel(items[0]).preferred, '/files/uploads/%E4%B8%8A%E4%BC%A0%20%E5%9B%9E%E5%8D%95.jpg');
+  delete record.stored_name; record.preview_url = 'https://example.com/private.png';
+  record.seal_check.input_url = 'javascript:bad()';
+  items = sealWorkspaceArtifacts(record);
+  assert.equal(sealWorkspaceModel(items[0]).preferred, '');
+  assert.match(renderSealWorkspace(items[0]), /&lt;img/);
+  assert.doesNotMatch(renderSealWorkspace(items[0]), /<img|javascript:|example.com/);
+  assert.deepEqual(sealWorkspaceArtifacts(null), []);
+  assert.deepEqual(sealWorkspaceArtifacts({recognition_config: {seal: ['danzhengtong']}}), []);
+});
 
 test('adopted identity is decomposed without removing the literal circled number or rewriting data', () => {
   const item = fixture(), original = structuredClone(item);

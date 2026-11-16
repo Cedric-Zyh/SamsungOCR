@@ -1,7 +1,7 @@
 """Load remote trace evidence and retain the historical projection API."""
 from .remote_call_projection import (
     transport_timing, record_transport_phase, remote_call, merge_remote_snapshot,
-    combined_remote_call,
+    combined_remote_call, finish_wait_timeout,
 )
 from .remote_trace_projection import RemoteTraceInput, project_remote_trace
 

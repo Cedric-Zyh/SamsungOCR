@@ -440,6 +440,7 @@ body[data-active-page="samples"] .hero .sample-page-actions {display:flex;align-
 #sample-result-filters-count {margin-left:auto;color:var(--archive-muted);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
 #sample-result-filters-run {flex:none;font-size:11px;padding:5px 9px;white-space:nowrap;border-radius:4px;color:#46583b;border-color:#c5cebb;background:#faf9f5}
 .sample-result-filter-fields {display:grid;grid-template-columns:1fr 1.3fr 1fr 1fr;gap:12px}
+.sample-result-filter-primary {grid-template-columns:1.3fr 1fr}
 .sample-result-filter-fields label {display:flex;flex-direction:column;gap:6px;min-width:0;color:var(--archive-muted);font-size:11px}
 .sample-result-filter-fields select {width:100%;min-width:0;box-sizing:border-box;height:34px;border:1px solid var(--archive-line);border-radius:4px;padding:5px 8px;background:#faf9f6;color:var(--archive-ink);font:inherit;font-size:12px;cursor:pointer}
 .sample-result-filter-fields select:disabled {opacity:.5;cursor:default}

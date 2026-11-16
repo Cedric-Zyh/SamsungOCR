@@ -1,5 +1,6 @@
 /** Sample labels never overwrite the machine evidence used by comparisons. */
 import {normalizedReviewDate} from './review_readiness.mjs';
+import {syncAnnotationCalendar} from './annotation_calendar.mjs';
 import {renderProblemAnnotations, collectProblemAnnotations, problemAnnotationError} from './problem_annotations.mjs';
 const fieldNames = {truth_customer: '客户名称', truth_requirement: '签章要求', truth_required_date: '要求到货'};
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -14,12 +15,12 @@ function updatePrefillNote(state) {
   if (!state.note) return;
   const count = state.inputs.size;
   state.note.hidden = !count;
-  state.note.textContent = count ? `已根据本次识别结果带入 ${count} 项，请核对后保存。` : '';
+  state.note.textContent = count ? `已预填 ${count} 项，请对照原图核对后保存。` : '';
 }
 
 function setPrefillSource(input, state, fromRecognition) {
   if (input.dataset) {
-    if (fromRecognition) input.dataset.annotationSource = 'recognition';
+    if (fromRecognition) input.dataset.annotationSource = typeof fromRecognition === 'string' ? fromRecognition : 'recognition';
     else delete input.dataset.annotationSource;
   }
   if (fromRecognition) state.inputs.add(input);
@@ -59,6 +60,16 @@ function recognizedSeal(check = {}) {
 export function syncSampleDate(ui, root) {
   const actual = ui.$('[name=truth_actual_date]', root);
   actual.disabled = ui.$('[name=truth_date_present]', root).value !== 'true';
+  const required = normalizedReviewDate(ui.$('[name=truth_required_date]', root).value);
+  if (!actual.disabled && required && (!actual.value.trim() || actual.dataset?.annotationSource === 'required_date')) {
+    actual.value = required;
+    const prefill = prefillBindings.get(actual);
+    if (prefill) {
+      setPrefillSource(actual, prefill, 'required_date');
+      updatePrefillNote(prefill);
+    }
+  }
+  syncAnnotationCalendar(ui, root);
 }
 
 export function renderSampleAnnotations(ui, reviewState, truth, root) {
@@ -83,12 +94,13 @@ export function renderSampleAnnotations(ui, reviewState, truth, root) {
   // A prior save may have deliberately cleared both date keys; do not restore that decision.
   const detectedDate = !savedBefore && !hasActual && (!hasPresent || entry.date_present === true)
     ? recognizedDate(current.date_check || {}) : '';
+  const requiredDate = normalizedReviewDate($('[name=truth_required_date]', root).value);
   if (detectedDate) {
-    actualDate = detectedDate;
+    actualDate = requiredDate || detectedDate;
     if (!hasPresent) datePresent = 'true';
   }
   setValue('truth_date_present', datePresent, !!detectedDate && !hasPresent);
-  setValue('truth_actual_date', actualDate, !!detectedDate);
+  setValue('truth_actual_date', actualDate, detectedDate ? requiredDate ? 'required_date' : true : false);
   const detectedSeal = !savedBefore && !hasOwn(entry, 'seal_should_match')
     ? recognizedSeal(current.seal_check || {}) : '';
   setValue('truth_seal_should_match', typeof entry.seal_should_match === 'boolean'

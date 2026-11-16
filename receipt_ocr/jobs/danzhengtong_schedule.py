@@ -2,7 +2,7 @@
 from datetime import datetime
 import json
 
-from ..domain.remote_tasks import remote_state, aggregate_remote, next_submission
+from ..domain.remote_tasks import remote_state, aggregate_remote, next_submission, result_deadline
 
 
 LIVE = "active=1 AND status NOT IN ('applied','conflict','cancelled')"
@@ -71,9 +71,12 @@ def projection(task, state):
     submit = next_submission(state)
     queries = []
     page = state['page']
+    def query_due(branch, submitted_at):
+        due, limit = deadline(branch.get('next_query_at')), result_deadline(submitted_at)
+        return min(due, deadline(limit)) if limit else due
     if state.get('page_required') and page.get('status') == 'waiting' and task.get('req_uuid'):
-        queries.append(deadline(page.get('next_query_at')))
-    queries.extend(deadline(child.get('next_query_at')) for child in state['requests']
+        queries.append(query_due(page, task.get('submitted_at')))
+    queries.extend(query_due(child, child.get('submitted_at')) for child in state['requests']
                    if child.get('status') == 'waiting' and child.get('req_uuid'))
     return int(submit is not None), min(queries) if queries else None, None
 

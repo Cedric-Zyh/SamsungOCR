@@ -8,7 +8,8 @@ const TERMINAL = new Set(['succeeded', 'failed']);
 const STATES = ['正确', '错误', '未识别', '失败', '待标注', '未运行', '未测试', '测试中'];
 
 export function getCell(row, key, tab = 'seal') {
-  const source = tab === 'date' || key === 'date' ? row?.date : row?.seals?.[key];
+  const source = key === 'date' ? row?.date : key.startsWith('date:') ? row?.dates?.[key.slice(5)]
+    : tab === 'date' ? row?.dates?.[key] : row?.seals?.[key];
   return {
     state: source?.state || (row?.job_status ? '未运行' : '未测试'),
     value: source?.value ?? '', decision: source?.decision ?? '', note: source?.note ?? '',
@@ -20,8 +21,10 @@ export function rowAnnotated(row, tab = 'seal') {
     : ['匹配', '不匹配'].includes(row?.expected_seal);
 }
 
-function rowCells(row, tab) {
-  return tab === 'date' ? [getCell(row, 'date', tab)] : Object.keys(row?.seals || {}).map(key => getCell(row, key));
+export function rowCells(row, tab) {
+  return tab === 'date' ? [getCell(row, 'date', tab),
+    ...Object.keys(row?.dates || {}).map(key => getCell(row, `date:${key}`, tab))]
+    : Object.keys(row?.seals || {}).map(key => getCell(row, key));
 }
 
 export function summarizeCoverage(rows = [], tab = 'seal') {
@@ -80,7 +83,7 @@ export function summarizeChannel(rows = [], key, tab = 'seal') {
   if (tab === 'date') {
     const cohort = blank => {
       const samples = rows.filter(row => rowAnnotated(row, 'date') && Boolean(row.expected_date) !== blank);
-      return {samples: samples.length, ...cellSummary(samples.map(row => getCell(row, 'date', 'date')))};
+      return {samples: samples.length, ...cellSummary(samples.map(row => getCell(row, key, 'date')))};
     };
     summary.cohorts = {dated: cohort(false), blank: cohort(true)};
   }
@@ -88,7 +91,8 @@ export function summarizeChannel(rows = [], key, tab = 'seal') {
 }
 
 function normalizedColumns(columns = [], tab = 'seal') {
-  const selected = tab === 'date' ? [{key: 'date', label: '识别日期'}] : columns;
+  const dateColumns = columns.filter(column => (column.key || column) === 'date' || (column.key || column).startsWith('date:'));
+  const selected = tab === 'date' ? dateColumns.length ? dateColumns : [{key: 'date', label: '综合日期'}] : columns;
   return [...new Map(selected.map(column => {
     const item = typeof column === 'string' ? {key: column, label: column} : column;
     return [item.key, item];

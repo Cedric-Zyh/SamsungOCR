@@ -3,10 +3,12 @@
     <strong>识别结果筛选</strong><button type="button" id="sample-result-filters-close" class="text-button" aria-label="收起筛选">收起 ×</button>
   </div>
   <div class="sample-result-filters-content">
-    <div class="sample-result-filter-fields">
+    <div class="sample-result-filter-fields sample-result-filter-primary">
+      <label>日期来源<select id="sample-filter-date-source"></select></label>
       <label>日期结果<select id="sample-filter-date"></select></label>
       <label>印章来源<select id="sample-filter-seal-source"></select></label>
       <label>印章结果<select id="sample-filter-seal"></select></label>
+      <label>签名来源<select id="sample-filter-signature-source"></select></label>
       <label>签名结果<select id="sample-filter-signature"></select></label>
     </div>
     <details class="sample-result-filter-more">
@@ -17,7 +19,7 @@
         <label>对照印章来源<select id="sample-filter-compare-source"></select></label>
         <label>对照印章结果<select id="sample-filter-compare-seal" disabled></select></label>
       </div>
-      <p id="sample-result-filter-accuracy-note">准确性对照人工标注；印章结果对照本单签章要求。对照来源可同时筛查另一路印章结果，所有条件需同时满足。</p>
+      <p id="sample-result-filter-accuracy-note">日期、签名和印章均按所选来源筛选；日期准确性对照该来源的识别日期与人工标注。签名对照仓库联系人，印章对照本单签章要求。所有条件需同时满足。</p>
     </details>
   </div>
 </section>

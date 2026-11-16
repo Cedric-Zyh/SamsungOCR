@@ -11,6 +11,13 @@ const items = [
   {filename:'other.jpg',company:'乙',status:'已完成',result_id:3,signature:'匹配',result_filters:{
     date:cell('未识别'),seals:{qingtong_ocr:cell('不匹配','乙章')}}},
 ];
+
+const multiSourceItem = () => ({filename:'multi.jpg',company:'甲',status:'已完成',result_id:4,signature:'匹配',
+  result_filters:{date:cell('匹配','2025-02-13','正确'),dates:{
+    combined:cell('匹配','2025-02-13','正确'),
+    'local:paddle_v6':cell('不匹配','2025-02-12','错误'),danzhengtong:cell('匹配','2025-02-13','正确')},
+  signatures:{combined:cell('匹配','王五'),'local:paddle_v6':cell('不匹配','李四'),danzhengtong:cell('匹配','王五')},
+  seals:{combined:cell('匹配','甲章')}}});
 function nodes() {
   const map = new Map(), store = new Map(), documentHandlers = {};
   const $ = selector => {
@@ -33,6 +40,52 @@ test('filters compose across company, date and independent seal channels', () =>
   assert.equal(matchesResultFilters(items[0],{sealSource:'qingtong_ocr',seal:'匹配'}),false);
   assert.equal(matchesResultFilters(items[1],{date:'recognized',dateAccuracy:'正确',signature:'不匹配'}),true);
   assert.equal(matchesResultFilters(items[1],{date:'匹配',dateAccuracy:'正确'}),false);
+});
+
+test('date and signature filters use their selected source and date accuracy follows that source', () => {
+  const item=multiSourceItem();
+  assert(matchesResultFilters(item,{dateSource:'local:paddle_v6',date:'不匹配',dateAccuracy:'错误'}));
+  assert(!matchesResultFilters(item,{dateSource:'danzhengtong',date:'不匹配'}));
+  assert(matchesResultFilters(item,{dateSource:'danzhengtong',date:'匹配',dateAccuracy:'正确'}));
+  assert(!matchesResultFilters(item,{dateSource:'local:paddle_v6',dateAccuracy:'正确'}));
+  assert(matchesResultFilters(item,{signatureSource:'local:paddle_v6',signature:'不匹配'}));
+  assert(!matchesResultFilters(item,{signatureSource:'danzhengtong',signature:'不匹配'}));
+  assert(matchesResultFilters(item,{dateSource:'local:paddle_v6',date:'不匹配',
+    signatureSource:'danzhengtong',signature:'匹配',seal:'匹配'}));
+});
+
+test('specific date and signature sources never fall back to a combined reading', () => {
+  const legacy=structuredClone(items[1]);
+  assert(!matchesResultFilters(legacy,{dateSource:'danzhengtong',date:'recognized'}));
+  assert(!matchesResultFilters(legacy,{signatureSource:'local:paddle_v6',signature:'不匹配'}));
+  assert(matchesResultFilters(legacy,{dateSource:'danzhengtong',date:'缺少结果'}));
+  assert(matchesResultFilters(legacy,{signatureSource:'local:paddle_v6',signature:'缺少结果'}));
+  const pending=multiSourceItem();pending.status='测试中';
+  pending.result_filters.signatures.danzhengtong=cell('测试中');
+  assert(matchesResultFilters(pending,{signatureSource:'local:paddle_v6',signature:'不匹配'}));
+  assert(matchesResultFilters(pending,{signatureSource:'danzhengtong',signature:'测试中'}));
+});
+
+test('date and signature source controls, chips and reset remain independent', () => {
+  const {$,environment}=nodes();let changes=0;
+  const filters=createResultFilters({environment,ui:{$},changed:()=>changes++});filters.initialize();
+  for(const key of ['date-source','signature-source']) {
+    assert.match($(`#sample-filter-${key}`).innerHTML,/本地 · PP-OCRv6/);
+    assert.match($(`#sample-filter-${key}`).innerHTML,/单证通/);
+    assert.doesNotMatch($(`#sample-filter-${key}`).innerHTML,/清瞳/);
+    assert.equal($(`#sample-filter-${key}`).value,'combined');
+  }
+  $('#sample-filter-date-source').value='local:paddle_v6';$('#sample-filter-date-source').handlers.change();
+  $('#sample-filter-signature-source').value='danzhengtong';$('#sample-filter-signature-source').handlers.change();
+  filters.render(5,10,false,false);
+  assert.match($('#sample-result-filter-chips').innerHTML,/日期来源：本地 · PP-OCRv6/);
+  assert.match($('#sample-result-filter-chips').innerHTML,/签名来源：单证通/);
+  $('#sample-result-filter-chips').handlers.click({target:{closest:()=>({dataset:{clearResultFilter:'dateSource'}})}});
+  assert.equal(filters.current().dateSource,'combined');
+  assert.equal(filters.current().signatureSource,'danzhengtong');
+  filters.reset();
+  assert.equal(filters.current().signatureSource,'combined');
+  assert.equal(changes,4);
 });
 
 test('not run, failed, missing and pending channel states remain separate', () => {
@@ -130,6 +183,16 @@ test('source evidence is independent and escapes values embedded in card attribu
   const item = {status:'已完成',result_filters:{seals:{qingtong_ocr:cell('不匹配','<img onerror="bad">')}}};
   const html = sampleFilterEvidence(item,{sealSource:'qingtong_ocr'});
   assert.match(html,/清瞳 · 文字 OCR：不匹配/);
+  assert.match(html,/&lt;img/);
+  assert.doesNotMatch(html,/<img/);
+});
+
+test('date and signature source evidence identifies its stage and escapes receiver text', () => {
+  const item=multiSourceItem();item.result_filters.signatures.danzhengtong.value='<img onerror="bad">';
+  const html=sampleFilterEvidence(item,{dateSource:'local:paddle_v6',signatureSource:'danzhengtong'});
+  assert.match(html,/日期 · 本地 · PP-OCRv6：不匹配/);
+  assert.match(html,/签名 · 单证通：匹配/);
+  assert.match(html,/2025-02-12/);
   assert.match(html,/&lt;img/);
   assert.doesNotMatch(html,/<img/);
 });

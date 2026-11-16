@@ -53,6 +53,7 @@ def _refresh_dispatch(con):
 MIGRATIONS = (
     (1, "remote_queue_schema", _baseline),
     (2, "replace_dispatch_trigger", _refresh_dispatch),
+    (3, "bound_result_wait_to_five_minutes", _refresh_dispatch),
 )
 
 

@@ -147,7 +147,7 @@ export function sealProcessingSteps(item) {
     const seen = new Set();
     return [
       ['印章原始区域', item.original_url],
-      ['上传的增强图', item.input_url || item.color_isolated_url],
+      [item.input_label || '上传的增强图', item.input_url || item.color_isolated_url],
       ['单证通返回的旋正图', danzhengtongProcessedUrl(item)],
     ].filter(([, url]) => url && !seen.has(url) && seen.add(url)).map(([label, url]) => ({label, url}));
   }

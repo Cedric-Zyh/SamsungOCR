@@ -11,6 +11,7 @@ from receipt_ocr.domain.sample_seal_decision import (
     SAMPLE_SEAL_DECISIONS, sample_seal_decision, sample_warehouse_code_adjustment,
 )
 from receipt_ocr.domain.parsing.parsing_seals import compare_seal_text_strict
+from .channel_filters import RECOGNITION_SOURCES, date_source_filters, signature_source_filters
 
 
 SEAL_SOURCES = [
@@ -24,11 +25,21 @@ SEAL_SOURCES = [
 ]
 
 
+def _scalar_sql(source, path, function='json_extract'):
+    expression = f"{function}({source},'{path}')"
+    if not path.isascii():
+        # Older SQLite JSON readers compare property spelling literally: both
+        # Chinese keys and legacy \u-escaped keys occur in stored results.
+        escaped = '.'.join(json.dumps(part) if not part.isascii() else part for part in path.split('.'))
+        expression = f"COALESCE({expression},{function}({source},'{escaped}'))"
+    return expression
+
+
 def _object_sql(root, fields):
     parts = []
     for key, value in fields.items():
         path = f"{root}.{key}"
-        expression = _object_sql(path, value) if isinstance(value, dict) else f"json_extract(r.result_json,'{path}')"
+        expression = _object_sql(path, value) if isinstance(value, dict) else _scalar_sql('r.result_json', path)
         parts.extend([f"'{key}'", expression])
     return 'json_object(' + ','.join(parts) + ')'
 
@@ -47,15 +58,40 @@ _SEAL_CHECK = {
     }},
 }
 # This is static SQL, assembled only from the constant field allowlists above.
-_variant_check = _object_sql('$.details.seal_check', _SEAL_CHECK).replace('r.result_json', 'v.value')
+_DATE_CHECK = dict.fromkeys(('status', 'actual', 'source', 'backend'))
+_EXECUTION = dict.fromkeys(('pending', 'error', 'status', 'execution_status', 'simulated', 'mode'))
+_DATE_VARIANT_FIELDS = {**_EXECUTION, 'method': None, 'details': {
+    **_EXECUTION, 'date_check': _DATE_CHECK, 'danzhengtong': _EXECUTION}}
+_HANDWRITING_VARIANT_FIELDS = {**_EXECUTION, 'method': None, 'value': {'仓库接收人': None}, 'details': {
+    **_EXECUTION, 'handwriting_fields': {'仓库接收人': None},
+    'fields': {'仓库联系人': None, '仓库接收人': None},
+    'handwriting_metadata': {'仓库接收人': _EXECUTION},
+    'handwriting_check': _EXECUTION, 'danzhengtong': _EXECUTION}}
+_HANDWRITING_OBSERVED_SQL = (
+    "(json_type(v.value,'$.details.handwriting_fields')='object'"
+    " OR json_type(v.value,'$.value')='object'"
+    f" OR {_scalar_sql('v.value', '$.details.fields.仓库接收人', 'json_type')}='text')"
+)
+_VARIANT_FIELDS = {'method': None, 'error': None, 'details': {'seal_check': _SEAL_CHECK}}
+_STAGE_VARIANT_FIELDS = {'seal': _VARIANT_FIELDS, 'date': _DATE_VARIANT_FIELDS,
+                         'handwriting': _HANDWRITING_VARIANT_FIELDS}
+
+
+def _filter_variant_sql(stage, fields):
+    projected = _object_sql('$', fields).replace('r.result_json', 'v.value')
+    if stage == 'handwriting':
+        projected = f"json_set({projected},'$._observed',COALESCE({_HANDWRITING_OBSERVED_SQL},0))"
+    return ("json((SELECT json_group_array(" + projected + ") FROM json_each(r.result_json,"
+            + f"'$.recognition_variants.{stage}') v))")
+
+
 FILTER_RESULT_SQL = (
     "json_object('recognition_config',json_extract(r.result_json,'$.recognition_config'),"
-    "'date_check'," + _object_sql('$.date_check', dict.fromkeys(('status', 'actual'))) + ','
+    "'date_check'," + _object_sql('$.date_check', _DATE_CHECK) + ','
     "'seal_check'," + _object_sql('$.seal_check', _SEAL_CHECK) + ','
-    "'recognition_variants',json_object('seal',json((SELECT json_group_array(json_object("
-    "'method',json_extract(v.value,'$.method'),'error',json_extract(v.value,'$.error'),"
-    "'details',json_object('seal_check'," + _variant_check + "))) "
-    "FROM json_each(r.result_json,'$.recognition_variants.seal') v))))"
+    "'recognition_variants',json_object("
+    + ','.join(f"'{stage}',{_filter_variant_sql(stage, fields)}"
+               for stage, fields in _STAGE_VARIANT_FIELDS.items()) + '))'
 )
 
 
@@ -67,12 +103,10 @@ def _projection_paths(root, fields):
 
 def _extract_sql(source, paths):
     # All paths come from the static allowlists, never request parameters.
-    return f"json_extract({source}," + ','.join(f"'{path}'" for path in paths) + ')'
-
-
-_DATE_CHECK = dict.fromkeys(('status', 'actual'))
-_VARIANT_FIELDS = {'method': None, 'error': None, 'details': {'seal_check': _SEAL_CHECK}}
-_VARIANT_PATHS = _projection_paths('$', _VARIANT_FIELDS)
+    expression = f"json_extract({source}," + ','.join(f"'{path}'" for path in paths) + ')'
+    alternate_keys = [value for index, path in enumerate(paths) if not path.isascii()
+                      for value in (f"'$[{index}]'", _scalar_sql(source, path))]
+    return 'json_set(' + expression + ',' + ','.join(alternate_keys) + ')' if alternate_keys else expression
 
 
 def _list_projection_sql():
@@ -86,11 +120,14 @@ def _list_projection_sql():
     for key, fields in (('date_check', _DATE_CHECK), ('seal_check', _SEAL_CHECK)):
         cases[key] = ("CASE WHEN p.type IN ('object','array') THEN "
                       + _extract_sql('p.value', _projection_paths('$', fields)) + ' END')
+    stages = []
+    for stage, fields in _STAGE_VARIANT_FIELDS.items():
+        values = _extract_sql('v.value', _projection_paths('$', fields))
+        if stage == 'handwriting':
+            values = f"json_insert({values},'$[#]',COALESCE({_HANDWRITING_OBSERVED_SQL},0))"
+        stages.extend([f"'{stage}'", f"json((SELECT json_group_array({values}) FROM json_each(p.value,'$.{stage}') v))"])
     cases['recognition_variants'] = (
-        "CASE WHEN p.type IN ('object','array') THEN (SELECT json_group_array("
-        + _extract_sql('v.value', _VARIANT_PATHS)
-        + ") FROM json_each(p.value,'$.seal') v) ELSE '[]' END"
-    )
+        "CASE WHEN p.type IN ('object','array') THEN json_object(" + ','.join(stages) + ") ELSE '{}' END")
     return (
         '(SELECT json_group_object(p.key,json(CASE p.key '
         + ' '.join(f"WHEN '{key}' THEN {expression}" for key, expression in cases.items())
@@ -122,10 +159,17 @@ def decode_list_result(value):
     for key, fields in (('date_check', _DATE_CHECK), ('seal_check', _SEAL_CHECK)):
         values = projected.get(key) or [None] * len(_projection_paths('$', fields))
         result[key] = _restore_projection(iter(values), fields)
-    result['recognition_variants'] = {'seal': [
-        _restore_projection(iter(variant or [None] * len(_VARIANT_PATHS)), _VARIANT_FIELDS)
-        for variant in projected.get('recognition_variants') or []
-    ]}
+    result['recognition_variants'] = {}
+    for stage, fields in _STAGE_VARIANT_FIELDS.items():
+        variants = []
+        for values in (projected.get('recognition_variants') or {}).get(stage) or []:
+            values = list(values or [None] * len(_projection_paths('$', fields)))
+            observed = values.pop() if stage == 'handwriting' else None
+            variant = _restore_projection(iter(values), fields)
+            if stage == 'handwriting':
+                variant['_observed'] = observed
+            variants.append(variant)
+        result['recognition_variants'][stage] = variants
     return result
 
 
@@ -267,8 +311,10 @@ def sample_result_filters(job, truth, *, result=None):
                 seals['combined'].update(state='部分匹配',
                     accuracy=_accuracy(truth, 'seal', '部分匹配', selected['value']))
     seals['combined']['source_key'] = selected_source
-    return {'date': cell(date_check, date_check.get('actual'), kind='date',
-                         enabled=bool(config.get('date')) if config is not None else None), 'seals': seals}
+    date = cell(date_check, date_check.get('actual'), kind='date',
+                enabled=bool(config.get('date')) if config is not None else None)
+    return {'date': date, 'dates': date_source_filters(result, job, config, date, cell),
+            'signatures': signature_source_filters(result, job, config), 'seals': seals}
 
 
 def _seal_display_source(result, source_key):

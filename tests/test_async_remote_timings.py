@@ -41,6 +41,8 @@ def timed(runtime, monkeypatch):
     runtime.worker.client_factory = lambda task: provider
     runtime.client = provider
     monkeypatch.setattr(danzhengtong_worker, 'perf_counter', lambda: clock.seconds)
+    monkeypatch.setattr(danzhengtong_worker, 'now_iso',
+                        lambda: (epoch + timedelta(seconds=clock.seconds)).isoformat(timespec='seconds'))
     monkeypatch.setattr(danzhengtong_worker, 'trace_timestamp',
                         lambda: (epoch + timedelta(seconds=clock.seconds)).isoformat(timespec='microseconds'))
     monkeypatch.setattr('receipt_ocr.persistence.recognition_calls.trace_timestamp',

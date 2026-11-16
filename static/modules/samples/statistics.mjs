@@ -1,5 +1,5 @@
 import {escapeHtml as esc} from '../core/ui.mjs';
-import {rowAnnotated} from './statistics_metrics.mjs';
+import {rowAnnotated, getCell, rowCells} from './statistics_metrics.mjs';
 import {statisticsOverview, statisticsScopeNote, statisticsScopeSummary, statisticsSummary, statTime} from './statistics_view.mjs';
 import {createStatisticsPreview} from './statistics_preview.mjs';
 
@@ -27,7 +27,7 @@ export function filterStatistics(rows, {company = '', tab = 'seal', filter = '',
   return rows.filter(row => {
     if (company && row.company !== company) return false;
     if (requirement && (row.requirement || '').trim() !== requirement) return false;
-    const cells = tab === 'date' ? [row.date] : channel ? [sealCell(row, channel)] : Object.values(row.seals);
+    const cells = channel ? [getCell(row, channel, tab)] : rowCells(row, tab);
     if (filter === 'pending_truth') return !rowAnnotated(row, tab);
     if (filter === 'untested') return !row.job_status;
     if (filter === 'errors') return cells.some(cell => BAD.has(cell.state));
@@ -40,9 +40,9 @@ export function filterStatistics(rows, {company = '', tab = 'seal', filter = '',
     if (filter === 'partial') return cells.some(cell => cell.state === '错误' && cell.decision === '部分匹配');
     if (filter === 'other') return cells.some(cell => cell.state === '错误' && cell.decision !== '部分匹配'
       && !(row.expected_seal === '不匹配' && cell.decision === '匹配') && !(row.expected_seal === '匹配' && cell.decision === '不匹配'));
-    if (filter === 'wrong_date') return Boolean(row.expected_date) && row.date.state === '错误' && Boolean(row.date.value);
-    if (filter === 'date_missed') return Boolean(row.expected_date) && (row.date.state === '未识别' || (row.date.state === '错误' && !row.date.value));
-    if (filter === 'date_spurious') return row.expected_date === '' && row.date.state === '错误' && Boolean(row.date.value);
+    if (filter === 'wrong_date') return Boolean(row.expected_date) && cells.some(cell => cell.state === '错误' && Boolean(cell.value));
+    if (filter === 'date_missed') return Boolean(row.expected_date) && cells.some(cell => cell.state === '未识别' || (cell.state === '错误' && !cell.value));
+    if (filter === 'date_spurious') return row.expected_date === '' && cells.some(cell => cell.state === '错误' && Boolean(cell.value));
     if (filter === 'date_with_value') return Boolean(row.expected_date);
     if (filter === 'date_blank') return row.expected_date === '';
     if (filter === 'remote') return disagrees([sealCell(row, 'qingtong_template'), sealCell(row, 'qingtong_ocr')]);
@@ -136,13 +136,13 @@ export function createSampleStatistics({environment, ui, services, openResult, o
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
-    const columns = tab === 'seal' ? data.columns : [{key: 'date', label: '识别日期'}];
+    const columns = tab === 'seal' ? data.columns : data.date_columns || [{key: 'date', label: '综合日期'}];
     const filters = [['', '全部'], ['errors', channel || tab === 'date' ? '异常结果' : '任一路异常'],
       ...(tab === 'seal' ? [['false_accept','误放行'], ['false_reject','误拒绝'], ['partial','部分匹配'], ['other','其他判定错误'], ['remote', '清瞳两路不一致'], ['local', '清瞳与本地不一致']]
         : [['wrong_date','日期读错'], ['date_missed','漏读日期'], ['date_spurious','空白误读出日期'], ['date_with_value','有日期样单'], ['date_blank','空白日期样单']]),
       ['wrong','判定错误'], ['unrecognized','未识别'], ['failed','执行失败'], ['missing', '未识别 / 失败'], ['pending_truth','待标注'], ['untested','未测试']];
     const overviewMarkup = section === 'overview' ? statisticsOverview(scoped, {tab, columns, groupBy:tab === 'date' ? 'company' : groupBy, showAllGroups, distribution:statisticsDistribution}) : '';
-    const detailsMarkup = `<div class="sample-stat-detail-toolbar"><div class="sample-stat-detail-scope">${tab === 'seal' ? `<label>识别方案 <select data-stat-channel-select><option value="">全部方案</option>${columns.map(column => `<option value="${esc(column.key)}"${channel === column.key ? ' selected' : ''}>${esc(column.label)}</option>`).join('')}</select></label>` : ''}${requirement ? `<span>签章要求：${esc(requirement)}</span>` : ''}${channel || requirement || filter ? '<button type="button" class="text-button" data-stat-clear>清除明细筛选</button>' : ''}</div><span>共 ${rows.length} 张</span></div>
+    const detailsMarkup = `<div class="sample-stat-detail-toolbar"><div class="sample-stat-detail-scope"><label>识别方案 <select data-stat-channel-select><option value="">全部方案</option>${columns.map(column => `<option value="${esc(column.key)}"${channel === column.key ? ' selected' : ''}>${esc(column.label)}</option>`).join('')}</select></label>${requirement ? `<span>签章要求：${esc(requirement)}</span>` : ''}${channel || requirement || filter ? '<button type="button" class="text-button" data-stat-clear>清除明细筛选</button>' : ''}</div><span>共 ${rows.length} 张</span></div>
       <div class="sample-stat-filters" role="group" aria-label="筛选统计结果">${filters.map(([key, label]) =>
         `<button type="button" data-stat-filter="${key}" class="secondary-button${filter === key ? ' active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div>
       <div class="sample-stat-table-wrap"><table class="sample-stat-table" style="min-width:${Math.max(850, (columns.length + 3) * 170)}px">
@@ -152,7 +152,7 @@ export function createSampleStatistics({environment, ui, services, openResult, o
         `<tr><td><div class="sample-stat-sample">${imageUrl ? `<button type="button" class="sample-stat-thumb" data-stat-view="${esc(row.filename)}" aria-label="查看 ${esc(row.filename)}"><img src="${esc(imageUrl(row.filename, true))}" alt="" loading="lazy"></button>` : ''}<div><strong>${esc(row.filename)}</strong><small>${esc(row.company)}</small><small>${row.job_status ? esc(statTime(row.tested_at)) : '未测试'}</small>${row.task_name ? `<small>${esc(row.task_name)}</small>` : ''}</div></div></td>
         <td>${esc(tab === 'seal' ? row.requirement || '未标注签章要求' : row.expected_date === null ? '待标注' : row.expected_date || '空白')}
         ${tab === 'seal' ? `<small>标注：${esc(row.expected_seal ? `应${row.expected_seal}` : '待标注')}</small>` : ''}</td>
-        ${columns.map(column => `<td${channel === column.key ? ' class="sample-stat-focused-channel"' : ''}>${statisticsCell(tab === 'date' ? row.date : sealCell(row, column.key), tab === 'seal')}</td>`).join('')}
+        ${columns.map(column => `<td${channel === column.key ? ' class="sample-stat-focused-channel"' : ''}>${statisticsCell(getCell(row, column.key, tab), tab === 'seal')}</td>`).join('')}
         <td><button type="button" class="text-button" data-stat-view="${esc(row.filename)}">${row.result_id ? '查看' : '预览'} ›</button></td></tr>`).join('')
         || `<tr><td colspan="${columns.length + 3}" class="empty-state">当前范围没有符合条件的样单</td></tr>`}</tbody></table></div>`;
     const markup = section === 'overview' ? overviewMarkup : detailsMarkup;
@@ -202,7 +202,8 @@ export function createSampleStatistics({environment, ui, services, openResult, o
       if (token !== revision || !dialog().open) return;
       if (preview.active()) { refreshDeferred = true; return; }
       data = result;
-      if (channel && !data.columns.some(column => column.key === channel)) channel = '';
+      const columns = tab === 'seal' ? data.columns : data.date_columns || [{key:'date'}];
+      if (channel && !columns.some(column => column.key === channel)) channel = '';
       const select = $('#sample-statistics-batch');
       const batchOptions = batches => batches.map(batch => {
         const name = (batch.name || '样单测试').replace(/\s*·\s*\d+\s*张$/, '');

@@ -9,6 +9,34 @@ from datetime import datetime, timedelta
 import json
 
 
+RESULT_WAIT_TIMEOUT_SECONDS = 300
+RESULT_WAIT_TIMEOUT_ERROR = '单证通等待识别结果超过 5 分钟（300 秒），已停止查询，请重试'
+
+
+def result_deadline(submitted_at):
+    try:
+        return (datetime.fromisoformat(submitted_at) + timedelta(seconds=RESULT_WAIT_TIMEOUT_SECONDS)).isoformat(timespec='seconds')
+    except (TypeError, ValueError, OverflowError):
+        return ''
+
+
+def result_wait_expired(submitted_at, observed_at):
+    try:
+        start, current = datetime.fromisoformat(submitted_at), datetime.fromisoformat(observed_at)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=current.tzinfo)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=start.tzinfo)
+        return (current - start).total_seconds() >= RESULT_WAIT_TIMEOUT_SECONDS
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def result_timeout_error(state):
+    branches = ([state['page']] if state.get('page_required') else []) + state.get('requests', [])
+    return RESULT_WAIT_TIMEOUT_ERROR if any(branch.get('failure_code') == 'result_timeout' for branch in branches) else ''
+
+
 def branch_due(value, timestamp):
     """Missing legacy schedules are due, never an instruction to submit again."""
     if not value:
@@ -58,7 +86,9 @@ def remote_state(task, *, recover=False):
                 'next_query_at': task.get('next_query_at', '') if status == 'waiting' else ''}
         state['page'] = page
     # A persisted UUID/result takes precedence over stale queued/submitting markers.
-    if task.get('req_uuid') and page.get('status') not in {'completed', 'skipped'}:
+    if page.get('failure_code') == 'result_timeout':
+        page.update(status='failed', next_query_at='')
+    elif task.get('req_uuid') and page.get('status') not in {'completed', 'skipped'}:
         page['status'] = 'completed' if json.loads(task.get('result_json') or '{}') else 'waiting'
     elif (page.get('status') in {'queued', 'uploading', 'waiting'} and not task.get('req_uuid')
           and (uncertain_submission(task, call) or page.get('status') == 'waiting')):
@@ -70,7 +100,9 @@ def remote_state(task, *, recover=False):
     page.setdefault('next_query_at', '')
     page.setdefault('error', '')
     for child in state['requests']:
-        if child.get('req_uuid') and child.get('status') not in {'completed', 'received', 'skipped'}:
+        if child.get('failure_code') == 'result_timeout':
+            child.update(status='failed', next_query_at='')
+        elif child.get('req_uuid') and child.get('status') not in {'completed', 'received', 'skipped'}:
             child['status'] = 'waiting'
         elif (not child.get('req_uuid') and child.get('status') in {'queued', 'uploading', 'waiting'}
               and (uncertain_submission(child, child.get('call') or {}) or child.get('status') == 'waiting')):
@@ -97,6 +129,7 @@ def aggregate_remote(state):
     unknown = any(item.get('status') == 'unknown' for item in branches)
     failure = any(item.get('status') == 'failed' for item in branches)
     status = ('queued' if queued else 'waiting' if waiting else
+              ('failed' if state.get('timeout_applied') else 'received') if result_timeout_error(state) else
               'unknown' if unknown and not success else
               'failed' if failure and not success and state.get('page_required') else 'received')
     due = min((item.get('next_query_at') or '' for item in waiting), default='')
@@ -123,11 +156,13 @@ def next_remote_operation(task, state, control, *, timestamp, prefer_submit=Fals
     queries = []
     page = state['page']
     if (state.get('page_required') and page.get('status') == 'waiting' and task.get('req_uuid')
-            and (manual or branch_due(page.get('next_query_at'), timestamp))):
+            and (manual or result_wait_expired(task.get('submitted_at'), timestamp)
+                 or branch_due(page.get('next_query_at'), timestamp))):
         queries.append((page.get('last_query_at') or '', 'page_query', None))
     for index, child in enumerate(state['requests']):
         if (child.get('status') == 'waiting' and child.get('req_uuid')
-                and (manual or branch_due(child.get('next_query_at'), timestamp))):
+                and (manual or result_wait_expired(child.get('submitted_at'), timestamp)
+                     or branch_due(child.get('next_query_at'), timestamp))):
             queries.append((child.get('last_query_at') or '', 'seal_query', index))
     queries.sort(key=lambda item: item[0])
     query = queries[0][1:] if queries and (manual or control['auto_query']) else None
@@ -165,11 +200,23 @@ def fail_operation(branch, *, req_uuid, error, retry_at):
 
 def finish_query(*, submitted_at, observed_at, completed, error=''):
     """The shared page/stamp polling policy; no clock or request is read here."""
+    if not completed and result_wait_expired(submitted_at, observed_at):
+        return {'status': 'failed', 'failure_code': 'result_timeout', 'timed_out_at': observed_at,
+                'error': RESULT_WAIT_TIMEOUT_ERROR, 'last_query_at': observed_at, 'next_query_at': ''}
     due = ''
     if not completed:
         current = datetime.fromisoformat(observed_at)
-        elapsed = (current - datetime.fromisoformat(submitted_at)).total_seconds()
-        delay = 2 if elapsed < 60 else 30 if elapsed < 600 else 120
-        due = (current + timedelta(seconds=max(30, delay) if error else delay)).isoformat(timespec='seconds')
+        try:
+            start = datetime.fromisoformat(submitted_at)
+        except (TypeError, ValueError):
+            start = current
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=current.tzinfo)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=start.tzinfo)
+        elapsed = (current - start).total_seconds()
+        delay = 2 if elapsed < 60 else 30
+        due = min(current + timedelta(seconds=max(30, delay) if error else delay),
+                  start + timedelta(seconds=RESULT_WAIT_TIMEOUT_SECONDS)).isoformat(timespec='seconds')
     return {'status': 'completed' if completed else 'waiting', 'error': error,
             'last_query_at': observed_at, 'next_query_at': due}

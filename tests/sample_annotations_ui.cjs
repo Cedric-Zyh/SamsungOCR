@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {renderSampleAnnotations, collectSampleAnnotations, createSampleAnnotationSubmission} = require('../static/modules/review/sample_annotations.mjs');
+const {renderSampleAnnotations, collectSampleAnnotations, createSampleAnnotationSubmission, syncSampleDate} = require('../static/modules/review/sample_annotations.mjs');
+const {annotationCalendarDays, shiftAnnotationMonth} = require('../static/modules/review/annotation_calendar.mjs');
 const {collectReviewPayload} = require('../static/modules/review/submission.mjs');
 const {problemHistoryChanges} = require('../static/modules/review/problem_annotations.mjs');
 
@@ -63,10 +64,10 @@ test('new sample drafts use recognized values without saving or changing annotat
   assert(!Object.hasOwn(payload, 'error_type'));
   assert.equal(h.$('[name=truth_actual_date]').disabled, false);
   for (const name of ['truth_customer', 'truth_requirement', 'truth_required_date', 'truth_date_present', 'truth_actual_date', 'truth_seal_should_match']) {
-    assert.equal(h.$(`[name=${name}]`).dataset.annotationSource, 'recognition', name);
+    assert.equal(h.$(`[name=${name}]`).dataset.annotationSource, name === 'truth_actual_date' ? 'required_date' : 'recognition', name);
   }
   assert.equal(h.$('[data-truth-prefill-note]').hidden, false);
-  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已根据本次识别结果带入 6 项，请核对后保存。');
+  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已预填 6 项，请对照原图核对后保存。');
   assert.deepEqual(current, beforeCurrent);
   assert.deepEqual(annotation, beforeAnnotation);
   assert.equal(h.calls.length, 0);
@@ -84,9 +85,9 @@ test('editing suggestions clears their recognition markers and updates the note 
   customer.value = '手动修正客户';
   customer.fire('input');
   assert.equal(customer.dataset.annotationSource, undefined);
-  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已根据本次识别结果带入 5 项，请核对后保存。');
+  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已预填 5 项，请对照原图核对后保存。');
   customer.fire('change');
-  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已根据本次识别结果带入 5 项，请核对后保存。');
+  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已预填 5 项，请对照原图核对后保存。');
   for (const name of ['truth_requirement', 'truth_required_date', 'truth_date_present', 'truth_actual_date', 'truth_seal_should_match']) {
     h.$(`[name=${name}]`).fire('change');
   }
@@ -144,7 +145,7 @@ test('cleared enums stay unlabelled after a prior save even when their keys were
   assert.equal(h.$('[name=truth_actual_date]').disabled, true);
   assert.equal(h.$('[name=truth_seal_should_match]').value, '');
   assert.equal(h.$('[name=truth_customer]').value, '机器客户');
-  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已根据本次识别结果带入 3 项，请核对后保存。');
+  assert.equal(h.$('[data-truth-prefill-note]').textContent, '已预填 3 项，请对照原图核对后保存。');
   assert.equal(collectSampleAnnotations(h.ui, {}, 'r1').date_present, null);
   assert.equal(collectSampleAnnotations(h.ui, {}, 'r1').seal_should_match, null);
   for (const value of ['', null, false]) {
@@ -154,7 +155,7 @@ test('cleared enums stay unlabelled after a prior save even when their keys were
   }
 });
 
-test('invalid or unreliable dates never suggest absence or use the required date as an actual date', () => {
+test('invalid or unreliable dates leave date presence unmarked until the user chooses written', () => {
   const base = {actual: '2026-03-27', status: '匹配', reliable: true};
   const checks = [
     {}, {...base, actual: ''}, {...base, actual: '2026-02-30'}, {...base, actual: '2026-03-270'},
@@ -176,6 +177,48 @@ test('invalid or unreliable dates never suggest absence or use the required date
   renderSampleAnnotations(h.ui, h.reviewState, {revision: 'r0', entry: {}}, {});
   assert.equal(h.$('[name=truth_actual_date]').value, '2024-02-29');
   assert.equal(h.$('[name=truth_date_present]').value, 'true');
+});
+
+test('an unlabelled actual date starts from the required date even when recognition disagrees', () => {
+  const current = recognized();
+  current.fields['要求到货'] = '2026-02-25';
+  current.date_check = {actual: '2026-02-26', required: '2026-02-25', status: '不匹配', reliable: true};
+  const h = harness({current});
+  renderSampleAnnotations(h.ui, h.reviewState, {revision: 'r0', entry: {}}, {});
+  assert.equal(h.$('[name=truth_date_present]').value, 'true');
+  assert.equal(h.$('[name=truth_actual_date]').value, '2026-02-25');
+  assert.equal(h.$('[name=truth_actual_date]').dataset.annotationSource, 'required_date');
+  assert.equal(current.date_check.actual, '2026-02-26');
+  assert.equal(h.calls.length, 0);
+});
+
+test('choosing written seeds a blank date from the editable required date without replacing manual edits', () => {
+  const h = harness({current: {fields: {'要求到货': '2026-02-25'}, date_check: {status: '未识别'}}});
+  renderSampleAnnotations(h.ui, h.reviewState, {revision: 'r0', entry: {}, history: [{changed_at: 'earlier'}]}, {});
+  assert.equal(h.$('[name=truth_actual_date]').value, '');
+  h.$('[name=truth_date_present]').value = 'true';
+  syncSampleDate(h.ui, {});
+  assert.equal(h.$('[name=truth_actual_date]').value, '2026-02-25');
+  h.$('[name=truth_required_date]').value = '2026-02-24';
+  syncSampleDate(h.ui, {});
+  assert.equal(h.$('[name=truth_actual_date]').value, '2026-02-24');
+  h.$('[name=truth_actual_date]').value = '2026-02-26';
+  h.$('[name=truth_actual_date]').fire('input');
+  h.$('[name=truth_required_date]').value = '2026-02-23';
+  syncSampleDate(h.ui, {});
+  assert.equal(h.$('[name=truth_actual_date]').value, '2026-02-26');
+  assert.equal(h.calls.length, 0);
+});
+
+test('calendar navigation handles leap years and year boundaries without overflowing the selected day', () => {
+  assert.equal(shiftAnnotationMonth('2024-01-31', 1), '2024-02-29');
+  assert.equal(shiftAnnotationMonth('2025-01-31', 1), '2025-02-28');
+  assert.equal(shiftAnnotationMonth('2026-01-25', -1), '2025-12-25');
+  assert.equal(shiftAnnotationMonth('2024-02-29', 12), '2025-02-28');
+  const days = annotationCalendarDays('2024-02');
+  assert(days.includes('2024-02-29'));
+  assert.equal(days[0], '2024-01-28');
+  assert.equal(days.at(-1), '2024-03-09');
 });
 
 test('seal suggestions require a reliable explicit verdict or a human-confirmed boolean', () => {

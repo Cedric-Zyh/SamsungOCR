@@ -6,7 +6,8 @@ import {problemHistoryChanges} from './problem_annotations.mjs';
 import {simplifySealText} from '../core/seal_script.mjs';
 import {renderReceivingEvidence} from './receiving_evidence.mjs';
 import {renderReceivingNumberEvidence} from './receiving_number_evidence.mjs';
-import {renderSealWorkspace, bindSealWorkspaces} from './seal_workspace.mjs';
+import {renderSealWorkspace, bindSealWorkspaces, preferredSealIndex, sealWorkspaceLabel} from './seal_workspace.mjs';
+import {sealWorkspaceArtifacts} from './seal_artifacts.mjs';
 import {isDanzhengtongSealArtifact, danzhengtongProcessedUrl} from './seal_component_fields.mjs';
 import {dateWorkspaceModel, requirementWorkspaceModel, renderRegionWorkspace, bindRegionWorkspace} from './region_workspace.mjs';
 
@@ -24,26 +25,6 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const correctionNote = original && original !== String(value)
       ? `<small class="original-ocr">原始 OCR：${escapeHtml(original)}</small>` : '';
     return `<label class="field-editor ${meta.low_confidence ? 'low-confidence' : ''}"><span>${escapeHtml(name)}<em>${escapeHtml(evidenceLabel)}</em></span><textarea ${meta.pending ? 'readonly' : ''} name="field:${escapeHtml(name)}" rows="${String(value).length > 45 ? 3 : 1}">${escapeHtml(value)}</textarea>${correctionNote}${meta.low_confidence ? '<small>低置信度，请人工检查</small>' : ''}</label>`;
-  }
-
-  function mergeSealArtifacts(items) {
-    const merged = [];
-    const byStamp = new Map();
-    for (const item of items || []) {
-      const key = `${isDanzhengtongSealArtifact(item) ? 'danzhengtong' : 'local'}|${item.index ?? ''}|${item.color ?? ''}`;
-      const current = byStamp.get(key);
-      if (!current) {
-        const copy = {...item};
-        byStamp.set(key, copy);
-        merged.push(copy);
-        continue;
-      }
-      for (const [name, value] of Object.entries(item)) {
-        if ((current[name] == null || current[name] === '') && value) current[name] = value;
-      }
-      if (current.shape !== '椭圆' && item.shape === '椭圆') current.shape = '椭圆';
-    }
-    return merged;
   }
 
   function sealSourceResults(item) {
@@ -232,7 +213,7 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     const root = $('[data-artifacts]', $('#review-content'));
     artifactImages.attach(root);
     if (reviewState.artifactTab === 'seals') {
-      const show = bindSealWorkspaces(root, mergeSealArtifacts(reviewState.current?.processing_artifacts?.seals || []), previewSeal);
+      const show = bindSealWorkspaces(root, sealWorkspaceArtifacts(reviewState.current), previewSeal, reviewState.current);
       if (root.closest?.('details')?.open) show?.();
     } else if (['date', 'signature_requirement'].includes(reviewState.artifactTab)) {
       const model = reviewState.artifactTab === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
@@ -243,7 +224,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
 
   function renderArtifactMarkup() {
     const target = $('[data-artifacts]', $('#review-content'));
-    let artifacts = reviewState.current?.processing_artifacts?.[reviewState.artifactTab] || [];
+    const artifacts = reviewState.artifactTab === 'seals' ? sealWorkspaceArtifacts(reviewState.current)
+      : reviewState.current?.processing_artifacts?.[reviewState.artifactTab] || [];
     if (['date', 'signature_requirement'].includes(reviewState.artifactTab)) {
       const model = reviewState.artifactTab === 'date' ? dateWorkspaceModel(reviewState.current || {}) : requirementWorkspaceModel(reviewState.current || {});
       target.innerHTML = renderRegionWorkspace(model);
@@ -251,13 +233,15 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
     }
     if (!artifacts.length) { target.innerHTML = '<div class="empty-state">没有保存的中间处理图（旧记录可重新识别生成）</div>'; return; }
     if (reviewState.artifactTab === 'seals') {
-      artifacts = mergeSealArtifacts(artifacts);
+      const selected = preferredSealIndex(reviewState.current, artifacts);
       target.innerHTML = artifacts.map(item => {
         activeArtifactItem = item;
         if (isDanzhengtongSealArtifact(item)) {
           const result = item.provider_text || item.combined_text || '';
           const returned = danzhengtongProcessedUrl(item);
-          const audit = `<article class="artifact-group"><h4>单证通印章识别</h4><small>上传未旋正的增强图，直接采用单证通返回的旋正图及识别结果。</small><div class="artifact-grid">${artifactCard('印章原始区域', item.original_url)}${artifactCard('上传的增强图', item.input_url || item.color_isolated_url)}${artifactCard('单证通返回的旋正图', returned, result)}</div>${item.returned_image_error ? `<p class="low-note">旋正图取回失败：${escapeHtml(item.returned_image_error)}</p>` : ''}</article>`;
+          const note = item.fallback_upload ? '未保存单证通处理图，保留上传图与单证通识别结果供核对。'
+            : '上传未旋正的增强图，直接采用单证通返回的旋正图及识别结果。';
+          const audit = `<article class="artifact-group"><h4>单证通印章识别</h4><small>${note}</small><div class="artifact-grid">${artifactCard('印章原始区域', item.original_url)}${artifactCard(item.input_label || '上传的增强图', item.input_url || item.color_isolated_url, item.fallback_upload ? result : '')}${artifactCard('单证通返回的旋正图', returned, result)}</div>${item.returned_image_error ? `<p class="low-note">旋正图取回失败：${escapeHtml(item.returned_image_error)}</p>` : ''}</article>`;
           return renderSealWorkspace(item, {audit});
         }
         const reference = item.visual_reference_match;
@@ -335,8 +319,8 @@ export function createReviewEvidence({environment, ui, reviewState, api, service
         const modernReads = modernRound ? modernSealReads(item) : '';
         const audit = `${orientationInfo}<article class="artifact-group"><h4>收货印章 ${item.index + 1} · ${escapeHtml(item.color)} · ${escapeHtml(item.shape || '未知形状')} ${item.note ? `<small>${escapeHtml(item.note)}</small>` : `<small>${modernRound ? '新版输入契约' : `增强 OCR：${escapeHtml(item.unwrapped_text || '未识别')}`}</small>`}${item.orientation_anchor_text ? `<small>章型方向锚点：${escapeHtml(item.orientation_anchor_text)}${item.color_isolated_oriented_text ? ` · 旋正 OCR：${escapeHtml(item.color_isolated_oriented_text)}` : ''}</small>` : ''}${item.color_isolated_text || item.secondary_color_isolated_text ? `<small>保留章色 OCR：${escapeHtml(item.color_isolated_text || item.secondary_color_isolated_text)}</small>` : ''}${item.code_line_text || item.secondary_code_line_text ? `<small>编号行 OCR：${escapeHtml(item.code_line_text || item.secondary_code_line_text)}</small>` : ''}${item.rotated_text || item.secondary_rotated_text ? `<small>180° 旋转 OCR：${escapeHtml(item.rotated_text || item.secondary_rotated_text)}</small>` : ''}${item.same_region_reconstructed_text ? `<small>同章区完整片段重组：${escapeHtml(item.same_region_reconstructed_text)}</small>` : ''}${item.overlapping_region_reconstructed_text ? `<small>重叠章区精确片段重组：${escapeHtml(item.overlapping_region_reconstructed_text)}</small><small>${escapeHtml(item.overlapping_region_acceptance_note || '')}</small>` : ''}${item.partitioned_service_reconstructed_text ? `<small>${ellipse ? '椭圆' : '圆章'}跨分带精确重组：${escapeHtml(item.partitioned_service_reconstructed_text)}</small><small>${escapeHtml(item.partitioned_service_acceptance_note || '')}</small>` : ''}${item.round_type_band_text ? `<small>${typeBandLabel}：${escapeHtml(item.round_type_band_text)} · 置信度 ${escapeHtml((item.round_type_band_confidences || []).map(value => `${Math.round(Number(value) * 100)}%`).join(' / ') || '未知')}</small><small class="${item.round_type_band_reconstructed_text ? '' : 'low-note'}">${escapeHtml(item.round_type_band_acceptance_note || '')}</small>` : ''}${item.round_type_band_reconstructed_text ? `<small>章型单字纠错结果：${escapeHtml(item.round_type_band_reconstructed_text)}</small>` : ''}${item.robust_line_text || item.robust_reader_text ? `<small>稳健圆心分带 OCR：${escapeHtml(item.robust_line_text || '未识别')}</small><small>稳健圆心补充识别：${escapeHtml(item.robust_reader_text || '未识别')}</small><small class="${item.robust_shared_suffix ? '' : 'low-note'}">${escapeHtml(item.robust_bounds_acceptance_note || '')}</small>` : ''}${item.secondary_read_text ? `<small>补充识别：${escapeHtml(item.secondary_read_text)}</small>` : ''}${item.secondary_read_rejection_reason ? `<small class="low-note">${escapeHtml(item.secondary_read_rejection_reason)}</small>` : ''}${referenceInfo}${item.combined_text ? `<small>同一区域融合证据：${escapeHtml(item.combined_text)}</small>` : ''}</h4><div class="artifact-grid">${primaryCards}</div>${modernChain}${modernReads || sealSourceResults(item)}${!modernRound && debugCards ? `<details class="artifact-debug"><summary>更多处理证据</summary><div class="artifact-grid">${debugCards}</div></details>` : ''}</article>`;
         return renderSealWorkspace(item, {audit});
-      }).map((markup, index) => `<div data-seal-workspace-panel="${index}"${index ? ' hidden' : ''}>${markup}</div>`).join('');
-      if (artifacts.length > 1) target.innerHTML = `<nav class="seal-workspace-nav" aria-label="选择印章">${artifacts.map((item, index) => `<button type="button" class="mini-button" data-seal-workspace-select="${index}" aria-pressed="${index === 0}">印章 ${index + 1}${item.shape ? ` · ${escapeHtml(item.shape)}` : ''}</button>`).join('')}</nav>` + target.innerHTML;
+      }).map((markup, index) => `<div data-seal-workspace-panel="${index}"${index !== selected ? ' hidden' : ''}>${markup}</div>`).join('');
+      if (artifacts.length > 1) target.innerHTML = `<nav class="seal-workspace-nav" aria-label="选择印章">${artifacts.map((item, index) => `<button type="button" class="mini-button" data-seal-workspace-select="${index}" aria-pressed="${index === selected}">${escapeHtml(sealWorkspaceLabel(item, index))}${item.shape ? ` · ${escapeHtml(item.shape)}` : ''}</button>`).join('')}</nav>` + target.innerHTML;
     }
   }
 

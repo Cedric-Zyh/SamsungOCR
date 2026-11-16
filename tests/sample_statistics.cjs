@@ -279,6 +279,34 @@ test('date cohorts and errors never treat a blank annotation as unlabeled', () =
   assert.deepEqual(filterStatistics(items,{tab:'date',filter:'pending_truth'}),[items[4]]);
 });
 
+test('date provider drill-down, refresh and export keep the selected source and its own error rows', async () => {
+  const items = [0,1].map(index=>({...row('甲公司',cell('未运行'),cell('未运行'),cell('正确','匹配')),
+    filename:`source-${index}.jpg`,result_id:index+1,job_status:'succeeded',expected_date:'2026-10-23',expected_seal:'匹配',
+    date:{state:'正确',value:'2026-10-23'},dates:{'local:paddle_v6':{state:'正确',value:'2026-10-23'},
+      danzhengtong:{state:index ? '正确':'错误',value:index ? '2026-10-23':'2026-10-22'}}}));
+  const {$,types,controller,exports} = statisticsHarness(items,{dataForTask:(_id,data)=>({...data,
+    date_columns:[{key:'date',label:'综合日期'},{key:'date:local:paddle_v6',label:'本地'},
+      {key:'date:danzhengtong',label:'单证通'}]})});
+  await controller.show({company:'甲公司',companies:[]});
+  types[0].handlers.click();
+  assert.match($('#sample-statistics-body').innerHTML,/单证通/);
+  assert.match($('#sample-statistics-body').innerHTML,/data-stat-drill="wrong" data-stat-channel="date:danzhengtong"/);
+  const drill = {dataset:{statDrill:'wrong_date',statChannel:'date:danzhengtong'}};
+  $('#sample-statistics-body').handlers.click({target:{closest:selector=>selector==='[data-stat-drill]' ? drill : null}});
+  const markup = $('#sample-statistics-body').innerHTML;
+  assert.match(markup,/source-0.jpg/);
+  assert.doesNotMatch(markup,/source-1.jpg/);
+  assert.match(markup,/2026-10-22/);
+  assert.match(markup,/value="date:danzhengtong" selected/);
+  await controller.refresh();
+  assert.match($('#sample-statistics-body').innerHTML,/value="date:danzhengtong" selected/);
+  await $('#sample-statistics-export').handlers.click();
+  assert.equal(new URL(exports.at(-1)).searchParams.get('channel'),'date:danzhengtong');
+  assert.equal(new URL(exports.at(-1)).searchParams.get('tab'),'date');
+  assert.equal(new URL(exports.at(-1)).searchParams.get('filter'),'wrong_date');
+  assert.deepEqual(filterStatistics(items,{tab:'date',channel:'date:local:paddle_v6',filter:'wrong_date'}),[]);
+});
+
 test('scope explains latest tests, separates batch selection and drill-down exports the selected requirement and channel', async () => {
   const item = {...row('甲',cell('错误','匹配'),cell('正确','不匹配'),cell('未运行')),
     filename:'sample1.jpg',job_status:'succeeded',expected_seal:'不匹配',requirement:'甲 & 乙公章',

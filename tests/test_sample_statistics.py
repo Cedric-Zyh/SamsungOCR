@@ -23,6 +23,78 @@ def reading(status="匹配", value="客户甲专用章"):
     return {"status": status, "recognized": value}
 
 
+MULTI_SOURCE_PLAN = {"date": ["paddle_v6", "danzhengtong"], "seal": ["paddle_v6", "danzhengtong"]}
+
+
+def multi_source_result():
+    return {"date_check": {"actual": "2025-02-13", "status": "匹配"}, "seal_check": reading(),
+        "recognition_variants": {
+            "date": [
+                {"method": "paddle_v6", "details": {"date_check": {"actual": "2025-02-13", "status": "匹配"}}},
+                {"method": "danzhengtong", "details": {"date_check": {"actual": "2025-02-12", "status": "不匹配"}}}],
+            "seal": [
+                {"method": "paddle_v6", "details": {"seal_check": reading()}},
+                {"method": "danzhengtong", "details": {"seal_check": reading("部分匹配", "客户甲")}}]}}
+
+
+def test_statistics_evaluates_each_date_and_remote_seal_without_borrowing_the_combined_result():
+    result = multi_source_result()
+    before = deepcopy(result)
+    row = evaluate_sample('one.png', TRUTH, job(result, plan=MULTI_SOURCE_PLAN))
+    assert row['date']['state'] == '正确'
+    assert row['dates']['local:paddle_v6']['state'] == '正确'
+    assert row['dates']['danzhengtong']['state'] == '错误'
+    assert row['dates']['danzhengtong']['value'] == '2025-02-12'
+    assert row['seals']['local:paddle_v6']['state'] == '正确'
+    assert row['seals']['danzhengtong']['state'] == '错误'
+    assert row['seals']['danzhengtong']['decision'] == '部分匹配'
+    assert row['seals']['danzhengtong']['value'] == '客户甲'
+    assert result == before
+
+
+@pytest.mark.parametrize('stage', ['date', 'seal'])
+@pytest.mark.parametrize('marker,state', [({'error': '接口超时'}, '失败'), ({'pending': True}, '测试中'),
+    ({'execution_status': 'skipped'}, '未运行'), ({'simulated': True}, '未运行')])
+def test_remote_statistics_keeps_unavailable_results_out_of_success_counts(stage, marker, state):
+    result = multi_source_result()
+    result['recognition_variants'][stage][1].update(marker)
+    row = evaluate_sample('one.png', TRUTH, job(result, plan=MULTI_SOURCE_PLAN))
+    cell = row['dates' if stage == 'date' else 'seals']['danzhengtong']
+    assert cell['state'] == state
+    assert cell['value'] == ''
+
+
+def test_statistics_preserved_sources_blank_dates_and_absent_provider_evidence_remain_distinct():
+    result = multi_source_result()
+    result['recognition_config'] = MULTI_SOURCE_PLAN
+    task = job(result, plan={'date': ['danzhengtong'], 'seal': ['danzhengtong']})
+    payload = json.loads(task['payload_json'])
+    payload['sample_options']['_preserve_provider_results'] = True
+    task['payload_json'] = json.dumps(payload)
+    assert evaluate_sample('one.png', TRUTH, task)['dates']['local:paddle_v6']['state'] == '正确'
+    result['recognition_variants']['date'][1]['details']['date_check']['actual'] = ''
+    row = evaluate_sample('one.png', {**TRUTH, 'date_present': False, 'actual_date': ''}, job(result, plan=MULTI_SOURCE_PLAN))
+    assert row['dates']['danzhengtong']['state'] == '正确'
+    result['recognition_variants']['date'].pop()
+    result['recognition_variants']['seal'].pop()
+    row = evaluate_sample('one.png', TRUTH, job(result, plan=MULTI_SOURCE_PLAN))
+    assert row['dates']['danzhengtong']['state'] == '未运行'
+    assert row['seals']['danzhengtong']['state'] == '未运行'
+    del result['recognition_variants']
+    row = evaluate_sample('one.png', TRUTH, job(result, plan=MULTI_SOURCE_PLAN))
+    assert row['dates']['danzhengtong']['state'] == '未运行'
+    assert row['seals']['danzhengtong']['state'] == '未运行'
+
+
+def test_statistics_returns_remote_columns_for_date_and_seal(samples):
+    _, client = samples
+    data = client.get('/api/samples/statistics').json
+    assert {'key': 'danzhengtong', 'label': '单证通'} in data['columns']
+    assert {'key': 'date:danzhengtong', 'label': '单证通'} in data['date_columns']
+    assert {'key': 'date:local:paddle_v6', 'label': '本地 · PP-OCRv6'} in data['date_columns']
+    assert all(row['dates']['danzhengtong']['state'] == '未测试' for row in data['items'])
+
+
 def remote(template="匹配", ocr="不匹配"):
     return {"method": "qingtong", "details": {"seal_check": {
         # A merged successful verdict must not conceal an OCR failure.

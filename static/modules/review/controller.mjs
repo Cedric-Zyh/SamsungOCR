@@ -12,7 +12,8 @@ import {createSampleAnnotationSubmission} from './sample_annotations.mjs';
 import {createSampleBrowse} from './sample_browse.mjs';
 import {createReviewRunHistory} from './run_history.mjs';
 import {createSealPreview} from './seal_preview.mjs';
-import {sealWorkspaceModel} from './seal_workspace.mjs';
+import {sealWorkspaceModel, preferredSealIndex, sealWorkspaceLabel} from './seal_workspace.mjs';
+import {sealWorkspaceArtifacts} from './seal_artifacts.mjs';
 import {dateWorkspaceModel, requirementWorkspaceModel} from './region_workspace.mjs';
 
 const optionalStageReasons = new Set([
@@ -151,6 +152,7 @@ export function createReview({
     $$('[data-image-source-group]', content).forEach(button => {
       const group = button.dataset.imageSourceGroup;
       const available = reviewState.reviewImages?.some(image => image.group === group)
+        || (group === 'seal' && sealWorkspaceArtifacts(reviewState.current).some(item => sealWorkspaceModel(item).preferred))
         || (group === 'requirement' && reviewState.current?.processing_artifacts?.signature_requirement?.some(item => item.original_url || item.color_clean_url));
       button.disabled = !available;
       button.setAttribute('aria-pressed', String(!!source && group === source.group));
@@ -171,9 +173,11 @@ export function createReview({
     }
     if (group === 'seal') {
       const item = reviewState.current;
-      const artifact = item?.processing_artifacts?.seals?.[0];
+      const artifacts = sealWorkspaceArtifacts(item);
+      const selected = preferredSealIndex(item, artifacts);
+      const artifact = artifacts[selected];
       const detail = activeSealPreview?.id === item?.id ? activeSealPreview.detail
-        : artifact ? {label: '印章 1', ...sealWorkspaceModel(artifact)} : null;
+        : artifact ? {label: sealWorkspaceLabel(artifact, selected), ...sealWorkspaceModel(artifact)} : null;
       if (detail?.original || detail?.processed) {
         previewSeal({...detail, url: detail.preferred || detail.processed || detail.original,
           evidenceLabel: detail.preferredLabel || (detail.processed ? detail.processedLabel || '处理后' : detail.originalLabel || '印章原图')});

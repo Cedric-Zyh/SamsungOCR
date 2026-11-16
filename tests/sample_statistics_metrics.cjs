@@ -83,6 +83,29 @@ test('date cohorts expose real-date performance separately from blanks and class
   assert.equal(empty.cohorts.blank.accuracy, null);
 });
 
+test('date metrics and groups retain each provider denominator even when the combined result is correct', () => {
+  const rows = [
+    sample(null, {danzhengtong:cell('正确')}, {expected_date:'2026-10-23',date:cell('正确','','2026-10-23'),
+      dates:{'local:paddle_v6':cell('正确','','2026-10-23'),danzhengtong:cell('错误','','2026-10-22')}}),
+    sample(null, {}, {expected_date:'2026-10-23',date:cell('正确','','2026-10-23'),
+      dates:{'local:paddle_v6':cell('正确','','2026-10-23'),danzhengtong:cell('未运行','','')}}),
+  ];
+  const columns = [{key:'date',label:'综合日期'}, {key:'date:local:paddle_v6',label:'本地'},
+    {key:'date:danzhengtong',label:'单证通'}];
+  const remote = summarizeChannel(rows, 'date:danzhengtong','date');
+  assert.equal(remote.total,1);
+  assert.equal(remote.accuracy,0);
+  assert.equal(remote.errorTypes.dateWrong,1);
+  assert.equal(remote.cohorts.dated.total,1);
+  assert.equal(remote.cohorts.dated.correct,0);
+  assert.equal(summarizeChannel(rows,'date:local:paddle_v6','date').accuracy,1);
+  assert.equal(getCell(rows[0],'date:danzhengtong','date').value,'2026-10-22');
+  assert.equal(summarizeCoverage(rows,'date').anomalies,1);
+  const groups = groupStatistics(rows,{tab:'date',columns});
+  assert.deepEqual(groups[0].channels.map(channel=>channel.total),[2,2,1]);
+  assert.equal(groups[0].channels[2].accuracy,0);
+});
+
 test('grouped metrics count anomalous rows once and sort actionable groups first', () => {
   const rows = [
     sample('匹配', {a: cell('正确'), b: cell('正确')}),

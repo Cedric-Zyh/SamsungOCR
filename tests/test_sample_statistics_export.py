@@ -140,6 +140,33 @@ def test_export_date_cohorts_and_errors(samples, evaluated_rows, selected, indic
     assert [row[1] for row in details(worksheet)[1]] == [evaluated_rows[index]['filename'] for index in indices]
 
 
+def test_date_provider_export_and_overview_keep_source_values_filters_and_denominators(samples, monkeypatch):
+    _, client = samples
+    def c(state='正确', value='2026-10-24'):
+        return dict(state=state, value=value, decision='匹配', note='')
+    rows = [dict(filename=f'source-{index}.jpg', company='客户甲', job_status='succeeded', requirement='客户甲专用章',
+        expected_seal='匹配', expected_date='2026-10-24', date=c(),
+        dates={'local:paddle_v6': c(), 'danzhengtong': c('正确' if index else '错误', '2026-10-24' if index else '2026-10-25')},
+        seals={'danzhengtong': c('错误' if index else '正确', '单证通印章')}) for index in range(2)]
+    data = dict(items=rows, columns=[{'key':'danzhengtong','label':'单证通'}], batches=[], date_columns=[
+        {'key':'date','label':'综合日期'}, {'key':'date:local:paddle_v6','label':'本地'},
+        {'key':'date:danzhengtong','label':'单证通'}])
+    monkeypatch.setattr(exports, 'sample_statistics', lambda *args: data)
+    worksheet = sheet(client.get('/api/samples/statistics/export?tab=date&channel=date:danzhengtong&filter=wrong_date'))
+    header, exported = details(worksheet)
+    assert len(exported) == 1 and exported[0][1] == 'source-0.jpg'
+    assert exported[0][header.index('单证通 · 识别内容')].date() == date(2026, 10, 25)
+    assert exported[0][header.index('单证通 · 评估结果')] == '错误'
+    workbook = sheet(client.get('/api/samples/statistics/export?tab=date')).parent
+    performance = {row[0]: row for row in section(workbook, '各识别方案表现')}
+    assert performance['单证通'][1:4] == (0.5, 1, 2)
+    assert performance['本地'][1:4] == (1, 2, 2)
+    remote = next(row for row in section(workbook, '错误类型') if row[0] == '单证通')
+    assert remote[3] == 1
+    seal = sheet(client.get('/api/samples/statistics/export?tab=seal&channel=danzhengtong&filter=wrong'))
+    assert [row[1] for row in details(seal)[1]] == ['source-1.jpg']
+
+
 def test_export_channel_requirement_and_company_match_the_drilled_down_rows(samples, evaluated_rows):
     _, client = samples
     response = client.get('/api/samples/statistics/export', query_string={
